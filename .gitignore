@@ -1,0 +1,30 @@
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+*.iml
+.idea/
+.kotlin/
+captures/
+*.hprof
+*.apk
+*.ap_
+*.dex
+*.class
+
+# Bundled Gradle dist (do not commit — use wrapper only)
+gradle-8.7-bin.zip
+gradle-bin.zip
+.gradle-dist/
+
+# Node (server)
+server/node_modules/
+
+# Secrets
+server/.env
+*.jks
+*.keystore
+
+# OS
+.DS_Store
+Thumbs.db

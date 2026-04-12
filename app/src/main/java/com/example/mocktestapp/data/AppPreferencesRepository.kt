@@ -1,0 +1,457 @@
+package com.example.mocktestapp.data
+
+import android.content.Context
+import android.util.Log
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import com.example.mocktestapp.newui.auth.isValidEmail
+import com.example.mocktestapp.newui.auth.isValidMobile
+import java.time.LocalDate
+import java.util.Locale
+import kotlin.random.Random
+
+private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "mocktest_prefs")
+
+enum class FeedKind { Job, Exam, News }
+
+object AppPreferencesRepository {
+    private const val TAG = "MockTestPrefs"
+
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e ->
+            Log.e(TAG, "Preferences coroutine failed", e)
+        },
+    )
+    private lateinit var appContext: Context
+
+    private val keyStreak = intPreferencesKey("streak_days")
+    private val keyLastDigestDay = stringPreferencesKey("last_digest_day")
+    private val keyLastTestName = stringPreferencesKey("last_opened_test_name")
+    private val keyLastTestTime = longPreferencesKey("last_opened_test_time")
+    private val keyLastFeedJob = stringPreferencesKey("last_feed_job_url")
+    private val keyLastFeedExam = stringPreferencesKey("last_feed_exam_url")
+    private val keyLastFeedNews = stringPreferencesKey("last_feed_news_url")
+    private val keyEmailVerified = intPreferencesKey("email_verified")
+    private val keyPhoneVerified = intPreferencesKey("phone_verified")
+    private val keyProfileDisplayName = stringPreferencesKey("profile_display_name")
+    private val keyProfileContact = stringPreferencesKey("profile_contact")
+    private val keyProfileEmail = stringPreferencesKey("profile_email")
+    private val keyProfileMobile = stringPreferencesKey("profile_mobile")
+    private val keyProfilePassword = stringPreferencesKey("profile_password")
+    /** Six-digit numeric id (100000–999999), 0 = not assigned yet. */
+    private val keyProfileUserCode = intPreferencesKey("profile_user_code")
+
+    data class EditableProfileState(
+        val displayName: String,
+        val email: String,
+        val mobile: String,
+    )
+
+    val editableProfile: Flow<EditableProfileState>
+        get() = storeOrNull()?.data?.map { prefs ->
+            val legacyContact = prefs[keyProfileContact].orEmpty()
+            val emailStored = prefs[keyProfileEmail].orEmpty()
+            val email = emailStored.ifBlank {
+                if (legacyContact.contains('@')) legacyContact else ""
+            }
+            val mobile = prefs[keyProfileMobile].orEmpty().ifBlank {
+                if (legacyContact.isNotBlank() && !legacyContact.contains('@')) legacyContact else ""
+            }
+            EditableProfileState(
+                displayName = prefs[keyProfileDisplayName].orEmpty(),
+                email = email,
+                mobile = mobile,
+            )
+        } ?: flowOf(EditableProfileState("", "", ""))
+
+    data class DrawerUserProfile(
+        /** Username from signup / profile (shown first in drawer). */
+        val displayName: String,
+        /** Email line under name (Gmail etc.); drawer does not mix mobile here. */
+        val emailLine: String,
+        /** Formatted six digits from server or local, or null until assigned. */
+        val userIdFormatted: String?,
+    )
+
+    val drawerUserProfile: Flow<DrawerUserProfile>
+        get() = storeOrNull()?.data?.map { prefs ->
+            val code = prefs[keyProfileUserCode] ?: 0
+            val formatted =
+                if (code in 100_000..999_999) String.format(Locale.US, "%06d", code) else null
+            val legacyContact = prefs[keyProfileContact].orEmpty()
+            val email = prefs[keyProfileEmail].orEmpty().ifBlank {
+                if (legacyContact.contains('@')) legacyContact.trim() else ""
+            }
+            DrawerUserProfile(
+                displayName = prefs[keyProfileDisplayName].orEmpty(),
+                emailLine = email,
+                userIdFormatted = formatted,
+            )
+        } ?: flowOf(DrawerUserProfile("", "", null))
+
+    fun init(context: Context) {
+        appContext = context.applicationContext
+    }
+
+    private fun randomSixDigitUserCode(): Int = Random.nextInt(100_000, 1_000_000)
+
+    private fun deriveDisplayNameFromLogin(identifier: String): String {
+        val trimmed = identifier.trim()
+        val at = trimmed.indexOf('@')
+        return if (at > 0) {
+            trimmed.substring(0, at)
+                .replace('.', ' ')
+                .split(' ')
+                .filter { it.isNotBlank() }
+                .joinToString(" ") { word ->
+                    word.replaceFirstChar { c ->
+                        if (c.isLowerCase()) c.titlecase(Locale.getDefault()) else c.toString()
+                    }
+                }
+                .ifBlank { "User" }
+        } else {
+            "User ${trimmed.takeLast(4)}"
+        }
+    }
+
+    suspend fun applySignupProfile(username: String, email: String, mobile: String, password: String) {
+        if (!::appContext.isInitialized) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyProfileDisplayName] = username.trim()
+                prefs[keyProfileEmail] = email.trim()
+                prefs[keyProfileMobile] = mobile.trim()
+                prefs[keyProfileContact] = email.trim()
+                prefs[keyProfilePassword] = password
+                val existing = prefs[keyProfileUserCode] ?: 0
+                if (existing !in 100_000..999_999) {
+                    prefs[keyProfileUserCode] = randomSixDigitUserCode()
+                }
+            }
+        }.onFailure { Log.e(TAG, "applySignupProfile failed", it) }
+    }
+
+    suspend fun applyLoginProfile(identifier: String, password: String) {
+        if (!::appContext.isInitialized) return
+        val id = identifier.trim()
+        runCatching {
+            store().edit { prefs ->
+                val nameExisting = prefs[keyProfileDisplayName].orEmpty()
+                if (nameExisting.isBlank()) {
+                    prefs[keyProfileDisplayName] = deriveDisplayNameFromLogin(id)
+                }
+                prefs[keyProfileContact] = id
+                if (id.contains('@')) {
+                    prefs[keyProfileEmail] = id
+                } else {
+                    prefs[keyProfileMobile] = id.filter(Char::isDigit).take(10)
+                }
+                prefs[keyProfilePassword] = password
+                val existing = prefs[keyProfileUserCode] ?: 0
+                if (existing !in 100_000..999_999) {
+                    prefs[keyProfileUserCode] = randomSixDigitUserCode()
+                }
+            }
+        }.onFailure { Log.e(TAG, "applyLoginProfile failed", it) }
+    }
+
+    /**
+     * Syncs profile from backend after API login/register or token restore.
+     * If [passwordPlain] is blank, the saved password preference is left unchanged.
+     */
+    suspend fun applyServerAuthProfile(
+        displayName: String,
+        email: String,
+        mobile: String,
+        sixDigitPublicId: Int,
+        passwordPlain: String,
+    ) {
+        if (!::appContext.isInitialized) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyProfileDisplayName] = displayName.trim()
+                prefs[keyProfileEmail] = email.trim()
+                prefs[keyProfileMobile] = mobile.trim().filter(Char::isDigit).take(10)
+                prefs[keyProfileContact] = email.trim()
+                if (sixDigitPublicId in 100_000..999_999) {
+                    prefs[keyProfileUserCode] = sixDigitPublicId
+                }
+                if (passwordPlain.isNotBlank()) {
+                    prefs[keyProfilePassword] = passwordPlain
+                }
+            }
+        }.onFailure { Log.e(TAG, "applyServerAuthProfile failed", it) }
+    }
+
+    /**
+     * Updates profile fields. [newPassword] blank = keep existing password.
+     * Email cannot change after [keyEmailVerified] is set (demo: after "verify email").
+     */
+    suspend fun updateProfile(
+        displayName: String,
+        email: String,
+        mobile: String,
+        newPassword: String,
+    ): Result<Unit> {
+        if (!::appContext.isInitialized) return Result.failure(IllegalStateException("Preferences not ready"))
+        val name = displayName.trim()
+        val em = email.trim()
+        val mob = mobile.trim().filter(Char::isDigit).take(10)
+        if (name.isBlank()) return Result.failure(IllegalArgumentException("Username required"))
+        if (!isValidEmail(em)) return Result.failure(IllegalArgumentException("Enter a valid email"))
+        if (mob.length != 10 || !isValidMobile(mob)) {
+            return Result.failure(IllegalArgumentException("Enter a valid 10-digit mobile"))
+        }
+        if (newPassword.isNotBlank() && newPassword.length < 4) {
+            return Result.failure(IllegalArgumentException("Password must be at least 4 characters"))
+        }
+        val prefsSnapshot = store().data.first()
+        val verified = (prefsSnapshot[keyEmailVerified] ?: 0) == 1
+        val currentEmail = prefsSnapshot[keyProfileEmail].orEmpty().ifBlank {
+            val c = prefsSnapshot[keyProfileContact].orEmpty()
+            if (c.contains('@')) c else ""
+        }
+        if (verified && em != currentEmail) {
+            return Result.failure(IllegalStateException("Email cannot be changed after verification"))
+        }
+        return runCatching {
+            store().edit { prefs ->
+                prefs[keyProfileDisplayName] = name
+                prefs[keyProfileEmail] = em
+                prefs[keyProfileMobile] = mob
+                prefs[keyProfileContact] = em
+                if (newPassword.isNotBlank()) {
+                    prefs[keyProfilePassword] = newPassword
+                }
+            }
+            Unit
+        }.fold(
+            onSuccess = { Result.success(Unit) },
+            onFailure = { e ->
+                Log.e(TAG, "updateProfile failed", e)
+                Result.failure(e)
+            },
+        )
+    }
+
+    /**
+     * Updates password after verifying [oldPassword] matches the stored value.
+     * Fails if no password is stored locally (e.g. session restored without saving password).
+     */
+    /** Updates the locally mirrored login password after a successful server password change. */
+    suspend fun updateStoredPasswordPlain(plain: String) {
+        if (!::appContext.isInitialized) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyProfilePassword] = plain
+            }
+        }.onFailure { Log.e(TAG, "updateStoredPasswordPlain failed", it) }
+    }
+
+    suspend fun updatePasswordWithOldCheck(oldPassword: String, newPassword: String): Result<Unit> {
+        if (!::appContext.isInitialized) return Result.failure(IllegalStateException("Preferences not ready"))
+        if (newPassword.length < 4) {
+            return Result.failure(IllegalArgumentException("New password must be at least 4 characters"))
+        }
+        val prefsSnapshot = store().data.first()
+        val current = prefsSnapshot[keyProfilePassword].orEmpty()
+        if (current.isBlank()) {
+            return Result.failure(IllegalStateException("No password on this device — sign in again with password."))
+        }
+        if (current != oldPassword) {
+            return Result.failure(IllegalArgumentException("Old password does not match"))
+        }
+        return runCatching {
+            store().edit { prefs ->
+                prefs[keyProfilePassword] = newPassword
+            }
+            Unit
+        }.fold(
+            onSuccess = { Result.success(Unit) },
+            onFailure = { e ->
+                Log.e(TAG, "updatePasswordWithOldCheck failed", e)
+                Result.failure(e)
+            },
+        )
+    }
+
+    /** If profile exists without a code (e.g. migration), assign one once. */
+    suspend fun ensureDrawerUserCode() {
+        if (!::appContext.isInitialized) return
+        runCatching {
+            store().edit { prefs ->
+                val existing = prefs[keyProfileUserCode] ?: 0
+                if (existing !in 100_000..999_999) {
+                    prefs[keyProfileUserCode] = randomSixDigitUserCode()
+                }
+            }
+        }.onFailure { Log.e(TAG, "ensureDrawerUserCode failed", it) }
+    }
+
+    private fun store(): DataStore<Preferences> {
+        check(::appContext.isInitialized) { "Call AppPreferencesRepository.init first" }
+        return appContext.dataStore
+    }
+
+    private fun storeOrNull(): DataStore<Preferences>? =
+        if (::appContext.isInitialized) appContext.dataStore else null
+
+    val streakDays: Flow<Int>
+        get() = storeOrNull()?.data?.map { it[keyStreak] ?: 0 } ?: flowOf(0)
+
+    val lastOpenedTest: Flow<Pair<String?, Long>>
+        get() = storeOrNull()?.data?.map { prefs ->
+            prefs[keyLastTestName] to (prefs[keyLastTestTime] ?: 0L)
+        } ?: flowOf(null to 0L)
+
+    fun lastFeedUrl(kind: FeedKind): Flow<String?> {
+        val key = when (kind) {
+            FeedKind.Job -> keyLastFeedJob
+            FeedKind.Exam -> keyLastFeedExam
+            FeedKind.News -> keyLastFeedNews
+        }
+        return storeOrNull()?.data?.map { it[key] } ?: flowOf(null)
+    }
+
+    val emailVerified: Flow<Boolean>
+        get() = storeOrNull()?.data?.map { (it[keyEmailVerified] ?: 0) == 1 } ?: flowOf(false)
+
+    val phoneVerified: Flow<Boolean>
+        get() = storeOrNull()?.data?.map { (it[keyPhoneVerified] ?: 0) == 1 } ?: flowOf(false)
+
+    fun rememberTestOpened(testName: String) {
+        if (!::appContext.isInitialized) return
+        scope.launch {
+            runCatching {
+                store().edit { prefs ->
+                    prefs[keyLastTestName] = testName
+                    prefs[keyLastTestTime] = System.currentTimeMillis()
+                }
+            }.onFailure { Log.e(TAG, "rememberTestOpened failed", it) }
+        }
+    }
+
+    fun cacheFeedUrl(kind: FeedKind, url: String) {
+        if (!::appContext.isInitialized) return
+        scope.launch {
+            runCatching {
+                store().edit { prefs ->
+                    when (kind) {
+                        FeedKind.Job -> prefs[keyLastFeedJob] = url
+                        FeedKind.Exam -> prefs[keyLastFeedExam] = url
+                        FeedKind.News -> prefs[keyLastFeedNews] = url
+                    }
+                }
+            }.onFailure { Log.e(TAG, "cacheFeedUrl failed", it) }
+        }
+    }
+
+    /**
+     * Call when user opens Daily digest. Returns updated streak (same day = no change).
+     */
+    suspend fun recordDigestOpenedToday(): Int {
+        if (!::appContext.isInitialized) return 0
+        return runCatching {
+            val today = LocalDate.now()
+            val todayStr = today.toString()
+            var result = 0
+            store().edit { prefs ->
+                val lastStr = prefs[keyLastDigestDay]
+                val currentStreak = prefs[keyStreak] ?: 0
+                val newStreak = when {
+                    lastStr == null -> 1
+                    lastStr == todayStr -> currentStreak
+                    else -> {
+                        val lastDay = runCatching { LocalDate.parse(lastStr) }.getOrNull()
+                        if (lastDay != null && lastDay.plusDays(1) == today) currentStreak + 1 else 1
+                    }
+                }
+                prefs[keyLastDigestDay] = todayStr
+                prefs[keyStreak] = newStreak
+                result = newStreak
+            }
+            result
+        }.getOrElse { e ->
+            Log.e(TAG, "recordDigestOpenedToday failed", e)
+            0
+        }
+    }
+
+    suspend fun clearAllLocalPreferences(): Boolean {
+        if (!::appContext.isInitialized) return true
+        return runCatching { store().edit { it.clear() } }
+            .onFailure { Log.e(TAG, "clearAllLocalPreferences failed", it) }
+            .isSuccess
+    }
+
+    /** Clears sign-in profile fields; keeps streak, digest, and cached feed URLs. */
+    suspend fun clearAuthSessionPrefs() {
+        if (!::appContext.isInitialized) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyProfileDisplayName] = ""
+                prefs[keyProfileContact] = ""
+                prefs[keyProfileEmail] = ""
+                prefs[keyProfileMobile] = ""
+                prefs[keyProfilePassword] = ""
+                prefs[keyProfileUserCode] = 0
+                prefs[keyEmailVerified] = 0
+                prefs[keyPhoneVerified] = 0
+            }
+        }.onFailure { Log.e(TAG, "clearAuthSessionPrefs failed", it) }
+    }
+
+    suspend fun exportSnapshotJson(): String {
+        if (!::appContext.isInitialized) return "{}"
+        val prefs = store().data.first()
+        fun q(s: String?) = s?.replace("\\", "\\\\")?.replace("\"", "\\\"") ?: ""
+        val streak = prefs[keyStreak] ?: 0
+        val lastTest = prefs[keyLastTestName]
+        val lastTestTime = prefs[keyLastTestTime] ?: 0L
+        val job = prefs[keyLastFeedJob]
+        val exam = prefs[keyLastFeedExam]
+        val news = prefs[keyLastFeedNews]
+        val emailV = (prefs[keyEmailVerified] ?: 0) == 1
+        val phoneV = (prefs[keyPhoneVerified] ?: 0) == 1
+        val display = prefs[keyProfileDisplayName]
+        val contact = prefs[keyProfileContact]
+        val email = prefs[keyProfileEmail]
+        val mobile = prefs[keyProfileMobile]
+        val uid = prefs[keyProfileUserCode] ?: 0
+        return """
+            {"streakDays":$streak,"lastOpenedTest":"${q(lastTest)}","lastOpenedTestTime":$lastTestTime,"cachedFeedJobUrl":"${q(job)}","cachedFeedExamUrl":"${q(exam)}","cachedFeedNewsUrl":"${q(news)}","emailVerified":$emailV,"phoneVerified":$phoneV,"displayName":"${q(display)}","contact":"${q(contact)}","email":"${q(email)}","mobile":"${q(mobile)}","userCode":$uid}
+        """.trimIndent().replace("\n", "")
+    }
+
+    fun setEmailVerified(verified: Boolean) {
+        if (!::appContext.isInitialized) return
+        scope.launch {
+            runCatching {
+                store().edit { it[keyEmailVerified] = if (verified) 1 else 0 }
+            }.onFailure { Log.e(TAG, "setEmailVerified failed", it) }
+        }
+    }
+
+    fun setPhoneVerified(verified: Boolean) {
+        if (!::appContext.isInitialized) return
+        scope.launch {
+            runCatching {
+                store().edit { it[keyPhoneVerified] = if (verified) 1 else 0 }
+            }.onFailure { Log.e(TAG, "setPhoneVerified failed", it) }
+        }
+    }
+}

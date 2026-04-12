@@ -1,0 +1,806 @@
+package com.example.mocktestapp.newui.progress
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.PieChart
+import androidx.compose.material.icons.automirrored.outlined.ShowChart
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.mocktestapp.data.AppPreferencesRepository
+import com.example.mocktestapp.data.TestHistoryRepository
+import com.example.mocktestapp.data.local.TestAttemptEntity
+import com.example.mocktestapp.newui.theme.palette.gradientColors
+import com.example.mocktestapp.newui.theme.palette.mockTestPalette
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import kotlin.math.roundToInt
+
+/** Shown as a simple “target line” in UI; not persisted yet. */
+private const val DisplayGoalPercent = 80
+
+private fun scorePercent(correct: Int, total: Int): Int =
+    if (total <= 0) 0 else ((correct * 100f) / total).roundToInt().coerceIn(0, 100)
+
+private data class TestAggregate(
+    val testName: String,
+    val attemptCount: Int,
+    val avgPercent: Int,
+    val bestPercent: Int,
+)
+
+/** Fixed demo “cohort” bands so you can compare locally until a backend exists. */
+private enum class ComparePeer(
+    val chipLabel: String,
+    val benchmarkPercent: Int,
+    val description: String,
+) {
+    Topper(
+        chipLabel = "vs Topper",
+        benchmarkPercent = 92,
+        description = "Approx. top-of-class score band (demo benchmark, not live ranks).",
+    ),
+    Average(
+        chipLabel = "vs Average",
+        benchmarkPercent = 68,
+        description = "Typical prepared student average (demo benchmark).",
+    ),
+    Bottom(
+        chipLabel = "vs Bottom",
+        benchmarkPercent = 38,
+        description = "Needs-support band — aim to stay well above this (demo benchmark).",
+    ),
+}
+
+@Composable
+fun ProgressReportScreenNew(
+    modifier: Modifier = Modifier,
+    onBack: () -> Unit,
+    onStartPractice: () -> Unit,
+) {
+    val p = mockTestPalette()
+    val bg = Brush.verticalGradient(colors = p.gradientColors())
+
+    val attempts by TestHistoryRepository.observeAttempts().collectAsState(initial = emptyList())
+    val streak by AppPreferencesRepository.streakDays.collectAsState(initial = 0)
+    val lastOpened by AppPreferencesRepository.lastOpenedTest.collectAsState(initial = null to 0L)
+
+    val sortedChrono = remember(attempts) {
+        attempts.sortedBy { it.completedAtMillis }
+    }
+    val percents = remember(sortedChrono) { sortedChrono.map { scorePercent(it.correct, it.total) } }
+    val lastPct = percents.lastOrNull()
+    val bestPct = percents.maxOrNull() ?: 0
+    val avgPct = if (percents.isNotEmpty()) percents.average().roundToInt() else 0
+    val recentTen = remember(sortedChrono) { sortedChrono.takeLast(10) }
+    val aggregates = remember(sortedChrono) {
+        sortedChrono
+            .groupBy { it.testName }
+            .map { (name, list) ->
+                val pcts = list.map { scorePercent(it.correct, it.total) }
+                TestAggregate(
+                    testName = name,
+                    attemptCount = list.size,
+                    avgPercent = pcts.average().roundToInt(),
+                    bestPercent = pcts.maxOrNull() ?: 0,
+                )
+            }
+            .sortedByDescending { it.attemptCount }
+    }
+    val weakest = remember(aggregates) {
+        aggregates.sortedBy { it.avgPercent }.take(3)
+    }
+    val lastUpdatedLabel = remember(sortedChrono) {
+        if (sortedChrono.isEmpty()) {
+            "No saved attempts yet"
+        } else {
+            val millis = sortedChrono.maxOf { it.completedAtMillis }
+            val z = ZoneId.systemDefault()
+            val fmt = DateTimeFormatter.ofPattern("MMM d, yyyy · HH:mm")
+            fmt.format(Instant.ofEpochMilli(millis).atZone(z))
+        }
+    }
+    val milestone = remember(sortedChrono.size, bestPct, lastPct) {
+        when {
+            sortedChrono.isEmpty() ->
+                "Finish a mock test to see your trend, averages, and weak areas here."
+            bestPct >= 85 ->
+                "Strong run — keep one full timed paper each week to stay sharp."
+            bestPct >= 70 ->
+                "Solid level — tighten weak tests until average stays above 70%."
+            else ->
+                "Great momentum — crossing 70% on a full test is a clear next milestone."
+        }
+    }
+    val gapToGoal = (DisplayGoalPercent - bestPct).coerceAtLeast(0)
+    val bestVsGoalProgress = (bestPct / DisplayGoalPercent.toFloat()).coerceIn(0f, 1f)
+    val lastVsGoalProgress = ((lastPct ?: 0) / DisplayGoalPercent.toFloat()).coerceIn(0f, 1f)
+    val recentPercents = remember(recentTen) { recentTen.map { scorePercent(it.correct, it.total) } }
+    var comparePeer by remember { mutableStateOf(ComparePeer.Average) }
+
+    Scaffold(
+        containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets(0),
+    ) { padding ->
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .background(bg)
+                .padding(padding)
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "Back",
+                        tint = p.textPrimary,
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "Progress report",
+                        color = p.textPrimary,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                    Text(
+                        text = "From your saved mock tests",
+                        color = p.textSecondary,
+                        fontSize = 12.sp,
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Outlined.BarChart,
+                    contentDescription = null,
+                    tint = p.accent,
+                    modifier = Modifier.size(28.dp),
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            if (sortedChrono.isEmpty()) {
+                ProgressReportInsightSection(
+                    title = "TEST SCORES (LAST 10 ATTEMPTS)",
+                    icon = Icons.AutoMirrored.Outlined.ShowChart,
+                    emptyMainText = "No Records",
+                    emptySubText = "Scores will appear once tests are attempted",
+                )
+                Spacer(Modifier.height(12.dp))
+                ProgressReportInsightSection(
+                    title = "TEST SERIES PERFORMANCE",
+                    icon = Icons.Outlined.PieChart,
+                    emptyMainText = "No Records",
+                    emptySubText = "Insights will be available once tests are attempted",
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = onStartPractice,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+                ) {
+                    Text("Start a practice test", color = Color.White)
+                }
+            } else {
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                StatMini(
+                    title = "Last",
+                    value = "${lastPct ?: 0}%",
+                    modifier = Modifier.weight(1f),
+                )
+                StatMini(
+                    title = "Best",
+                    value = "$bestPct%",
+                    modifier = Modifier.weight(1f),
+                )
+                StatMini(
+                    title = "Avg",
+                    value = "$avgPct%",
+                    modifier = Modifier.weight(1f),
+                )
+                StatMini(
+                    title = "Tests",
+                    value = "${sortedChrono.size}",
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                text = "Toward goal ($DisplayGoalPercent%)",
+                color = p.textPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = if (bestPct >= DisplayGoalPercent) {
+                    "Best score meets or beats your $DisplayGoalPercent% target"
+                } else {
+                    "Best score vs target · $gapToGoal pts below goal"
+                },
+                color = p.textSecondary,
+                fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            LinearProgressIndicator(
+                progress = { bestVsGoalProgress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp)),
+                color = p.accent,
+                trackColor = p.border.copy(alpha = 0.2f),
+                strokeCap = StrokeCap.Round,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Latest attempt vs target",
+                color = p.textSecondary,
+                fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            LinearProgressIndicator(
+                progress = { lastVsGoalProgress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = p.systemBlue,
+                trackColor = p.border.copy(alpha = 0.2f),
+                strokeCap = StrokeCap.Round,
+            )
+
+            Spacer(Modifier.height(14.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = p.surface),
+                border = BorderStroke(1.dp, p.border.copy(alpha = 0.14f)),
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("Streak & last activity", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Daily streak (digest opens): $streak day(s)",
+                        color = p.textSecondary,
+                        fontSize = 13.sp,
+                    )
+                    val (lastName, lastTime) = lastOpened
+                    if (!lastName.isNullOrBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = "Last opened test: $lastName",
+                            color = p.textSecondary,
+                            fontSize = 13.sp,
+                        )
+                    }
+                    if (lastTime > 0L) {
+                        val z = ZoneId.systemDefault()
+                        val fmt = DateTimeFormatter.ofPattern("MMM d, yyyy HH:mm")
+                        val t = fmt.format(Instant.ofEpochMilli(lastTime).atZone(z))
+                        Spacer(Modifier.height(4.dp))
+                        Text("Opened at: $t", color = p.textSecondary, fontSize = 12.sp)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            Text(
+                text = "TEST SCORES (LAST 10 ATTEMPTS)",
+                color = p.textSecondary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 11.sp,
+                letterSpacing = 0.4.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Bars = each attempt · line = trend (oldest → newest)",
+                color = p.textSecondary.copy(alpha = 0.85f),
+                fontSize = 10.sp,
+                lineHeight = 14.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            ScoreBarRow(attempts = recentTen)
+            Spacer(Modifier.height(10.dp))
+            LastTenTrendLineChart(percents = recentPercents)
+
+            Spacer(Modifier.height(14.dp))
+            PeerComparePanel(
+                selected = comparePeer,
+                onSelected = { comparePeer = it },
+                userAvg = avgPct,
+                userBest = bestPct,
+                userLast = lastPct ?: 0,
+            )
+
+            Spacer(Modifier.height(14.dp))
+
+            Text(
+                text = "TEST SERIES PERFORMANCE",
+                color = p.textSecondary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 11.sp,
+                letterSpacing = 0.4.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            aggregates.take(6).forEach { agg ->
+                TestBreakdownRow(aggregate = agg)
+                Spacer(Modifier.height(6.dp))
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                text = "Weakest averages (review these)",
+                color = p.textPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            if (weakest.isEmpty()) {
+                Text("—", color = p.textSecondary, fontSize = 13.sp)
+            } else {
+                weakest.forEachIndexed { i, w ->
+                    Text(
+                        text = "${i + 1}. ${w.testName} — avg ${w.avgPercent}% (${w.attemptCount} attempt(s))",
+                        color = p.textSecondary,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(vertical = 2.dp),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = p.surface),
+                border = BorderStroke(1.dp, p.border.copy(alpha = 0.14f)),
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("Milestone", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Text(milestone, color = p.textSecondary, fontSize = 13.sp, lineHeight = 18.sp)
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                text = "Not tracked yet (needs richer quiz data)",
+                color = p.textPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "• Per-question time and full-test duration\n" +
+                    "• Easy / medium / hard split (per question)\n" +
+                    "These stay honest placeholders until the quiz layer saves them.",
+                color = p.textSecondary,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                text = "Based on saved results · $lastUpdatedLabel",
+                color = p.textSecondary,
+                fontSize = 11.sp,
+            )
+
+            Spacer(Modifier.height(14.dp))
+
+            Button(
+                onClick = onStartPractice,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+            ) {
+                Text("Recommended: run a timed practice test", color = Color.White)
+            }
+
+            Spacer(Modifier.height(20.dp))
+            }
+        }
+    }
+}
+
+/**
+ * Single “insight panel” used on this screen only — empty state (reference layout) or
+ * could be extended later with chart content in the same frame.
+ */
+@Composable
+private fun ProgressReportInsightSection(
+    title: String,
+    icon: ImageVector,
+    emptyMainText: String,
+    emptySubText: String,
+    modifier: Modifier = Modifier,
+) {
+    val p = mockTestPalette()
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = p.surface),
+        border = BorderStroke(1.dp, p.border.copy(alpha = 0.14f)),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 28.dp, horizontal = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = title,
+                color = p.textSecondary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 11.sp,
+                letterSpacing = 0.35.sp,
+            )
+            Spacer(Modifier.height(20.dp))
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(72.dp),
+                tint = p.textSecondary.copy(alpha = 0.45f),
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = emptyMainText,
+                color = p.textPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 17.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = emptySubText,
+                color = p.textSecondary,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatMini(
+    title: String,
+    value: String,
+    modifier: Modifier = Modifier,
+) {
+    val p = mockTestPalette()
+    val shape = RoundedCornerShape(12.dp)
+    Column(
+        modifier = modifier
+            .clip(shape)
+            .background(p.surface)
+            .border(1.dp, p.border.copy(alpha = 0.14f), shape)
+            .padding(vertical = 10.dp, horizontal = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(text = title, color = p.textSecondary, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(4.dp))
+        Text(text = value, color = p.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold)
+    }
+}
+
+@Composable
+private fun ScoreBarRow(attempts: List<TestAttemptEntity>) {
+    val p = mockTestPalette()
+    val rowH = 108.dp
+    val maxBar = 78.dp
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(rowH)
+            .clip(RoundedCornerShape(12.dp))
+            .background(p.surface)
+            .border(1.dp, p.border.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 6.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        attempts.forEach { a ->
+            val pct = scorePercent(a.correct, a.total)
+            val frac = (pct / 100f).coerceIn(0.08f, 1f)
+            val barH = (maxBar * frac).coerceAtLeast(8.dp)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Bottom,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(horizontal = 2.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(11.dp)
+                        .height(barH)
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(p.accent, p.systemBlue.copy(alpha = 0.85f)),
+                            ),
+                        ),
+                )
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    text = "$pct",
+                    color = p.textSecondary,
+                    fontSize = 9.sp,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LastTenTrendLineChart(percents: List<Int>) {
+    val p = mockTestPalette()
+    val shape = RoundedCornerShape(12.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(p.surface)
+            .border(1.dp, p.border.copy(alpha = 0.12f), shape)
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+    ) {
+        Text(
+            text = "Score trend",
+            color = p.textPrimary,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+        )
+        Spacer(Modifier.height(6.dp))
+        if (percents.isEmpty()) {
+            Text("No points yet", color = p.textSecondary, fontSize = 12.sp)
+            return
+        }
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(132.dp),
+        ) {
+            val padL = 6.dp.toPx()
+            val padR = 6.dp.toPx()
+            val padT = 8.dp.toPx()
+            val padB = 22.dp.toPx()
+            val w = size.width - padL - padR
+            val h = size.height - padT - padB
+            fun yFor(pct: Int) = padT + h * (1f - (pct / 100f).coerceIn(0f, 1f))
+            if (percents.size == 1) {
+                val cx = padL + w / 2f
+                val cy = yFor(percents.first())
+                drawCircle(color = p.accent, radius = 7.dp.toPx(), center = Offset(cx, cy))
+                return@Canvas
+            }
+            val path = Path()
+            percents.forEachIndexed { i, pct ->
+                val x = padL + w * i / (percents.size - 1).coerceAtLeast(1)
+                val y = yFor(pct)
+                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            drawPath(
+                path = path,
+                color = p.accent,
+                style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round),
+            )
+            percents.forEachIndexed { i, pct ->
+                val x = padL + w * i / (percents.size - 1).coerceAtLeast(1)
+                val y = yFor(pct)
+                drawCircle(color = Color.White, radius = 4.5.dp.toPx(), center = Offset(x, y))
+                drawCircle(color = p.accent, radius = 3.dp.toPx(), center = Offset(x, y))
+            }
+        }
+        Text(
+            text = "0% bottom · 100% top",
+            color = p.textSecondary,
+            fontSize = 10.sp,
+        )
+    }
+}
+
+@Composable
+private fun PeerComparePanel(
+    selected: ComparePeer,
+    onSelected: (ComparePeer) -> Unit,
+    userAvg: Int,
+    userBest: Int,
+    userLast: Int,
+) {
+    val p = mockTestPalette()
+    val shape = RoundedCornerShape(14.dp)
+    val bench = selected.benchmarkPercent
+    val deltaAvg = userAvg - bench
+    val deltaText = when {
+        deltaAvg > 0 -> "Your average is ${deltaAvg}% above this benchmark."
+        deltaAvg < 0 -> "Your average is ${-deltaAvg}% below this benchmark."
+        else -> "Your average matches this benchmark."
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = shape,
+        colors = CardDefaults.cardColors(containerColor = p.surface),
+        border = BorderStroke(1.dp, p.border.copy(alpha = 0.14f)),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text(
+                text = "Compare yourself (demo)",
+                color = p.textPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Pick a reference band and see how your scores line up. Numbers are illustrative until you plug in real cohort data.",
+                color = p.textSecondary,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ComparePeer.entries.forEach { peer ->
+                    FilterChip(
+                        selected = selected == peer,
+                        onClick = { onSelected(peer) },
+                        label = { Text(peer.chipLabel, fontSize = 12.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = p.accent.copy(alpha = 0.22f),
+                            selectedLabelColor = p.textPrimary,
+                            containerColor = p.surfaceElevated,
+                            labelColor = p.textSecondary,
+                        ),
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(selected.description, color = p.textSecondary, fontSize = 12.sp, lineHeight = 16.sp)
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "Reference: $bench% · $deltaText",
+                color = p.textPrimary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text("Your average ($userAvg%)", color = p.textSecondary, fontSize = 11.sp)
+            Spacer(Modifier.height(4.dp))
+            LinearProgressIndicator(
+                progress = { (userAvg / 100f).coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp)),
+                color = p.accent,
+                trackColor = p.border.copy(alpha = 0.2f),
+                strokeCap = StrokeCap.Round,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text("Benchmark ($bench%)", color = p.textSecondary, fontSize = 11.sp)
+            Spacer(Modifier.height(4.dp))
+            LinearProgressIndicator(
+                progress = { (bench / 100f).coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp)),
+                color = p.systemBlue,
+                trackColor = p.border.copy(alpha = 0.2f),
+                strokeCap = StrokeCap.Round,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "Also: last attempt $userLast% · your best $userBest%",
+                color = p.textSecondary,
+                fontSize = 11.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TestBreakdownRow(aggregate: TestAggregate) {
+    val p = mockTestPalette()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(p.surface.copy(alpha = 0.65f))
+            .border(1.dp, p.border.copy(alpha = 0.1f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = aggregate.testName,
+                color = p.textPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+            )
+            Text(
+                text = "${aggregate.attemptCount} attempt(s)",
+                color = p.textSecondary,
+                fontSize = 11.sp,
+            )
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Text("avg ${aggregate.avgPercent}%", color = p.accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text("best ${aggregate.bestPercent}%", color = p.textSecondary, fontSize = 11.sp)
+        }
+    }
+}

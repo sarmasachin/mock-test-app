@@ -1,0 +1,13 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Opaque windowBackground/colorBackground prevent the default black frame from showing
+         during Compose Navigation transitions (edge-to-edge + transparent scaffolds). -->
+    <style name="Theme.MockTestApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/app_window_background</item>
+        <item name="android:colorBackground">@color/app_window_background</item>
+        <item name="android:navigationBarColor">@color/app_window_background</item>
+        <item name="android:statusBarColor" tools:targetApi="l">@color/app_window_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">true</item>
+    </style>
+</resources>
+

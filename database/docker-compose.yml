@@ -1,0 +1,26 @@
+# Local PostgreSQL for MockTestApp — first run runs all postgres/*.sql in name order
+# Usage (from this folder):
+#   docker compose up -d
+# Connection (dev, no TLS): postgresql://mocktestapp_rw:CHANGE_ME@127.0.0.1:5432/mocktestapp
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: mocktestapp-postgres
+    environment:
+      POSTGRES_USER: mocktestapp_rw
+      POSTGRES_PASSWORD: CHANGE_ME
+      POSTGRES_DB: mocktestapp
+    ports:
+      - "5432:5432"
+    volumes:
+      - mocktest_pg_data:/var/lib/postgresql/data
+      - ./postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mocktestapp_rw -d mocktestapp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mocktest_pg_data:

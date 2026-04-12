@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Must match Compose light palette materialBackground (MockTestPaletteLight) so the system
+         window never flashes black between destinations. -->
+    <color name="app_window_background">#FFF8FAFC</color>
+</resources>

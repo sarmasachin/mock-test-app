@@ -1,0 +1,43 @@
+package com.example.mocktestapp.newui.home
+
+import androidx.compose.runtime.Composable
+
+@Composable
+fun HomeRouteNew(
+    onLogout: () -> Unit,
+    onOpenProfile: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onOpenActivity: () -> Unit,
+    onOpenCategory: (String) -> Unit,
+    onSeeAllCategories: () -> Unit,
+    onStartTest: () -> Unit,
+    onLeaderboard: () -> Unit,
+    onResults: () -> Unit,
+    onBookmarks: () -> Unit,
+    onOpenJobAlert: () -> Unit,
+    onOpenExamAlert: () -> Unit,
+    onOpenNews: () -> Unit,
+    onOpenProgressReport: () -> Unit,
+    onOpenDaily: () -> Unit,
+    onOpenMenuQuiz: () -> Unit,
+) {
+    HomeScreenNew(
+        onLogout = onLogout,
+        onOpenProfile = onOpenProfile,
+        onOpenHistory = onOpenHistory,
+        onOpenActivity = onOpenActivity,
+        onOpenCategory = onOpenCategory,
+        onSeeAllCategories = onSeeAllCategories,
+        onStartTest = onStartTest,
+        onLeaderboard = onLeaderboard,
+        onResults = onResults,
+        onBookmarks = onBookmarks,
+        onOpenJobAlert = onOpenJobAlert,
+        onOpenExamAlert = onOpenExamAlert,
+        onOpenNews = onOpenNews,
+        onOpenProgressReport = onOpenProgressReport,
+        onOpenDaily = onOpenDaily,
+        onOpenMenuQuiz = onOpenMenuQuiz,
+    )
+}
+

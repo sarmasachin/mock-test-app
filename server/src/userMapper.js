@@ -1,0 +1,19 @@
+'use strict';
+
+function mapUserRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    email: row.email,
+    displayName: row.display_name,
+    phone: row.phone,
+    sixDigitPublicId: row.six_digit_public_id,
+    signupState: row.signup_state || '',
+    signupDistrict: row.signup_district || '',
+    emailVerifiedAt: row.email_verified_at,
+    phoneVerifiedAt: row.phone_verified_at,
+    createdAt: row.created_at,
+  };
+}
+
+module.exports = { mapUserRow };
