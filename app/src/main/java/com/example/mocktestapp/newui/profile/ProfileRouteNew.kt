@@ -41,7 +41,12 @@ private object ProfileInnerRoutes {
     const val USERNAME = "profile_edit_username"
     const val EMAIL = "profile_edit_email"
     const val MOBILE = "profile_edit_mobile"
+    const val GENDER = "profile_edit_gender"
     const val PASSWORD = "profile_edit_password"
+    const val NOTIFICATIONS = "profile_notifications"
+    const val HELP_SUPPORT = "profile_help_support"
+    const val FEEDBACK = "profile_feedback"
+    const val REPORT_ISSUE = "profile_report_issue"
 }
 
 @Composable
@@ -94,7 +99,12 @@ fun ProfileRouteNew(
                         onEditUsername = { innerNav.navigate(ProfileInnerRoutes.USERNAME) },
                         onEditEmail = { innerNav.navigate(ProfileInnerRoutes.EMAIL) },
                         onEditMobile = { innerNav.navigate(ProfileInnerRoutes.MOBILE) },
+                        onEditGender = { innerNav.navigate(ProfileInnerRoutes.GENDER) },
                         onEditPassword = { innerNav.navigate(ProfileInnerRoutes.PASSWORD) },
+                        onOpenNotifications = { innerNav.navigate(ProfileInnerRoutes.NOTIFICATIONS) },
+                        onOpenHelpSupport = { innerNav.navigate(ProfileInnerRoutes.HELP_SUPPORT) },
+                        onOpenFeedback = { innerNav.navigate(ProfileInnerRoutes.FEEDBACK) },
+                        onOpenReportIssue = { innerNav.navigate(ProfileInnerRoutes.REPORT_ISSUE) },
                         onOpenAchievements = { appNavController.navigate(RoutesNew.ACHIEVEMENTS) },
                         onOpenPrivacy = { appNavController.navigate(RoutesNew.PRIVACY) },
                         onOpenTerms = { appNavController.navigate(RoutesNew.TERMS) },
@@ -160,8 +170,41 @@ fun ProfileRouteNew(
                         onShowError = onEditError,
                     )
                 }
+                composable(ProfileInnerRoutes.GENDER) {
+                    ProfileEditGenderScreen(
+                        onBack = { innerNav.popBackStack() },
+                        onShowSuccess = onEditSuccess,
+                        onShowError = onEditError,
+                    )
+                }
                 composable(ProfileInnerRoutes.PASSWORD) {
                     ProfileEditPasswordScreen(
+                        onBack = { innerNav.popBackStack() },
+                        onShowSuccess = onEditSuccess,
+                        onShowError = onEditError,
+                    )
+                }
+                composable(ProfileInnerRoutes.NOTIFICATIONS) {
+                    ProfileNotificationsScreen(
+                        onBack = { innerNav.popBackStack() },
+                    )
+                }
+                composable(ProfileInnerRoutes.HELP_SUPPORT) {
+                    ProfileHelpSupportScreen(
+                        onBack = { innerNav.popBackStack() },
+                        onShowSuccess = onEditSuccess,
+                        onShowError = onEditError,
+                    )
+                }
+                composable(ProfileInnerRoutes.FEEDBACK) {
+                    ProfileFeedbackScreen(
+                        onBack = { innerNav.popBackStack() },
+                        onShowSuccess = onEditSuccess,
+                        onShowError = onEditError,
+                    )
+                }
+                composable(ProfileInnerRoutes.REPORT_ISSUE) {
+                    ProfileReportIssueScreen(
                         onBack = { innerNav.popBackStack() },
                         onShowSuccess = onEditSuccess,
                         onShowError = onEditError,

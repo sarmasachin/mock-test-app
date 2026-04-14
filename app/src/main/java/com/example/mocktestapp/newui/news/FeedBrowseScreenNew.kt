@@ -47,7 +47,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -346,8 +345,6 @@ private fun FeedTopStoryCard(
                     fontSize = 17.sp,
                     fontWeight = FontWeight.ExtraBold,
                     lineHeight = 22.sp,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
@@ -427,8 +424,6 @@ private fun FeedListRow(
                 color = p.textPrimary,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
                 lineHeight = 20.sp,
             )
             Spacer(Modifier.height(6.dp))
@@ -437,8 +432,6 @@ private fun FeedListRow(
                 color = p.textSecondary,
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(8.dp))
             Text(

@@ -167,7 +167,6 @@ private fun BookmarkCard(
                     color = p.textPrimary,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(

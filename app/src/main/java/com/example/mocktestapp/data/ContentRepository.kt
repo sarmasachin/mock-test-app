@@ -109,7 +109,7 @@ object ContentRepository {
         return try {
             val z = ZonedDateTime.parse(iso)
             val local = z.withZoneSameInstant(ZoneId.systemDefault())
-            DateTimeFormatter.ofPattern("d MMM yyyy", Locale.US).format(local)
+            DateTimeFormatter.ofPattern("d MMM yyyy, hh:mm a", Locale.US).format(local)
         } catch (_: Exception) {
             iso.take(10)
         }

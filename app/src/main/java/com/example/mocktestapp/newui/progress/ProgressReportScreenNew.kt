@@ -56,14 +56,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.mocktestapp.data.AppPreferencesRepository
 import com.example.mocktestapp.data.TestHistoryRepository
 import com.example.mocktestapp.data.local.TestAttemptEntity
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
 /** Shown as a simple “target line” in UI; not persisted yet. */
@@ -86,19 +82,19 @@ private enum class ComparePeer(
     val description: String,
 ) {
     Topper(
-        chipLabel = "vs Topper",
+        chipLabel = "Range 88-100",
         benchmarkPercent = 92,
-        description = "Approx. top-of-class score band (demo benchmark, not live ranks).",
+        description = "High performance reference range.",
     ),
     Average(
-        chipLabel = "vs Average",
+        chipLabel = "Range 60-76",
         benchmarkPercent = 68,
-        description = "Typical prepared student average (demo benchmark).",
+        description = "Mid performance reference range.",
     ),
     Bottom(
-        chipLabel = "vs Bottom",
+        chipLabel = "Range 0-45",
         benchmarkPercent = 38,
-        description = "Needs-support band — aim to stay well above this (demo benchmark).",
+        description = "Lower performance reference range.",
     ),
 }
 
@@ -112,8 +108,6 @@ fun ProgressReportScreenNew(
     val bg = Brush.verticalGradient(colors = p.gradientColors())
 
     val attempts by TestHistoryRepository.observeAttempts().collectAsState(initial = emptyList())
-    val streak by AppPreferencesRepository.streakDays.collectAsState(initial = 0)
-    val lastOpened by AppPreferencesRepository.lastOpenedTest.collectAsState(initial = null to 0L)
 
     val sortedChrono = remember(attempts) {
         attempts.sortedBy { it.completedAtMillis }
@@ -139,28 +133,6 @@ fun ProgressReportScreenNew(
     }
     val weakest = remember(aggregates) {
         aggregates.sortedBy { it.avgPercent }.take(3)
-    }
-    val lastUpdatedLabel = remember(sortedChrono) {
-        if (sortedChrono.isEmpty()) {
-            "No saved attempts yet"
-        } else {
-            val millis = sortedChrono.maxOf { it.completedAtMillis }
-            val z = ZoneId.systemDefault()
-            val fmt = DateTimeFormatter.ofPattern("MMM d, yyyy · HH:mm")
-            fmt.format(Instant.ofEpochMilli(millis).atZone(z))
-        }
-    }
-    val milestone = remember(sortedChrono.size, bestPct, lastPct) {
-        when {
-            sortedChrono.isEmpty() ->
-                "Finish a mock test to see your trend, averages, and weak areas here."
-            bestPct >= 85 ->
-                "Strong run — keep one full timed paper each week to stay sharp."
-            bestPct >= 70 ->
-                "Solid level — tighten weak tests until average stays above 70%."
-            else ->
-                "Great momentum — crossing 70% on a full test is a clear next milestone."
-        }
     }
     val gapToGoal = (DisplayGoalPercent - bestPct).coerceAtLeast(0)
     val bestVsGoalProgress = (bestPct / DisplayGoalPercent.toFloat()).coerceIn(0f, 1f)
@@ -216,18 +188,30 @@ fun ProgressReportScreenNew(
             Spacer(Modifier.height(14.dp))
 
             if (sortedChrono.isEmpty()) {
-                ProgressReportInsightSection(
-                    title = "TEST SCORES (LAST 10 ATTEMPTS)",
-                    icon = Icons.AutoMirrored.Outlined.ShowChart,
-                    emptyMainText = "No Records",
-                    emptySubText = "Scores will appear once tests are attempted",
+                CompactGraphCard(
+                    title = "Performance graph",
+                    subtitle = "Graph will appear after your first test",
+                    content = {
+                        ProgressReportInsightSection(
+                            title = "TEST SCORES (LAST 10 ATTEMPTS)",
+                            icon = Icons.AutoMirrored.Outlined.ShowChart,
+                            emptyMainText = "No Records",
+                            emptySubText = "Attempt a test to view graph",
+                        )
+                    },
                 )
                 Spacer(Modifier.height(12.dp))
-                ProgressReportInsightSection(
-                    title = "TEST SERIES PERFORMANCE",
-                    icon = Icons.Outlined.PieChart,
-                    emptyMainText = "No Records",
-                    emptySubText = "Insights will be available once tests are attempted",
+                CompactGraphCard(
+                    title = "Series overview",
+                    subtitle = "Average and best by test will show here",
+                    content = {
+                        ProgressReportInsightSection(
+                            title = "TEST SERIES PERFORMANCE",
+                            icon = Icons.Outlined.PieChart,
+                            emptyMainText = "No Records",
+                            emptySubText = "Insights appear after attempts",
+                        )
+                    },
                 )
                 Spacer(Modifier.height(16.dp))
                 Button(
@@ -314,59 +298,15 @@ fun ProgressReportScreenNew(
 
             Spacer(Modifier.height(14.dp))
 
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = p.surface),
-                border = BorderStroke(1.dp, p.border.copy(alpha = 0.14f)),
-            ) {
-                Column(Modifier.padding(14.dp)) {
-                    Text("Streak & last activity", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "Daily streak (digest opens): $streak day(s)",
-                        color = p.textSecondary,
-                        fontSize = 13.sp,
-                    )
-                    val (lastName, lastTime) = lastOpened
-                    if (!lastName.isNullOrBlank()) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = "Last opened test: $lastName",
-                            color = p.textSecondary,
-                            fontSize = 13.sp,
-                        )
-                    }
-                    if (lastTime > 0L) {
-                        val z = ZoneId.systemDefault()
-                        val fmt = DateTimeFormatter.ofPattern("MMM d, yyyy HH:mm")
-                        val t = fmt.format(Instant.ofEpochMilli(lastTime).atZone(z))
-                        Spacer(Modifier.height(4.dp))
-                        Text("Opened at: $t", color = p.textSecondary, fontSize = 12.sp)
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(14.dp))
-
-            Text(
-                text = "TEST SCORES (LAST 10 ATTEMPTS)",
-                color = p.textSecondary,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 11.sp,
-                letterSpacing = 0.4.sp,
+            CompactGraphCard(
+                title = "Performance graph",
+                subtitle = "Bars = attempts, line = trend (last 10)",
+                content = {
+                    ScoreBarRow(attempts = recentTen)
+                    Spacer(Modifier.height(10.dp))
+                    LastTenTrendLineChart(percents = recentPercents)
+                },
             )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "Bars = each attempt · line = trend (oldest → newest)",
-                color = p.textSecondary.copy(alpha = 0.85f),
-                fontSize = 10.sp,
-                lineHeight = 14.sp,
-            )
-            Spacer(Modifier.height(8.dp))
-            ScoreBarRow(attempts = recentTen)
-            Spacer(Modifier.height(10.dp))
-            LastTenTrendLineChart(percents = recentPercents)
 
             Spacer(Modifier.height(14.dp))
             PeerComparePanel(
@@ -414,48 +354,7 @@ fun ProgressReportScreenNew(
                 }
             }
 
-            Spacer(Modifier.height(14.dp))
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = p.surface),
-                border = BorderStroke(1.dp, p.border.copy(alpha = 0.14f)),
-            ) {
-                Column(Modifier.padding(14.dp)) {
-                    Text("Milestone", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Spacer(Modifier.height(6.dp))
-                    Text(milestone, color = p.textSecondary, fontSize = 13.sp, lineHeight = 18.sp)
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            Text(
-                text = "Not tracked yet (needs richer quiz data)",
-                color = p.textPrimary,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = "• Per-question time and full-test duration\n" +
-                    "• Easy / medium / hard split (per question)\n" +
-                    "These stay honest placeholders until the quiz layer saves them.",
-                color = p.textSecondary,
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            Text(
-                text = "Based on saved results · $lastUpdatedLabel",
-                color = p.textSecondary,
-                fontSize = 11.sp,
-            )
-
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(16.dp))
 
             Button(
                 onClick = onStartPractice,
@@ -467,6 +366,38 @@ fun ProgressReportScreenNew(
 
             Spacer(Modifier.height(20.dp))
             }
+        }
+    }
+}
+
+@Composable
+private fun CompactGraphCard(
+    title: String,
+    subtitle: String,
+    content: @Composable () -> Unit,
+) {
+    val p = mockTestPalette()
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = p.surface),
+        border = BorderStroke(1.dp, p.border.copy(alpha = 0.14f)),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text(
+                text = title,
+                color = p.textPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = subtitle,
+                color = p.textSecondary,
+                fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            content()
         }
     }
 }
@@ -790,7 +721,6 @@ private fun TestBreakdownRow(aggregate: TestAggregate) {
                 color = p.textPrimary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
             )
             Text(
                 text = "${aggregate.attemptCount} attempt(s)",

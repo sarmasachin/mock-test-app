@@ -5,12 +5,15 @@ package com.example.mocktestapp.newui.quiz
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,6 +27,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.activity.compose.BackHandler
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -59,7 +64,7 @@ fun QuizScreenNew(
     modifier: Modifier = Modifier,
     testName: String,
     onBack: () -> Unit,
-    onSubmit: () -> Unit,
+    onSubmit: (Int, Int, Int) -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -74,14 +79,27 @@ fun QuizScreenNew(
             delay(1000)
             remainingSeconds -= 1
         }
-        onSubmit()
+        val correct = answers.count { (q, ans) -> ans == (q % 4) }
+        val answered = answers.size
+        val wrong = (answered - correct).coerceAtLeast(0)
+        onSubmit(answered, correct, wrong)
     }
 
     val answeredCount = answers.size
     val unansweredCount = totalQuestions - answeredCount
+    val unlockedUntil = remember(answers.size, totalQuestions) {
+        (0 until totalQuestions).firstOrNull { idx -> answers[idx] == null } ?: (totalQuestions - 1)
+    }
 
     var overviewOpen by remember { mutableStateOf(false) }
     val overviewSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    var showExitConfirm by remember { mutableStateOf(false) }
+    var showSubmitConfirm by remember { mutableStateOf(false) }
+    val interactionLocked = false
+
+    BackHandler {
+        showExitConfirm = true
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -91,15 +109,16 @@ fun QuizScreenNew(
             modifier = modifier
                 .fillMaxSize()
                 .background(bg)
-                .padding(padding),
+                .padding(padding)
+                .verticalScroll(rememberScrollState()),
         ) {
             TopBar(
                 current = current + 1,
                 total = totalQuestions,
                 remainingSeconds = remainingSeconds,
-                onBack = onBack,
-                onSubmit = onSubmit,
-                onOpenOverview = { overviewOpen = true },
+                onBack = { showExitConfirm = true },
+                onSubmit = { showSubmitConfirm = true },
+                onOpenOverview = { if (!interactionLocked) overviewOpen = true },
             )
 
             Spacer(Modifier.height(12.dp))
@@ -129,7 +148,7 @@ fun QuizScreenNew(
                         )
                         Text(
                             text = "Unanswered: $unansweredCount",
-                            color = p.textPrimary,
+                            color = p.error,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -139,8 +158,11 @@ fun QuizScreenNew(
                         total = totalQuestions,
                         currentIndex = current,
                         answered = answers.keys,
-                        onSelect = { idx -> current = idx },
-                        onOverflowClick = { overviewOpen = true },
+                        unlockedUntil = unlockedUntil,
+                        onSelect = { idx ->
+                            if (!interactionLocked && idx <= unlockedUntil) current = idx
+                        },
+                        onOverflowClick = { if (!interactionLocked) overviewOpen = true },
                     )
                 }
             }
@@ -158,9 +180,9 @@ fun QuizScreenNew(
 
             BottomNav(
                 canPrev = current > 0,
-                canNext = current < totalQuestions - 1,
+                canNext = current < unlockedUntil,
                 onPrev = { if (current > 0) current -= 1 },
-                onNext = { if (current < totalQuestions - 1) current += 1 },
+                onNext = { if (current < unlockedUntil) current += 1 },
             )
         }
     }
@@ -175,15 +197,75 @@ fun QuizScreenNew(
             QuestionOverviewSheetContent(
                 total = totalQuestions,
                 currentIndex = current,
+                unlockedUntil = unlockedUntil,
                 answeredIndices = answers.keys,
                 onPickQuestion = { idx ->
-                    if (idx <= current) {
+                    if (idx <= unlockedUntil) {
                         current = idx
                         overviewOpen = false
                     }
                 },
             )
         }
+    }
+
+    if (showExitConfirm) {
+        AlertDialog(
+            onDismissRequest = { showExitConfirm = false },
+            title = { Text("Are you sure to exit?") },
+            text = { Text("Your test progress may be lost.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showExitConfirm = false
+                        onBack()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = p.primaryButton),
+                ) {
+                    Text("Exit", color = p.onPrimaryButton)
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { showExitConfirm = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = p.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.2f)),
+                ) {
+                    Text("Cancel", color = p.textPrimary)
+                }
+            },
+        )
+    }
+
+    if (showSubmitConfirm) {
+        AlertDialog(
+            onDismissRequest = { showSubmitConfirm = false },
+            title = { Text("Are you sure to submit exam?") },
+            text = { Text("Once submitted, you cannot change your answers.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showSubmitConfirm = false
+                        val correct = answers.count { (q, ans) -> ans == (q % 4) }
+                        val answered = answers.size
+                        val wrong = (answered - correct).coerceAtLeast(0)
+                        onSubmit(answered, correct, wrong)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = p.primaryButton),
+                ) {
+                    Text("Submit", color = p.onPrimaryButton)
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { showSubmitConfirm = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = p.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.2f)),
+                ) {
+                    Text("Cancel", color = p.textPrimary)
+                }
+            },
+        )
     }
 }
 
@@ -298,6 +380,7 @@ private fun QuestionStrip(
     total: Int,
     currentIndex: Int,
     answered: Set<Int>,
+    unlockedUntil: Int,
     onSelect: (Int) -> Unit,
     onOverflowClick: () -> Unit,
 ) {
@@ -305,10 +388,12 @@ private fun QuestionStrip(
         for (i in 0 until minOf(total, 6)) {
             val selected = i == currentIndex
             val isAnswered = i in answered
+            val isLocked = i > unlockedUntil
             QuestionChip(
                 text = (i + 1).toString(),
                 selected = selected,
                 answered = isAnswered,
+                locked = isLocked,
                 onClick = { onSelect(i) },
             )
         }
@@ -317,6 +402,7 @@ private fun QuestionStrip(
                 text = "…",
                 selected = false,
                 answered = false,
+                locked = false,
                 onClick = onOverflowClick,
             )
         }
@@ -328,12 +414,14 @@ private fun QuestionChip(
     text: String,
     selected: Boolean,
     answered: Boolean,
+    locked: Boolean,
     onClick: () -> Unit,
 ) {
     val p = mockTestPalette()
     val shape = RoundedCornerShape(14.dp)
     val bg = when {
         selected -> p.primaryButton
+        locked -> p.surfaceTrack
         else -> p.surface
     }
     val fg = if (selected) p.onPrimaryButton else p.textPrimary
@@ -345,10 +433,19 @@ private fun QuestionChip(
             .clip(shape)
             .background(bg)
             .border(1.dp, borderCol, shape)
-            .clickable(onClick = onClick),
+            .clickable(enabled = !locked, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text = text, color = fg, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        if (locked) {
+            Icon(
+                imageVector = Icons.Outlined.Lock,
+                contentDescription = "Locked",
+                tint = p.textSecondary,
+                modifier = Modifier.size(14.dp),
+            )
+        } else {
+            Text(text = text, color = fg, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }
 
@@ -399,12 +496,12 @@ private fun OptionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .defaultMinSize(minHeight = 52.dp)
             .clip(shape)
             .background(p.surface)
             .border(1.dp, borderCol, shape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioDot(selected = selected)
@@ -518,10 +615,19 @@ private fun SolidButton(
 private fun QuestionOverviewSheetContent(
     total: Int,
     currentIndex: Int,
+    unlockedUntil: Int,
     answeredIndices: Set<Int>,
     onPickQuestion: (Int) -> Unit,
 ) {
     val p = mockTestPalette()
+    val pageSize = 50
+    val totalPages = ((total + pageSize - 1) / pageSize).coerceAtLeast(1)
+    var selectedPage by remember(currentIndex, totalPages) {
+        mutableIntStateOf((currentIndex / pageSize).coerceIn(0, totalPages - 1))
+    }
+    val pageStart = selectedPage * pageSize
+    val pageEndExclusive = minOf(total, pageStart + pageSize)
+    val pageQuestionsCount = (pageEndExclusive - pageStart).coerceAtLeast(0)
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -542,24 +648,45 @@ private fun QuestionOverviewSheetContent(
             lineHeight = 17.sp,
         )
         Spacer(Modifier.height(14.dp))
+        if (totalPages > 1) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                repeat(totalPages) { page ->
+                    val from = page * pageSize + 1
+                    val to = minOf(total, (page + 1) * pageSize)
+                    val isSelected = selectedPage == page
+                    PageRangeChip(
+                        label = "$from-$to",
+                        selected = isSelected,
+                        onClick = { selectedPage = page },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
         OverviewLegendRow()
         Spacer(Modifier.height(12.dp))
         val cols = 5
-        val rows = (total + cols - 1) / cols
+        val rows = (pageQuestionsCount + cols - 1) / cols
         for (r in 0 until rows) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 for (c in 0 until cols) {
-                    val idx = r * cols + c
-                    if (idx >= total) {
+                    val localIdx = r * cols + c
+                    if (localIdx >= pageQuestionsCount) {
                         Spacer(modifier = Modifier.weight(1f))
                     } else {
+                        val idx = pageStart + localIdx
                         OverviewQuestionCell(
                             number = idx + 1,
                             index = idx,
                             currentIndex = currentIndex,
+                            unlockedUntil = unlockedUntil,
                             answered = idx in answeredIndices,
                             onClick = { onPickQuestion(idx) },
                             modifier = Modifier.weight(1f),
@@ -570,6 +697,33 @@ private fun QuestionOverviewSheetContent(
             Spacer(Modifier.height(8.dp))
         }
         Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun PageRangeChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val p = mockTestPalette()
+    val shape = RoundedCornerShape(10.dp)
+    Box(
+        modifier = modifier
+            .height(36.dp)
+            .clip(shape)
+            .background(if (selected) p.primaryButton else p.surface)
+            .border(1.dp, p.border.copy(alpha = if (selected) 0.35f else 0.18f), shape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = if (selected) p.onPrimaryButton else p.textPrimary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 
@@ -624,12 +778,13 @@ private fun OverviewQuestionCell(
     number: Int,
     index: Int,
     currentIndex: Int,
+    unlockedUntil: Int,
     answered: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val p = mockTestPalette()
-    val locked = index > currentIndex
+    val locked = index > unlockedUntil
     val skipped = index < currentIndex && !answered
     val isCurrent = index == currentIndex
 

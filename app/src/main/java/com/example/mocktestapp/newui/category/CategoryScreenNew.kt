@@ -3,6 +3,8 @@ package com.example.mocktestapp.newui.category
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,7 +25,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,14 +49,19 @@ fun CategoryScreenNew(
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
+    val allCategories = listOf("Math", "Reasoning", "English", "GK", "Science", "Computer", "Hindi")
+    var selectedCategory by remember(category) { mutableStateOf(category) }
 
-    val items = remember(category) {
-        when (category.lowercase()) {
+    val items = remember(selectedCategory) {
+        when (selectedCategory.lowercase()) {
             "math" -> listOf("Arithmetic", "Algebra")
             "reasoning" -> listOf("Series", "Analogy")
             "english" -> listOf("Grammar", "Vocabulary")
             "gk" -> listOf("Static GK", "Current Affairs")
-            else -> listOf("Topic 1", "Topic 2")
+            "science" -> listOf("Physics", "Chemistry")
+            "computer" -> listOf("Basics", "MS Office")
+            "hindi" -> listOf("Vyakaran", "Sahitya")
+            else -> emptyList()
         }
     }
 
@@ -78,7 +88,7 @@ fun CategoryScreenNew(
                 }
                 Spacer(Modifier.size(6.dp))
                 Text(
-                    text = category,
+                    text = selectedCategory,
                     color = p.textPrimary,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.ExtraBold,
@@ -86,13 +96,30 @@ fun CategoryScreenNew(
             }
 
             Spacer(Modifier.height(16.dp))
-            Text(
-                text = "Select category",
-                color = p.textPrimary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-            )
-
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                allCategories.forEach { cat ->
+                    val selected = selectedCategory.equals(cat, ignoreCase = true)
+                    val chipShape = RoundedCornerShape(14.dp)
+                    Text(
+                        text = cat,
+                        color = if (selected) p.onPrimaryButton else p.textPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(chipShape)
+                            .background(if (selected) p.primaryButton else p.surface)
+                            .border(1.dp, p.border.copy(alpha = 0.18f), chipShape)
+                            .clickable { selectedCategory = cat }
+                            .padding(horizontal = 16.dp, vertical = 11.dp),
+                    )
+                    Spacer(Modifier.size(8.dp))
+                }
+            }
             Spacer(Modifier.height(12.dp))
 
             Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)) {

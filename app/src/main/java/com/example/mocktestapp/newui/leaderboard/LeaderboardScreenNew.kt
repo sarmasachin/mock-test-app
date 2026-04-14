@@ -2,6 +2,7 @@ package com.example.mocktestapp.newui.leaderboard
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -36,11 +38,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
+import java.time.LocalDate
 
 @Composable
 fun LeaderboardScreenNew(
@@ -50,13 +52,31 @@ fun LeaderboardScreenNew(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
 
-    var scope by remember { mutableStateOf(LeaderboardScope.Global) }
-    val allUsers = demoLeaderboardUsers()
-    val users = when (scope) {
-        LeaderboardScope.Global -> allUsers
-        LeaderboardScope.Friends -> allUsers.filterIndexed { index, user ->
-            index % 4 == 0 || user.name.contains("Rahul", ignoreCase = true)
-        }
+    var selectedTest by remember { mutableStateOf("All tests") }
+    var selectedRange by remember { mutableStateOf(TimeRangeFilter.Weekly) }
+    var selectedCity by remember { mutableStateOf("All cities") }
+    var selectedState by remember { mutableStateOf("All states") }
+
+    val allEntries = remember { demoLeaderboardEntries() }
+    val tests = remember(allEntries) { listOf("All tests") + allEntries.map { it.testName }.distinct() }
+    val cities = remember(allEntries) { listOf("All cities") + allEntries.map { it.city }.distinct() }
+    val states = remember(allEntries) { listOf("All states") + allEntries.map { it.state }.distinct() }
+
+    val filteredEntries = remember(allEntries, selectedTest, selectedRange, selectedCity, selectedState) {
+        val today = LocalDate.of(2026, 4, 14)
+        allEntries
+            .asSequence()
+            .filter { selectedTest == "All tests" || it.testName == selectedTest }
+            .filter {
+                when (selectedRange) {
+                    TimeRangeFilter.Weekly -> !it.attemptDate.isBefore(today.minusDays(7))
+                    TimeRangeFilter.Monthly -> !it.attemptDate.isBefore(today.minusDays(30))
+                }
+            }
+            .filter { selectedCity == "All cities" || it.city == selectedCity }
+            .filter { selectedState == "All states" || it.state == selectedState }
+            .sortedByDescending { it.score }
+            .toList()
     }
 
     Scaffold(
@@ -91,32 +111,72 @@ fun LeaderboardScreenNew(
             }
 
             Spacer(Modifier.height(12.dp))
-
+            Text(
+                text = "Test",
+                color = p.textSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(6.dp))
+            FilterChipRow(
+                options = tests,
+                selected = selectedTest,
+                onSelect = { selectedTest = it },
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "Time range",
+                color = p.textSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(6.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 LeaderboardScopeChip(
-                    label = "Global",
-                    selected = scope == LeaderboardScope.Global,
-                    onClick = { scope = LeaderboardScope.Global },
+                    label = "Weekly",
+                    selected = selectedRange == TimeRangeFilter.Weekly,
+                    onClick = { selectedRange = TimeRangeFilter.Weekly },
                     modifier = Modifier.weight(1f),
                 )
                 LeaderboardScopeChip(
-                    label = "Friends",
-                    selected = scope == LeaderboardScope.Friends,
-                    onClick = { scope = LeaderboardScope.Friends },
+                    label = "Monthly",
+                    selected = selectedRange == TimeRangeFilter.Monthly,
+                    onClick = { selectedRange = TimeRangeFilter.Monthly },
                     modifier = Modifier.weight(1f),
                 )
             }
-
             Spacer(Modifier.height(10.dp))
             Text(
-                text = if (scope == LeaderboardScope.Friends) {
-                    "Friends scope is demo-only until you add a backend friend list."
-                } else {
-                    "Showing global demo ranks."
-                },
+                text = "City",
+                color = p.textSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(6.dp))
+            FilterChipRow(
+                options = cities,
+                selected = selectedCity,
+                onSelect = { selectedCity = it },
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "State",
+                color = p.textSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(6.dp))
+            FilterChipRow(
+                options = states,
+                selected = selectedState,
+                onSelect = { selectedState = it },
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "Showing ${filteredEntries.size} users",
                 color = p.textSecondary,
                 fontSize = 12.sp,
             )
@@ -127,11 +187,11 @@ fun LeaderboardScreenNew(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                itemsIndexed(users) { index, user ->
+                itemsIndexed(filteredEntries) { index, user ->
                     LeaderboardRow(
                         rank = index + 1,
                         name = user.name,
-                        scoreText = "${user.score}/500",
+                        scoreText = "${user.score}/500 • ${user.city}",
                     )
                 }
             }
@@ -142,11 +202,15 @@ fun LeaderboardScreenNew(
 private data class LeaderboardUser(
     val name: String,
     val score: Int,
+    val testName: String,
+    val city: String,
+    val state: String,
+    val attemptDate: LocalDate,
 )
 
-private enum class LeaderboardScope {
-    Global,
-    Friends,
+private enum class TimeRangeFilter {
+    Weekly,
+    Monthly,
 }
 
 @Composable
@@ -173,12 +237,45 @@ private fun LeaderboardScopeChip(
     }
 }
 
-private fun demoLeaderboardUsers(): List<LeaderboardUser> {
+@Composable
+private fun FilterChipRow(
+    options: List<String>,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        options.forEach { option ->
+            LeaderboardScopeChip(
+                label = option,
+                selected = selected == option,
+                onClick = { onSelect(option) },
+            )
+        }
+    }
+}
+
+private fun demoLeaderboardEntries(): List<LeaderboardUser> {
     val baseNames = listOf("Rahul Sharma", "Anjali Verma", "Rohan Singh", "Neha Gupta", "Aman Kumar")
+    val tests = listOf("Nursing Mock Test", "Reasoning Sprint", "English Booster")
+    val cities = listOf("Delhi", "Lucknow", "Jaipur", "Bhopal", "Patna")
+    val states = listOf("Delhi", "UP", "Rajasthan", "MP", "Bihar")
+    val today = LocalDate.of(2026, 4, 14)
     return (0 until 100).map { idx ->
         val name = baseNames[idx % baseNames.size] + " #${idx + 1}"
         val score = 500 - (idx * 3).coerceAtLeast(0)
-        LeaderboardUser(name = name, score = score.coerceAtLeast(0))
+        LeaderboardUser(
+            name = name,
+            score = score.coerceAtLeast(0),
+            testName = tests[idx % tests.size],
+            city = cities[idx % cities.size],
+            state = states[idx % states.size],
+            attemptDate = today.minusDays((idx % 35).toLong()),
+        )
     }
 }
 
@@ -225,8 +322,6 @@ private fun LeaderboardRow(
             color = p.textPrimary,
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
 

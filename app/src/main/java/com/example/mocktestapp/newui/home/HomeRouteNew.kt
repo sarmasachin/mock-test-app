@@ -20,6 +20,8 @@ fun HomeRouteNew(
     onOpenProgressReport: () -> Unit,
     onOpenDaily: () -> Unit,
     onOpenMenuQuiz: () -> Unit,
+    onOpenPoll: () -> Unit,
+    onOpenNotifications: () -> Unit,
 ) {
     HomeScreenNew(
         onLogout = onLogout,
@@ -38,6 +40,8 @@ fun HomeRouteNew(
         onOpenProgressReport = onOpenProgressReport,
         onOpenDaily = onOpenDaily,
         onOpenMenuQuiz = onOpenMenuQuiz,
+        onOpenPoll = onOpenPoll,
+        onOpenNotifications = onOpenNotifications,
     )
 }
 

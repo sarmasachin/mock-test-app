@@ -3,12 +3,14 @@ package com.example.mocktestapp.newui.home
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.LocalOverscrollConfiguration
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,6 +36,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,7 +54,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
@@ -58,6 +62,7 @@ import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Logout
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Quiz
@@ -69,7 +74,12 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.WorkOutline
 import androidx.compose.material.icons.rounded.Menu
 import kotlin.math.roundToInt
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.example.mocktestapp.BuildConfig
 import com.example.mocktestapp.data.AppPreferencesRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
@@ -107,13 +117,15 @@ fun HomeScreenNew(
     onOpenProgressReport: () -> Unit,
     onOpenDaily: () -> Unit,
     onOpenMenuQuiz: () -> Unit,
+    onOpenPoll: () -> Unit,
+    onOpenNotifications: () -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
+    val context = LocalContext.current
 
     val scope = rememberCoroutineScope()
     val drawerState = androidx.compose.material3.rememberDrawerState(DrawerValue.Closed)
-    var showShareAppDialog by remember { mutableStateOf(false) }
 
     val categorySections = remember {
         listOf(
@@ -124,6 +136,25 @@ fun HomeScreenNew(
         )
     }
     val homeScroll = rememberScrollState()
+    val visitPrefs = remember(context) {
+        context.getSharedPreferences("home_last_visit", Context.MODE_PRIVATE)
+    }
+    var lastVisitMillis by remember { mutableStateOf(0L) }
+    var showLastVisit by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val now = System.currentTimeMillis()
+        val ts = visitPrefs.getLong("last_home_visit_ts", 0L)
+        lastVisitMillis = ts
+        if (ts <= 0L) {
+            showLastVisit = false
+        } else {
+            showLastVisit = true
+            delay(30_000L)
+            showLastVisit = false
+        }
+        visitPrefs.edit().putLong("last_home_visit_ts", now).apply()
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         ModalNavigationDrawer(
@@ -145,7 +176,18 @@ fun HomeScreenNew(
                     onShareApp = {
                         scope.launch {
                             drawerState.close()
-                            showShareAppDialog = true
+                            val packageName = context.packageName
+                            val storeUrl = "https://play.google.com/store/apps/details?id=$packageName"
+                            val shareMessage = "Check out MockTestApp for practice tests and alerts.\n$storeUrl"
+                            try {
+                                val send = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, shareMessage)
+                                }
+                                context.startActivity(Intent.createChooser(send, "Share MockTestApp"))
+                            } catch (_: ActivityNotFoundException) {
+                                // Ignore if no share app available.
+                            }
                         }
                     },
                     onLogout = onLogout,
@@ -166,6 +208,8 @@ fun HomeScreenNew(
                 TopRow(
                     name = "Rahul",
                     onOpenDrawer = { scope.launch { drawerState.open() } },
+                    onOpenPoll = onOpenPoll,
+                    onOpenNotifications = onOpenNotifications,
                 )
 
                 Column(
@@ -181,6 +225,22 @@ fun HomeScreenNew(
 
                     Spacer(Modifier.height(14.dp))
                     StatsRow()
+                    if (showLastVisit && lastVisitMillis > 0L) {
+                        val formatter = remember { DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a") }
+                        val lastVisitText = remember(lastVisitMillis) {
+                            val at = Instant.ofEpochMilli(lastVisitMillis).atZone(ZoneId.systemDefault())
+                            formatter.format(at)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "Last visit: $lastVisitText",
+                            color = p.textSecondary,
+                            fontSize = 12.sp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp),
+                        )
+                    }
 
                     Spacer(Modifier.height(18.dp))
                     Divider(color = p.systemBlue.copy(alpha = 0.25f))
@@ -221,9 +281,6 @@ fun HomeScreenNew(
         }
         }
 
-        if (showShareAppDialog) {
-            ShareAppDialog(onDismiss = { showShareAppDialog = false })
-        }
     }
 }
 
@@ -267,8 +324,6 @@ private fun ShareAppDialog(
                     color = p.accent,
                     fontSize = 12.sp,
                     lineHeight = 16.sp,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
         },
@@ -304,6 +359,8 @@ private fun ShareAppDialog(
 private fun TopRow(
     name: String,
     onOpenDrawer: () -> Unit,
+    onOpenPoll: () -> Unit,
+    onOpenNotifications: () -> Unit,
 ) {
     val p = mockTestPalette()
     Row(
@@ -334,11 +391,26 @@ private fun TopRow(
             )
         }
 
-        // Right: spacer same size as icon to keep text visually centered
-        Box(
-            modifier = Modifier
-                .size(48.dp),
-        )
+        // Right: compact action area (poll + notification) sized to avoid title overlap.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            IconButton(onClick = onOpenPoll) {
+                Icon(
+                    imageVector = Icons.Outlined.PieChart,
+                    contentDescription = "Poll",
+                    tint = p.textPrimary,
+                )
+            }
+            IconButton(onClick = onOpenNotifications) {
+                Icon(
+                    imageVector = Icons.Outlined.Notifications,
+                    contentDescription = "Notifications",
+                    tint = p.textPrimary,
+                )
+            }
+        }
     }
 }
 
@@ -373,8 +445,6 @@ private fun StatCard(
                 text = title,
                 color = p.textSecondary,
                 fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(10.dp))
             Text(
@@ -466,11 +536,12 @@ private fun CategoryChip(
     val shape = RoundedCornerShape(16.dp)
     Box(
         modifier = modifier
-            .height(46.dp)
+            .defaultMinSize(minHeight = 46.dp)
             .clip(shape)
             .background(p.surface)
             .border(1.dp, p.border.copy(alpha = 0.18f), shape)
-            .clickable(onClick = onClick),
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -478,8 +549,7 @@ private fun CategoryChip(
             color = p.textPrimary,
             fontWeight = FontWeight.Bold,
             fontSize = 13.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
         )
     }
 }
@@ -493,12 +563,12 @@ private fun SeeAllChip(
     val shape = RoundedCornerShape(16.dp)
     Box(
         modifier = modifier
-            .height(46.dp)
+            .defaultMinSize(minHeight = 46.dp)
             .clip(shape)
             .background(p.surface)
             .border(1.dp, p.border.copy(alpha = 0.18f), shape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp),
+            .padding(horizontal = 8.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -506,8 +576,7 @@ private fun SeeAllChip(
             color = p.accent,
             fontWeight = FontWeight.Bold,
             fontSize = 13.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
         )
     }
 }
@@ -523,13 +592,13 @@ private fun ActionsGrid(
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
             ActionCard(
                 title = "Start test",
-                subtitle = "15 min",
+                subtitle = "",
                 onClick = onStartTest,
                 modifier = Modifier.weight(1f),
             )
             ActionCard(
                 title = "Leaderboard",
-                subtitle = "Top 100",
+                subtitle = "",
                 onClick = onLeaderboard,
                 modifier = Modifier.weight(1f),
             )
@@ -537,13 +606,13 @@ private fun ActionsGrid(
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
             ActionCard(
                 title = "Results",
-                subtitle = "History",
+                subtitle = "",
                 onClick = onResults,
                 modifier = Modifier.weight(1f),
             )
             ActionCard(
                 title = "Tool",
-                subtitle = "Documents",
+                subtitle = "",
                 onClick = onBookmarks,
                 modifier = Modifier.weight(1f),
             )
@@ -589,12 +658,14 @@ private fun ActionCard(
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
             )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = subtitle,
-                color = p.textSecondary,
-                fontSize = 12.sp,
-            )
+            if (subtitle.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = subtitle,
+                    color = p.textSecondary,
+                    fontSize = 12.sp,
+                )
+            }
         }
     }
 }
@@ -619,6 +690,7 @@ private fun openPlayStoreForRating(context: Context) {
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun AppDrawer(
     drawerState: DrawerState,
     onOpenProfile: () -> Unit,
@@ -642,90 +714,110 @@ private fun AppDrawer(
     val drawerWidthDp = (configuration.screenWidthDp * 0.82f).roundToInt().coerceIn(268, 300).dp
     val drawerShape = RoundedCornerShape(topEnd = 20.dp, bottomEnd = 20.dp)
 
-    ModalDrawerSheet(
-        drawerContainerColor = sheetBg,
-        drawerTonalElevation = 6.dp,
-        windowInsets = WindowInsets(0, 0, 0, 0),
-        modifier = Modifier
-            .fillMaxHeight()
-            .width(drawerWidthDp)
-            .clip(drawerShape)
-            .border(1.dp, border, drawerShape),
-    ) {
-        Spacer(Modifier.height(4.dp))
-        DrawerHeader()
-        Spacer(Modifier.height(12.dp))
+    CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
+        ModalDrawerSheet(
+            drawerContainerColor = sheetBg,
+            drawerTonalElevation = 6.dp,
+            windowInsets = WindowInsets(0, 0, 0, 0),
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(drawerWidthDp)
+                .verticalScroll(rememberScrollState())
+                .clip(drawerShape)
+                .border(1.dp, border, drawerShape),
+        ) {
+            Spacer(Modifier.height(4.dp))
+            DrawerHeader()
+            Spacer(Modifier.height(12.dp))
 
         DrawerItem(
             icon = Icons.Outlined.Person,
             label = "Profile",
             onClick = {
-                scope.launch { drawerState.close() }
-                onOpenProfile()
+                scope.launch {
+                    drawerState.close()
+                    onOpenProfile()
+                }
             },
         )
         DrawerItem(
             icon = Icons.Outlined.History,
             label = "History",
             onClick = {
-                scope.launch { drawerState.close() }
-                onOpenHistory()
+                scope.launch {
+                    drawerState.close()
+                    onOpenHistory()
+                }
             },
         )
         DrawerItem(
             icon = Icons.Outlined.PieChart,
             label = "Activity",
             onClick = {
-                scope.launch { drawerState.close() }
-                onOpenActivity()
+                scope.launch {
+                    drawerState.close()
+                    onOpenActivity()
+                }
             },
         )
         DrawerItem(
             icon = Icons.Outlined.BarChart,
             label = "Progress report",
             onClick = {
-                scope.launch { drawerState.close() }
-                onOpenProgressReport()
+                scope.launch {
+                    drawerState.close()
+                    onOpenProgressReport()
+                }
             },
         )
         DrawerItem(
             icon = Icons.Outlined.WorkOutline,
             label = "Job alert",
             onClick = {
-                scope.launch { drawerState.close() }
-                onOpenJobAlert()
+                scope.launch {
+                    drawerState.close()
+                    onOpenJobAlert()
+                }
             },
         )
         DrawerItem(
             icon = Icons.Outlined.School,
             label = "Exam alert",
             onClick = {
-                scope.launch { drawerState.close() }
-                onOpenExamAlert()
+                scope.launch {
+                    drawerState.close()
+                    onOpenExamAlert()
+                }
             },
         )
         DrawerItem(
             icon = Icons.Outlined.Article,
             label = "News",
             onClick = {
-                scope.launch { drawerState.close() }
-                onOpenNews()
+                scope.launch {
+                    drawerState.close()
+                    onOpenNews()
+                }
             },
         )
         DrawerItem(
             icon = Icons.Outlined.Today,
             label = "Daily",
             onClick = {
-                scope.launch { drawerState.close() }
-                onOpenDaily()
+                scope.launch {
+                    drawerState.close()
+                    onOpenDaily()
+                }
             },
         )
         DrawerItem(
             icon = Icons.Outlined.Quiz,
             label = "Quiz",
             onClick = {
-                scope.launch { drawerState.close() }
-                onOpenMenuQuiz()
+                scope.launch {
+                    drawerState.close()
+                    onOpenMenuQuiz()
+                }
             },
         )
         DrawerItem(
@@ -753,11 +845,23 @@ private fun AppDrawer(
             label = "Logout",
             isDanger = true,
             onClick = {
-                scope.launch { drawerState.close() }
-                onLogout()
+                scope.launch {
+                    drawerState.close()
+                    onLogout()
+                }
             },
         )
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "App version ${BuildConfig.VERSION_NAME}",
+            color = p.textSecondary,
+            fontSize = 12.sp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+        )
+            Spacer(Modifier.height(18.dp))
+        }
     }
 }
 
@@ -796,52 +900,38 @@ private fun DrawerHeader() {
             color = p.textPrimary,
             fontWeight = FontWeight.ExtraBold,
             fontSize = 19.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.height(6.dp))
         Text(
             text = emailShown,
             color = if (profile.emailLine.isNotBlank()) p.textSecondary else p.textSecondary.copy(alpha = 0.55f),
             fontSize = 13.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.height(10.dp))
-        Text(
-            text = "Unique code",
-            color = p.textSecondary.copy(alpha = 0.85f),
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = profile.userIdFormatted ?: "······",
-                color = if (profile.userIdFormatted != null) p.textPrimary else p.textSecondary.copy(alpha = 0.5f),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.2.sp,
+                text = "User Id - ${profile.userIdFormatted ?: "00000000"}",
+                color = if (profile.userIdFormatted != null) p.textPrimary else p.textSecondary.copy(alpha = 0.55f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.width(4.dp))
             IconButton(
                 onClick = {
-                    profile.userIdFormatted?.let { id ->
-                        clipboard.setText(AnnotatedString(id))
-                        Toast.makeText(context, "Unique code copied", Toast.LENGTH_SHORT).show()
-                    }
+                    val userId = profile.userIdFormatted ?: "00000000"
+                    clipboard.setText(AnnotatedString(userId))
+                    Toast.makeText(context, "User ID copied", Toast.LENGTH_SHORT).show()
                 },
-                enabled = profile.userIdFormatted != null,
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(28.dp),
             ) {
                 Icon(
                     imageVector = Icons.Outlined.ContentCopy,
-                    contentDescription = "Copy unique code",
-                    tint = if (profile.userIdFormatted != null) p.accent else p.textSecondary.copy(alpha = 0.35f),
-                    modifier = Modifier.size(20.dp),
+                    contentDescription = "Copy user id",
+                    tint = p.textSecondary,
+                    modifier = Modifier.size(16.dp),
                 )
             }
         }

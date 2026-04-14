@@ -60,6 +60,7 @@ import com.example.mocktestapp.newui.quiz.QuizScreenNew
 import com.example.mocktestapp.newui.result.AnswerKeyScreenNew
 import com.example.mocktestapp.newui.result.ResultScreenNew
 import com.example.mocktestapp.newui.result.ReviewScreenNew
+import com.example.mocktestapp.newui.result.ReviewSolutionScreenNew
 import com.example.mocktestapp.newui.tests.TestsScreenNew
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 
@@ -92,6 +93,13 @@ private fun NavController.goToHomeTab(): Boolean {
         navigateMainTab(MainTabRoutes.Home)
     }
     return true
+}
+
+private fun NavController.popBackOrHome() {
+    val popped = popBackStack()
+    if (!popped) {
+        goToHomeTab()
+    }
 }
 
 /**
@@ -132,43 +140,53 @@ fun MainBottomNavHost(
         bottomBar = {
             val navBackStackEntry by mainNavController.currentBackStackEntryAsState()
             val currentDestination = navBackStackEntry?.destination
-            NavigationBar(
-                containerColor = p.surface,
-                tonalElevation = 10.dp,
-            ) {
-                tabs.forEach { tab ->
-                    val selected = isMainBottomTabSelected(tab.route, currentDestination)
-                    NavigationBarItem(
-                        selected = selected,
-                        onClick = {
-                            if (tab.route == MainTabRoutes.Home) {
-                                mainNavController.goToHomeTab()
-                            } else {
-                                mainNavController.navigateMainTab(tab.route)
-                            }
-                        },
-                        icon = {
-                            Icon(
-                                imageVector = tab.icon,
-                                contentDescription = tab.label,
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = tab.label,
-                                maxLines = 1,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                            )
-                        },
-                        alwaysShowLabel = true,
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = Color.Black,
-                            selectedTextColor = Color.Black,
-                            indicatorColor = Color.Transparent,
-                            unselectedIconColor = p.textSecondary,
-                            unselectedTextColor = p.textSecondary,
-                        ),
-                    )
+            val showBottomBar = currentDestination
+                ?.hierarchy
+                ?.any { d ->
+                    d.route == MainTabRoutes.Home ||
+                        d.route == MainTabRoutes.Tests ||
+                        d.route == MainTabRoutes.News ||
+                        d.route == MainTabRoutes.Profile
+                } == true
+            if (showBottomBar) {
+                NavigationBar(
+                    containerColor = p.surface,
+                    tonalElevation = 10.dp,
+                ) {
+                    tabs.forEach { tab ->
+                        val selected = isMainBottomTabSelected(tab.route, currentDestination)
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = {
+                                if (tab.route == MainTabRoutes.Home) {
+                                    mainNavController.goToHomeTab()
+                                } else {
+                                    mainNavController.navigateMainTab(tab.route)
+                                }
+                            },
+                            icon = {
+                                Icon(
+                                    imageVector = tab.icon,
+                                    contentDescription = tab.label,
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = tab.label,
+                                    maxLines = 1,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                )
+                            },
+                            alwaysShowLabel = true,
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = Color.Black,
+                                selectedTextColor = Color.Black,
+                                indicatorColor = Color.Transparent,
+                                unselectedIconColor = p.textSecondary,
+                                unselectedTextColor = p.textSecondary,
+                            ),
+                        )
+                    }
                 }
             }
         },
@@ -214,6 +232,8 @@ fun MainBottomNavHost(
                     onOpenProgressReport = { mainNavController.navigate(RoutesNew.PROGRESS_REPORT) },
                     onOpenDaily = { mainNavController.navigate(RoutesNew.DAILY) },
                     onOpenMenuQuiz = { mainNavController.navigate(RoutesNew.MENU_QUIZ) },
+                    onOpenPoll = { mainNavController.navigate(RoutesNew.POLL) },
+                    onOpenNotifications = { mainNavController.navigate(RoutesNew.NOTIFICATIONS) },
                 )
             }
             composable(MainTabRoutes.Tests) {
@@ -252,7 +272,7 @@ fun MainBottomNavHost(
                 val name = entry.arguments?.getString("name").orEmpty()
                 CategoryRouteNew(
                     category = name.ifBlank { "Category" },
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                     onOpenSubcategory = { sub ->
                         mainNavController.navigate("${RoutesNew.SUBCATEGORY}/$sub")
                     },
@@ -266,7 +286,7 @@ fun MainBottomNavHost(
                 val name = entry.arguments?.getString("name").orEmpty()
                 SubcategoryDetailScreenNew(
                     title = name.ifBlank { "Topic" },
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                     onApplyForTest = {
                         mainNavController.navigate("${RoutesNew.APPLY}/${name.ifBlank { "Test" }}")
                     },
@@ -281,7 +301,7 @@ fun MainBottomNavHost(
                 val name = entry.arguments?.getString("name").orEmpty()
                 TestsScreenNew(
                     subcategory = name.ifBlank { "Topic" },
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                     onOpenTest = { test ->
                         mainNavController.navigate("${RoutesNew.INSTRUCTIONS}/$test")
                     },
@@ -295,7 +315,7 @@ fun MainBottomNavHost(
                 val name = entry.arguments?.getString("name").orEmpty()
                 InstructionsScreenNew(
                     testName = name.ifBlank { "Test" },
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                     onStartTest = { mainNavController.navigate("${RoutesNew.QUIZ}/$name") },
                 )
             }
@@ -307,18 +327,44 @@ fun MainBottomNavHost(
                 val name = entry.arguments?.getString("name").orEmpty()
                 QuizScreenNew(
                     testName = name.ifBlank { "bsc nursing moc test" },
-                    onBack = { mainNavController.popBackStack() },
-                    onSubmit = { mainNavController.navigate("${RoutesNew.RESULT}/$name") },
+                    onBack = { mainNavController.popBackOrHome() },
+                    onSubmit = { answered, correct, wrong ->
+                        mainNavController.navigate(
+                            "${RoutesNew.RESULT}/$name?answered=$answered&correct=$correct&wrong=$wrong",
+                        )
+                    },
                 )
             }
 
             composable(
-                route = "${RoutesNew.RESULT}/{name}",
-                arguments = listOf(navArgument("name") { type = NavType.StringType }),
+                route = "${RoutesNew.RESULT}/{name}?answered={answered}&correct={correct}&wrong={wrong}",
+                arguments = listOf(
+                    navArgument("name") { type = NavType.StringType },
+                    navArgument("answered") {
+                        type = NavType.IntType
+                        defaultValue = 3
+                    },
+                    navArgument("correct") {
+                        type = NavType.IntType
+                        defaultValue = 0
+                    },
+                    navArgument("wrong") {
+                        type = NavType.IntType
+                        defaultValue = 3
+                    },
+                ),
             ) { entry ->
                 val name = entry.arguments?.getString("name").orEmpty()
+                val answered = entry.arguments?.getInt("answered") ?: 3
+                val correct = entry.arguments?.getInt("correct") ?: 0
+                val wrong = entry.arguments?.getInt("wrong") ?: 3
+                val total = 10
                 ResultScreenNew(
                     testName = name.ifBlank { "Arithmetic Sprint" },
+                    scoreText = "$correct / $total",
+                    answered = answered,
+                    correct = correct,
+                    wrong = wrong,
                     onAnswerKey = { mainNavController.navigate("${RoutesNew.ANSWER_KEY}/$name") },
                     onReview = { mainNavController.navigate("${RoutesNew.REVIEW}/$name") },
                 )
@@ -331,7 +377,7 @@ fun MainBottomNavHost(
                 val name = entry.arguments?.getString("name").orEmpty()
                 AnswerKeyScreenNew(
                     testName = name.ifBlank { "Test" },
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                 )
             }
 
@@ -342,7 +388,31 @@ fun MainBottomNavHost(
                 val name = entry.arguments?.getString("name").orEmpty()
                 ReviewScreenNew(
                     testName = name.ifBlank { "Test" },
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
+                    onOpenSolution = { qNo ->
+                        mainNavController.navigate("${RoutesNew.REVIEW_SOLUTION}/$name/$qNo")
+                    },
+                )
+            }
+
+            composable(
+                route = "${RoutesNew.REVIEW_SOLUTION}/{name}/{qNo}",
+                arguments = listOf(
+                    navArgument("name") { type = NavType.StringType },
+                    navArgument("qNo") { type = NavType.IntType },
+                ),
+            ) { entry ->
+                val name = entry.arguments?.getString("name").orEmpty()
+                val qNo = entry.arguments?.getInt("qNo") ?: 1
+                ReviewSolutionScreenNew(
+                    testName = name.ifBlank { "Test" },
+                    questionNo = qNo,
+                    onBack = { mainNavController.popBackOrHome() },
+                    onOpenQuestion = { nextQ ->
+                        if (nextQ != qNo) {
+                            mainNavController.navigate("${RoutesNew.REVIEW_SOLUTION}/$name/$nextQ")
+                        }
+                    },
                 )
             }
 
@@ -354,26 +424,26 @@ fun MainBottomNavHost(
 
             composable(RoutesNew.HISTORY) {
                 HistoryScreenNew(
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                     title = "History",
                 )
             }
 
             composable(RoutesNew.RESULTS_HISTORY) {
                 ResultsHistoryScreenNew(
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                 )
             }
 
             composable(RoutesNew.BOOKMARKS) {
                 BookmarksScreenNew(
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                 )
             }
 
             composable(RoutesNew.JOB_ALERT) {
                 JobAlertScreenNew(
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                     onOpenListing = { id ->
                         mainNavController.navigate("${RoutesNew.JOB_ALERT_DETAIL}/$id")
                     },
@@ -387,14 +457,14 @@ fun MainBottomNavHost(
                 val id = entry.arguments?.getString("id").orEmpty()
                 NewsDetailRouteNew(
                     articleId = id,
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                     imageSeedPrefix = JobAlertFeedImageSeedPrefix,
                 )
             }
 
             composable(RoutesNew.EXAM_ALERT) {
                 ExamAlertScreenNew(
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                     onOpenListing = { id ->
                         mainNavController.navigate("${RoutesNew.EXAM_ALERT_DETAIL}/$id")
                     },
@@ -408,7 +478,7 @@ fun MainBottomNavHost(
                 val id = entry.arguments?.getString("id").orEmpty()
                 NewsDetailRouteNew(
                     articleId = id,
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                     imageSeedPrefix = ExamAlertFeedImageSeedPrefix,
                 )
             }
@@ -420,13 +490,13 @@ fun MainBottomNavHost(
                 val id = entry.arguments?.getString("newsId").orEmpty()
                 NewsDetailRouteNew(
                     articleId = id,
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                 )
             }
 
             composable(RoutesNew.PROGRESS_REPORT) {
                 ProgressReportScreenNew(
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                     onStartPractice = {
                         mainNavController.navigate("${RoutesNew.INSTRUCTIONS}/bsc nursing moc test") {
                             launchSingleTop = true
@@ -437,25 +507,25 @@ fun MainBottomNavHost(
 
             composable(RoutesNew.DAILY) {
                 DailyDigestScreenNew(
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                 )
             }
 
             composable(RoutesNew.PRIVACY) {
                 PrivacyPolicyScreenNew(
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                 )
             }
 
             composable(RoutesNew.TERMS) {
                 TermsOfServiceScreenNew(
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                 )
             }
 
             composable(RoutesNew.ACHIEVEMENTS) {
                 AchievementsScreenNew(
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                 )
             }
 
@@ -463,7 +533,7 @@ fun MainBottomNavHost(
                 DrawerMenuFeatureScreenNew(
                     title = "Quiz",
                     description = "Quick practice and topic-wise quizzes. Use the button below to open the existing quiz flow (demo test).",
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                     primaryButtonLabel = "Start practice quiz",
                     onPrimaryButtonClick = {
                         mainNavController.navigate("${RoutesNew.INSTRUCTIONS}/Daily practice quiz") {
@@ -473,9 +543,29 @@ fun MainBottomNavHost(
                 )
             }
 
+            composable(RoutesNew.POLL) {
+                DrawerMenuFeatureScreenNew(
+                    title = "Poll",
+                    description = "Vote in the latest student poll and see upcoming poll topics.",
+                    onBack = { mainNavController.popBackOrHome() },
+                    primaryButtonLabel = "Coming soon",
+                    onPrimaryButtonClick = { },
+                )
+            }
+
+            composable(RoutesNew.NOTIFICATIONS) {
+                DrawerMenuFeatureScreenNew(
+                    title = "Notifications",
+                    description = "Latest app notifications will appear here.",
+                    onBack = { mainNavController.popBackOrHome() },
+                    primaryButtonLabel = "Coming soon",
+                    onPrimaryButtonClick = { },
+                )
+            }
+
             composable(RoutesNew.SEE_ALL_CATEGORIES) {
                 SeeAllCategoriesScreenNew(
-                    onBack = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
                     onOpenCategory = { cat ->
                         mainNavController.navigate("${RoutesNew.CATEGORY}/$cat")
                     },
@@ -489,8 +579,8 @@ fun MainBottomNavHost(
                 val title = entry.arguments?.getString("title").orEmpty()
                 ApplyForTestScreenNew(
                     title = title,
-                    onBack = { mainNavController.popBackStack() },
-                    onSubmit = { mainNavController.popBackStack() },
+                    onBack = { mainNavController.popBackOrHome() },
+                    onSubmit = { mainNavController.popBackOrHome() },
                 )
             }
         }

@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
     CONSTRAINT users_email_normalized_unique UNIQUE (email_normalized),
     CONSTRAINT users_six_digit_public_id_unique UNIQUE (six_digit_public_id),
     CONSTRAINT users_six_digit_public_id_range CHECK (
-        six_digit_public_id >= 100000 AND six_digit_public_id <= 999999
+        six_digit_public_id >= 100000 AND six_digit_public_id <= 99999999
     ),
     CONSTRAINT users_phone_digits CHECK (phone = '' OR phone ~ '^[0-9]{10}$')
 );

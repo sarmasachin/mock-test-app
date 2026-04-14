@@ -55,6 +55,10 @@ import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.launch
 
+/** QA user from `database/postgres/005_seed_qa_login.sql` — used by debug-only quick login. */
+private const val QA_DEBUG_PHONE = "9817585270"
+private const val QA_DEBUG_PASSWORD = "123456"
+
 private tailrec fun Context.findComponentActivity(): ComponentActivity? =
     when (this) {
         is ComponentActivity -> this
@@ -294,6 +298,87 @@ private fun LoginForm(
         text = "Continue with Google",
         onClick = onGoogleSignIn,
     )
+
+    Spacer(Modifier.height(12.dp))
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "Explore app inside (no login)",
+            color = p.accent,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            textDecoration = TextDecoration.Underline,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .padding(vertical = 6.dp, horizontal = 8.dp)
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                ) {
+                    scope.launch {
+                        AuthRepository.prepareGuestPreviewSession()
+                        onAuthSuccess()
+                    }
+                },
+        )
+        Text(
+            text = "No API token — some actions may fail",
+            color = p.textSecondary,
+            fontSize = 10.sp,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+    }
+    if (BuildConfig.DEBUG) {
+        Spacer(Modifier.height(12.dp))
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = "Quick test login",
+                color = p.accent,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                textDecoration = TextDecoration.Underline,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .padding(vertical = 6.dp, horizontal = 8.dp)
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    ) {
+                        identifier = QA_DEBUG_PHONE
+                        password = QA_DEBUG_PASSWORD
+                        identifierError = null
+                        passwordError = null
+                        scope.launch {
+                            AuthRepository.login(QA_DEBUG_PHONE, QA_DEBUG_PASSWORD)
+                                .onSuccess { user ->
+                                    if (user.needsProfileCompletion()) {
+                                        onProfileIncomplete()
+                                    } else {
+                                        onAuthSuccess()
+                                    }
+                                }
+                                .onFailure { e ->
+                                    onError(
+                                        e.message
+                                            ?: "Login failed — run API + DB seed, and set mocktest.apiBaseUrl for your phone.",
+                                    )
+                                }
+                        }
+                    },
+            )
+            Text(
+                text = "Debug only · same account as DB seed 005",
+                color = p.textSecondary,
+                fontSize = 10.sp,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+    }
     Spacer(Modifier.height(10.dp))
 
     Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
@@ -485,6 +570,39 @@ private fun SignupForm(
         text = "Continue with Google",
         onClick = onGoogleSignIn,
     )
+    if (BuildConfig.DEBUG) {
+        Spacer(Modifier.height(12.dp))
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = "Explore app inside (no login)",
+                color = p.accent,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                textDecoration = TextDecoration.Underline,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .padding(vertical = 6.dp, horizontal = 8.dp)
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    ) {
+                        scope.launch {
+                            AuthRepository.prepareGuestPreviewSession()
+                            onSuccess()
+                        }
+                    },
+            )
+            Text(
+                text = "Debug only · no API token",
+                color = p.textSecondary,
+                fontSize = 10.sp,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+    }
     Spacer(Modifier.height(10.dp))
 
     Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {

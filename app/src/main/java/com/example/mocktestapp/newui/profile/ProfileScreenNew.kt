@@ -31,7 +31,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mocktestapp.data.AppPreferencesRepository
@@ -46,7 +45,12 @@ fun ProfileScreenNew(
     onEditUsername: () -> Unit,
     onEditEmail: () -> Unit,
     onEditMobile: () -> Unit,
+    onEditGender: () -> Unit,
     onEditPassword: () -> Unit,
+    onOpenNotifications: () -> Unit,
+    onOpenHelpSupport: () -> Unit,
+    onOpenFeedback: () -> Unit,
+    onOpenReportIssue: () -> Unit,
     onOpenAchievements: () -> Unit,
     onOpenPrivacy: () -> Unit,
     onOpenTerms: () -> Unit,
@@ -62,7 +66,7 @@ fun ProfileScreenNew(
     val emailOk by AppPreferencesRepository.emailVerified.collectAsState(initial = false)
     val phoneOk by AppPreferencesRepository.phoneVerified.collectAsState(initial = false)
     val profile by AppPreferencesRepository.editableProfile.collectAsState(
-        initial = AppPreferencesRepository.EditableProfileState("", "", ""),
+        initial = AppPreferencesRepository.EditableProfileState("", "", "", ""),
     )
 
     Column(
@@ -135,6 +139,12 @@ fun ProfileScreenNew(
                 )
                 DividerLine()
                 ProfileNavRow(
+                    title = "Gender",
+                    subtitle = profile.gender.ifBlank { "Tap to set" },
+                    onClick = onEditGender,
+                )
+                DividerLine()
+                ProfileNavRow(
                     title = "Password",
                     subtitle = "Change password (current + new + confirm)",
                     onClick = onEditPassword,
@@ -163,6 +173,30 @@ fun ProfileScreenNew(
                     title = "Phone verification",
                     subtitle = if (phoneOk) "Verified (demo)" else "Not verified — tap to simulate send",
                     onClick = onSendPhoneVerification,
+                )
+                DividerLine()
+                ProfileNavRow(
+                    title = "Notifications",
+                    subtitle = "Notification settings (on/off)",
+                    onClick = onOpenNotifications,
+                )
+                DividerLine()
+                ProfileNavRow(
+                    title = "Help & support",
+                    subtitle = "Need help? Open support page",
+                    onClick = onOpenHelpSupport,
+                )
+                DividerLine()
+                ProfileNavRow(
+                    title = "Feedback",
+                    subtitle = "Share your app feedback",
+                    onClick = onOpenFeedback,
+                )
+                DividerLine()
+                ProfileNavRow(
+                    title = "Report issue",
+                    subtitle = "Report a bug or problem",
+                    onClick = onOpenReportIssue,
                 )
                 DividerLine()
                 ProfileNavRow(title = "Achievements", subtitle = "Streaks, badges, full marks", onClick = onOpenAchievements)
@@ -248,8 +282,6 @@ private fun ProfileNavRow(
                 color = subColor,
                 fontSize = 13.sp,
                 lineHeight = 17.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
             )
         }
         Icon(

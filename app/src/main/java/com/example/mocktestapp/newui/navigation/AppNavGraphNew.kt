@@ -35,6 +35,7 @@ internal object RoutesNew {
     const val RESULT = "result"
     const val ANSWER_KEY = "answer_key"
     const val REVIEW = "review"
+    const val REVIEW_SOLUTION = "review_solution"
     const val LEADERBOARD = "leaderboard"
     const val HISTORY = "history"
     const val RESULTS_HISTORY = "results_history"
@@ -54,7 +55,11 @@ internal object RoutesNew {
     const val TERMS = "terms"
     const val ACHIEVEMENTS = "achievements"
     const val PROGRESS_REPORT = "progress_report"
+    const val POLL = "poll"
+    const val NOTIFICATIONS = "notifications"
 }
+
+private const val DEV_AUTH_BYPASS = false
 
 @Composable
 fun AppNavGraphNew() {
@@ -97,6 +102,15 @@ fun AppNavGraphNew() {
                 CircularProgressIndicator()
             }
             LaunchedEffect(Unit) {
+                if (DEV_AUTH_BYPASS) {
+                    Log.w("AppNav", "DEV_AUTH_BYPASS: opening home without login (debug only).")
+                    AuthRepository.prepareGuestPreviewSession()
+                    navController.navigate(RoutesNew.HOME) {
+                        popUpTo(RoutesNew.BOOTSTRAP) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                    return@LaunchedEffect
+                }
                 when (AuthRepository.restoreSession()) {
                     RestoreSessionStatus.Ready -> {
                         navController.navigate(RoutesNew.HOME) {

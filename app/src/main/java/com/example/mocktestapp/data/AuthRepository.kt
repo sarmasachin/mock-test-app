@@ -65,6 +65,15 @@ object AuthRepository {
         AuthTokenStore.clear()
     }
 
+    /**
+     * Allows navigating into the app without a server session.
+     * Keeps tokens empty; features requiring auth will behave as logged out.
+     */
+    suspend fun prepareGuestPreviewSession() {
+        clearSession()
+        AppPreferencesRepository.clearAuthSessionPrefs()
+    }
+
     suspend fun restoreSession(): RestoreSessionStatus = withContext(Dispatchers.IO) {
         loadStoredTokens()
         if (accessTokenMem.isNullOrBlank()) {

@@ -51,14 +51,17 @@ object AppPreferencesRepository {
     private val keyProfileContact = stringPreferencesKey("profile_contact")
     private val keyProfileEmail = stringPreferencesKey("profile_email")
     private val keyProfileMobile = stringPreferencesKey("profile_mobile")
+    private val keyProfileGender = stringPreferencesKey("profile_gender")
+    private val keyProfileNotificationsEnabled = intPreferencesKey("profile_notifications_enabled")
     private val keyProfilePassword = stringPreferencesKey("profile_password")
-    /** Six-digit numeric id (100000–999999), 0 = not assigned yet. */
+    /** Eight-digit numeric id (10000000–99999999), 0 = not assigned yet. */
     private val keyProfileUserCode = intPreferencesKey("profile_user_code")
 
     data class EditableProfileState(
         val displayName: String,
         val email: String,
         val mobile: String,
+        val gender: String,
     )
 
     val editableProfile: Flow<EditableProfileState>
@@ -75,15 +78,16 @@ object AppPreferencesRepository {
                 displayName = prefs[keyProfileDisplayName].orEmpty(),
                 email = email,
                 mobile = mobile,
+                gender = prefs[keyProfileGender].orEmpty(),
             )
-        } ?: flowOf(EditableProfileState("", "", ""))
+        } ?: flowOf(EditableProfileState("", "", "", ""))
 
     data class DrawerUserProfile(
         /** Username from signup / profile (shown first in drawer). */
         val displayName: String,
         /** Email line under name (Gmail etc.); drawer does not mix mobile here. */
         val emailLine: String,
-        /** Formatted six digits from server or local, or null until assigned. */
+        /** Formatted eight digits from server or local, or null until assigned. */
         val userIdFormatted: String?,
     )
 
@@ -91,7 +95,7 @@ object AppPreferencesRepository {
         get() = storeOrNull()?.data?.map { prefs ->
             val code = prefs[keyProfileUserCode] ?: 0
             val formatted =
-                if (code in 100_000..999_999) String.format(Locale.US, "%06d", code) else null
+                if (code in 10_000_000..99_999_999) String.format(Locale.US, "%08d", code) else null
             val legacyContact = prefs[keyProfileContact].orEmpty()
             val email = prefs[keyProfileEmail].orEmpty().ifBlank {
                 if (legacyContact.contains('@')) legacyContact.trim() else ""
@@ -107,7 +111,7 @@ object AppPreferencesRepository {
         appContext = context.applicationContext
     }
 
-    private fun randomSixDigitUserCode(): Int = Random.nextInt(100_000, 1_000_000)
+    private fun randomEightDigitUserCode(): Int = Random.nextInt(10_000_000, 100_000_000)
 
     private fun deriveDisplayNameFromLogin(identifier: String): String {
         val trimmed = identifier.trim()
@@ -135,11 +139,12 @@ object AppPreferencesRepository {
                 prefs[keyProfileDisplayName] = username.trim()
                 prefs[keyProfileEmail] = email.trim()
                 prefs[keyProfileMobile] = mobile.trim()
+                prefs[keyProfileGender] = prefs[keyProfileGender].orEmpty()
                 prefs[keyProfileContact] = email.trim()
                 prefs[keyProfilePassword] = password
                 val existing = prefs[keyProfileUserCode] ?: 0
-                if (existing !in 100_000..999_999) {
-                    prefs[keyProfileUserCode] = randomSixDigitUserCode()
+                if (existing !in 10_000_000..99_999_999) {
+                    prefs[keyProfileUserCode] = randomEightDigitUserCode()
                 }
             }
         }.onFailure { Log.e(TAG, "applySignupProfile failed", it) }
@@ -160,10 +165,11 @@ object AppPreferencesRepository {
                 } else {
                     prefs[keyProfileMobile] = id.filter(Char::isDigit).take(10)
                 }
+                prefs[keyProfileGender] = prefs[keyProfileGender].orEmpty()
                 prefs[keyProfilePassword] = password
                 val existing = prefs[keyProfileUserCode] ?: 0
-                if (existing !in 100_000..999_999) {
-                    prefs[keyProfileUserCode] = randomSixDigitUserCode()
+                if (existing !in 10_000_000..99_999_999) {
+                    prefs[keyProfileUserCode] = randomEightDigitUserCode()
                 }
             }
         }.onFailure { Log.e(TAG, "applyLoginProfile failed", it) }
@@ -186,8 +192,9 @@ object AppPreferencesRepository {
                 prefs[keyProfileDisplayName] = displayName.trim()
                 prefs[keyProfileEmail] = email.trim()
                 prefs[keyProfileMobile] = mobile.trim().filter(Char::isDigit).take(10)
+                prefs[keyProfileGender] = prefs[keyProfileGender].orEmpty()
                 prefs[keyProfileContact] = email.trim()
-                if (sixDigitPublicId in 100_000..999_999) {
+                if (sixDigitPublicId in 10_000_000..99_999_999) {
                     prefs[keyProfileUserCode] = sixDigitPublicId
                 }
                 if (passwordPlain.isNotBlank()) {
@@ -248,6 +255,27 @@ object AppPreferencesRepository {
         )
     }
 
+    suspend fun updateGender(gender: String): Result<Unit> {
+        if (!::appContext.isInitialized) return Result.failure(IllegalStateException("Preferences not ready"))
+        val value = gender.trim()
+        val allowed = setOf("Male", "Female", "Other")
+        if (value !in allowed) {
+            return Result.failure(IllegalArgumentException("Select a valid gender"))
+        }
+        return runCatching {
+            store().edit { prefs ->
+                prefs[keyProfileGender] = value
+            }
+            Unit
+        }.fold(
+            onSuccess = { Result.success(Unit) },
+            onFailure = { e ->
+                Log.e(TAG, "updateGender failed", e)
+                Result.failure(e)
+            },
+        )
+    }
+
     /**
      * Updates password after verifying [oldPassword] matches the stored value.
      * Fails if no password is stored locally (e.g. session restored without saving password).
@@ -295,8 +323,8 @@ object AppPreferencesRepository {
         runCatching {
             store().edit { prefs ->
                 val existing = prefs[keyProfileUserCode] ?: 0
-                if (existing !in 100_000..999_999) {
-                    prefs[keyProfileUserCode] = randomSixDigitUserCode()
+                if (existing !in 10_000_000..99_999_999) {
+                    prefs[keyProfileUserCode] = randomEightDigitUserCode()
                 }
             }
         }.onFailure { Log.e(TAG, "ensureDrawerUserCode failed", it) }
@@ -332,6 +360,9 @@ object AppPreferencesRepository {
 
     val phoneVerified: Flow<Boolean>
         get() = storeOrNull()?.data?.map { (it[keyPhoneVerified] ?: 0) == 1 } ?: flowOf(false)
+
+    val notificationsEnabled: Flow<Boolean>
+        get() = storeOrNull()?.data?.map { (it[keyProfileNotificationsEnabled] ?: 1) == 1 } ?: flowOf(true)
 
     fun rememberTestOpened(testName: String) {
         if (!::appContext.isInitialized) return
@@ -407,6 +438,7 @@ object AppPreferencesRepository {
                 prefs[keyProfileContact] = ""
                 prefs[keyProfileEmail] = ""
                 prefs[keyProfileMobile] = ""
+                prefs[keyProfileGender] = ""
                 prefs[keyProfilePassword] = ""
                 prefs[keyProfileUserCode] = 0
                 prefs[keyEmailVerified] = 0
@@ -431,9 +463,10 @@ object AppPreferencesRepository {
         val contact = prefs[keyProfileContact]
         val email = prefs[keyProfileEmail]
         val mobile = prefs[keyProfileMobile]
+        val gender = prefs[keyProfileGender]
         val uid = prefs[keyProfileUserCode] ?: 0
         return """
-            {"streakDays":$streak,"lastOpenedTest":"${q(lastTest)}","lastOpenedTestTime":$lastTestTime,"cachedFeedJobUrl":"${q(job)}","cachedFeedExamUrl":"${q(exam)}","cachedFeedNewsUrl":"${q(news)}","emailVerified":$emailV,"phoneVerified":$phoneV,"displayName":"${q(display)}","contact":"${q(contact)}","email":"${q(email)}","mobile":"${q(mobile)}","userCode":$uid}
+            {"streakDays":$streak,"lastOpenedTest":"${q(lastTest)}","lastOpenedTestTime":$lastTestTime,"cachedFeedJobUrl":"${q(job)}","cachedFeedExamUrl":"${q(exam)}","cachedFeedNewsUrl":"${q(news)}","emailVerified":$emailV,"phoneVerified":$phoneV,"displayName":"${q(display)}","contact":"${q(contact)}","email":"${q(email)}","mobile":"${q(mobile)}","gender":"${q(gender)}","userCode":$uid}
         """.trimIndent().replace("\n", "")
     }
 
@@ -452,6 +485,15 @@ object AppPreferencesRepository {
             runCatching {
                 store().edit { it[keyPhoneVerified] = if (verified) 1 else 0 }
             }.onFailure { Log.e(TAG, "setPhoneVerified failed", it) }
+        }
+    }
+
+    fun setNotificationsEnabled(enabled: Boolean) {
+        if (!::appContext.isInitialized) return
+        scope.launch {
+            runCatching {
+                store().edit { it[keyProfileNotificationsEnabled] = if (enabled) 1 else 0 }
+            }.onFailure { Log.e(TAG, "setNotificationsEnabled failed", it) }
         }
     }
 }
