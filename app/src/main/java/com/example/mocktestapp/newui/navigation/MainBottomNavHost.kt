@@ -18,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -34,6 +35,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.mocktestapp.data.AppPreferencesRepository
+import com.example.mocktestapp.data.AuthRepository
 import com.example.mocktestapp.newui.alerts.ExamAlertFeedImageSeedPrefix
 import com.example.mocktestapp.newui.alerts.ExamAlertScreenNew
 import com.example.mocktestapp.newui.alerts.JobAlertFeedImageSeedPrefix
@@ -66,6 +68,7 @@ import com.example.mocktestapp.newui.result.ReviewSolutionScreenNew
 import com.example.mocktestapp.newui.tests.StartTestPreviewScreenNew
 import com.example.mocktestapp.newui.tests.TestsScreenNew
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
+import kotlinx.coroutines.launch
 
 private object MainTabRoutes {
     const val Home = "main/home"
@@ -128,6 +131,7 @@ fun MainBottomNavHost(
 ) {
     val mainNavController = rememberNavController()
     val p = mockTestPalette()
+    val scope = rememberCoroutineScope()
 
     val tabs = remember {
         listOf(
@@ -205,9 +209,12 @@ fun MainBottomNavHost(
             composable(MainTabRoutes.Home) {
                 HomeRouteNew(
                     onLogout = {
-                        rootNavController.navigate(RoutesNew.AUTH) {
-                            popUpTo(RoutesNew.HOME) { inclusive = true }
-                            launchSingleTop = true
+                        scope.launch {
+                            AuthRepository.logout()
+                            rootNavController.navigate(RoutesNew.AUTH) {
+                                popUpTo(RoutesNew.HOME) { inclusive = true }
+                                launchSingleTop = true
+                            }
                         }
                     },
                     onOpenProfile = {
@@ -523,7 +530,7 @@ fun MainBottomNavHost(
             }
 
             composable(RoutesNew.DAILY) {
-                DailyDigestContentScreenNew(
+                DailyDigestScreenNew(
                     onBack = { mainNavController.popBackOrHome() },
                 )
             }
@@ -547,7 +554,7 @@ fun MainBottomNavHost(
             }
 
             composable(RoutesNew.MENU_QUIZ) {
-                DailyDigestScreenNew(
+                DailyDigestContentScreenNew(
                     onBack = { mainNavController.popBackOrHome() },
                 )
             }

@@ -147,7 +147,17 @@ fun HomeScreenNew(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val context = LocalContext.current
-    val attempts by TestHistoryRepository.observeAttempts().collectAsState(initial = emptyList())
+    val profile by AppPreferencesRepository.drawerUserProfile.collectAsState(
+        initial = AppPreferencesRepository.DrawerUserProfile(
+            displayName = "",
+            emailLine = "",
+            userIdFormatted = null,
+        ),
+    )
+    val attemptsUserKey = remember(profile.emailLine, profile.userIdFormatted) {
+        profile.emailLine.ifBlank { profile.userIdFormatted ?: "guest" }
+    }
+    val attempts by TestHistoryRepository.observeAttempts(attemptsUserKey).collectAsState(initial = emptyList())
     val attemptsCount = attempts.size.toString()
     val bestScoreText = remember(attempts) {
         attempts
@@ -182,7 +192,7 @@ fun HomeScreenNew(
         ),
         )
     }
-    var homeWelcomeText by remember { mutableStateOf("Welcome Rahul") }
+    var homeWelcomeTemplate by remember { mutableStateOf("Welcome {name}") }
     var homeQuickActionsTitle by remember { mutableStateOf("Quick actions") }
     var quickActionSections by remember {
         mutableStateOf(
@@ -271,7 +281,7 @@ fun HomeScreenNew(
     LaunchedEffect(Unit) {
         val remote = ContentRepository.loadHomeContent() ?: return@LaunchedEffect
         if (!remote.welcomeText.isNullOrBlank()) {
-            homeWelcomeText = remote.welcomeText
+            homeWelcomeTemplate = remote.welcomeText
         }
         if (!remote.quickActionsTitle.isNullOrBlank()) {
             homeQuickActionsTitle = remote.quickActionsTitle
@@ -374,7 +384,17 @@ fun HomeScreenNew(
                         .padding(padding),
                 ) {
                 TopRow(
-                    welcomeText = homeWelcomeText,
+                    welcomeText = homeWelcomeTemplate
+                        .replace("{name}", profile.displayName.ifBlank { "User" })
+                        .let { text ->
+                            if (text.contains("{name}")) {
+                                text.replace("{name}", profile.displayName.ifBlank { "User" })
+                            } else if (text.isBlank() || text.equals("welcome", ignoreCase = true)) {
+                                "Welcome ${profile.displayName.ifBlank { "User" }}"
+                            } else {
+                                text
+                            }
+                        },
                     onOpenDrawer = {
                         scope.launch {
                             if (!drawerState.isOpen) drawerState.open()
@@ -403,11 +423,13 @@ fun HomeScreenNew(
                     )
 
                     Spacer(Modifier.height(14.dp))
-                    StatsRow(
-                        attempts = attemptsCount,
-                        bestScore = bestScoreText,
-                        lastScore = lastScoreText,
-                    )
+                    Box(modifier = Modifier.padding(horizontal = 14.dp)) {
+                        StatsRow(
+                            attempts = attemptsCount,
+                            bestScore = bestScoreText,
+                            lastScore = lastScoreText,
+                        )
+                    }
                     pendingResult?.let { pending ->
                         val isReady = nowMs >= pending.publishAtMillis
                         val canShow = hiddenSessionAt == 0L || isReady
@@ -467,13 +489,17 @@ fun HomeScreenNew(
                             Divider(color = p.systemBlue.copy(alpha = 0.25f))
                             Spacer(Modifier.height(12.dp))
                         }
-                        SectionTitle(text = section.title)
+                        Box(modifier = Modifier.padding(horizontal = 14.dp)) {
+                            SectionTitle(text = section.title)
+                        }
                         Spacer(Modifier.height(10.dp))
-                        CategoryRow(
-                            categories = section.items,
-                            onClick = onOpenCategory,
-                            onSeeAll = onSeeAllCategories,
-                        )
+                        Box(modifier = Modifier.padding(horizontal = 14.dp)) {
+                            CategoryRow(
+                                categories = section.items,
+                                onClick = onOpenCategory,
+                                onSeeAll = onSeeAllCategories,
+                            )
+                        }
                     }
 
                     Spacer(Modifier.height(18.dp))
@@ -487,23 +513,27 @@ fun HomeScreenNew(
                             Spacer(Modifier.height(12.dp))
                         }
                         val sectionTitle = section.title.ifBlank { homeQuickActionsTitle }
-                        SectionTitle(text = sectionTitle)
+                        Box(modifier = Modifier.padding(horizontal = 14.dp)) {
+                            SectionTitle(text = sectionTitle)
+                        }
                         Spacer(Modifier.height(12.dp))
-                        ActionsGrid(
-                            actions = section.items,
-                            startSeriesState = startSeriesState,
-                            onAction = { actionKey ->
-                                val normalizedKey = actionKey.trim().lowercase()
-                                when {
-                                    normalizedKey == "starttest" || normalizedKey == "start_test" || normalizedKey == "start test" -> {
-                                        onStartTest(startSeriesState.activeTestName ?: "bsc nursing moc test")
+                        Box(modifier = Modifier.padding(horizontal = 14.dp)) {
+                            ActionsGrid(
+                                actions = section.items,
+                                startSeriesState = startSeriesState,
+                                onAction = { actionKey ->
+                                    val normalizedKey = actionKey.trim().lowercase()
+                                    when {
+                                        normalizedKey == "starttest" || normalizedKey == "start_test" || normalizedKey == "start test" -> {
+                                            onStartTest(startSeriesState.activeTestName ?: "bsc nursing moc test")
+                                        }
+                                        normalizedKey == "leaderboard" || normalizedKey == "leader_board" || normalizedKey == "leader board" -> onLeaderboard()
+                                        normalizedKey.contains("result") || normalizedKey == "score" || normalizedKey == "results_history" -> onResults()
+                                        normalizedKey == "bookmarks" || normalizedKey == "bookmark" || normalizedKey == "tool" || normalizedKey == "tools" -> onBookmarks()
                                     }
-                                    normalizedKey == "leaderboard" || normalizedKey == "leader_board" || normalizedKey == "leader board" -> onLeaderboard()
-                                    normalizedKey.contains("result") || normalizedKey == "score" || normalizedKey == "results_history" -> onResults()
-                                    normalizedKey == "bookmarks" || normalizedKey == "bookmark" || normalizedKey == "tool" || normalizedKey == "tools" -> onBookmarks()
-                                }
-                            },
-                        )
+                                },
+                            )
+                        }
                     }
 
                     Spacer(Modifier.height(18.dp))

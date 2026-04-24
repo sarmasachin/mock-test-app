@@ -46,4 +46,26 @@ async function sendPasswordResetOtp(opts) {
   });
 }
 
-module.exports = { isMailConfigured, sendPasswordResetOtp };
+/**
+ * Sends a 6-digit OTP for email verification.
+ * @param {{ to: string, otp: string }} opts
+ */
+async function sendEmailVerificationOtp(opts) {
+  const to = String(opts.to || '').trim();
+  const otp = String(opts.otp || '').trim();
+  if (!to || !otp) throw new Error('sendEmailVerificationOtp: missing to or otp');
+  if (!isMailConfigured()) {
+    throw new Error('SMTP not configured (set SMTP_USER, SMTP_PASS, MAIL_FROM)');
+  }
+  const transporter = createTransport();
+  const subject = process.env.MAIL_SUBJECT_EMAIL_VERIFY || 'MockTestApp — email verification code';
+  await transporter.sendMail({
+    from: process.env.MAIL_FROM,
+    to,
+    subject,
+    text: `Your email verification code is: ${otp}\n\nIt expires in 15 minutes.`,
+    html: `<p>Your email verification code is:</p><p style="font-size:26px;font-weight:bold;letter-spacing:4px;">${otp}</p><p>This code expires in <strong>15 minutes</strong>.</p>`,
+  });
+}
+
+module.exports = { isMailConfigured, sendPasswordResetOtp, sendEmailVerificationOtp };

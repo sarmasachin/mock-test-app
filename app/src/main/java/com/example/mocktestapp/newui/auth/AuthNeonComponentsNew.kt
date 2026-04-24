@@ -261,8 +261,13 @@ fun GoogleAuthButton(
     }
 }
 
-fun isValidMobile(input: String): Boolean =
-    input.length == 10 && input.all { it.isDigit() }
+fun isValidMobile(input: String): Boolean {
+    val digits = input.trim()
+    if (digits.length != 10 || !digits.all { it.isDigit() }) return false
+    val allSameDigit = digits.toSet().size == 1
+    val firstFiveSame = digits.take(5).toSet().size == 1
+    return !allSameDigit && !firstFiveSame
+}
 
 fun isValidEmail(input: String): Boolean {
     val s = input.trim()

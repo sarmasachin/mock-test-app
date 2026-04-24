@@ -53,6 +53,14 @@ function pickSixDigit() {
 const PASSWORD_RESET_OTP_MINUTES = () =>
   parseInt(process.env.PASSWORD_RESET_OTP_MINUTES || '15', 10);
 
+function isValidPhone(input) {
+  const digits = String(input || '').replace(/\D/g, '').slice(0, 10);
+  if (digits.length !== 10) return false;
+  const allSameDigit = new Set(digits.split('')).size === 1;
+  const firstFiveSame = new Set(digits.slice(0, 5).split('')).size === 1;
+  return !allSameDigit && !firstFiveSame;
+}
+
 router.post('/register', async (req, res) => {
   const { displayName, email, phone, password, state, district } = req.body || {};
   const name = String(displayName || '').trim();
@@ -80,7 +88,9 @@ router.post('/register', async (req, res) => {
 
   if (!name) return res.status(400).json({ error: 'displayName required' });
   if (!em || !em.includes('@')) return res.status(400).json({ error: 'Valid email required' });
-  if (ph.length !== 10) return res.status(400).json({ error: 'Valid 10-digit phone required' });
+  if (!isValidPhone(ph)) {
+    return res.status(400).json({ error: 'Enter a valid mobile number' });
+  }
   if (pw.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
 
   const passwordHash = await bcrypt.hash(pw, 12);
@@ -141,7 +151,7 @@ router.post('/login', async (req, res) => {
     params = [idRaw];
   } else {
     const digits = idRaw.replace(/\D/g, '').slice(0, 10);
-    if (digits.length !== 10) {
+    if (!isValidPhone(digits)) {
       return res.status(400).json({ error: 'Enter valid email or 10-digit mobile' });
     }
     q = `SELECT * FROM users WHERE phone = $1 LIMIT 1`;

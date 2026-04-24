@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.mocktestapp.data.AppPreferencesRepository
 import com.example.mocktestapp.data.TestHistoryRepository
 import com.example.mocktestapp.data.local.TestAttemptEntity
 import com.example.mocktestapp.newui.theme.palette.gradientColors
@@ -55,7 +56,17 @@ fun HistoryScreenNew(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
 
-    val attempts by TestHistoryRepository.observeAttempts().collectAsState(initial = emptyList())
+    val profile by AppPreferencesRepository.drawerUserProfile.collectAsState(
+        initial = AppPreferencesRepository.DrawerUserProfile(
+            displayName = "",
+            emailLine = "",
+            userIdFormatted = null,
+        ),
+    )
+    val attemptsUserKey = remember(profile.emailLine, profile.userIdFormatted) {
+        profile.emailLine.ifBlank { profile.userIdFormatted ?: "guest" }
+    }
+    val attempts by TestHistoryRepository.observeAttempts(attemptsUserKey).collectAsState(initial = emptyList())
     val items = remember(attempts) { attempts.map { it.toHistoryItem() } }
 
     Scaffold(

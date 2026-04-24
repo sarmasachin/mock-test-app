@@ -169,7 +169,7 @@ fun ProfileScreenNew(
                         "/edit-email" -> item.subtitle.replace("{value}", profile.email.ifBlank { "Tap to set" })
                         "/edit-mobile" -> item.subtitle.replace("{value}", profile.mobile.ifBlank { "Tap to set" })
                         "/edit-gender" -> item.subtitle.replace("{value}", profile.gender.ifBlank { "Tap to set" })
-                        "/verify-email" -> if (emailOk) "Verified (demo)" else if (item.subtitle.isBlank()) "Not verified — tap to simulate send" else item.subtitle
+                        "/verify-email" -> if (emailOk) "Verified" else if (item.subtitle.isBlank()) "Not verified — tap to send OTP" else item.subtitle
                         "/verify-phone" -> if (phoneOk) "Verified (demo)" else if (item.subtitle.isBlank()) "Not verified — tap to simulate send" else item.subtitle
                         else -> item.subtitle
                     }.ifBlank { "Tap to open" }

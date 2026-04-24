@@ -34,6 +34,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.mocktestapp.data.ContentRepository
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -63,12 +65,25 @@ fun DailyDigestScreenNew(
     var selectedDate by remember { mutableStateOf(today) }
     var showResult by remember { mutableStateOf(false) }
     val attemptedDates = remember { mutableStateOf(setOf(today.minusDays(1))) }
+    var digestItem by remember { mutableStateOf<ContentRepository.DailyDigestRemote?>(null) }
+    var digestError by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        runCatching { ContentRepository.loadDailyDigestItem() }
+            .onSuccess {
+                digestItem = it
+                digestError = it == null
+            }
+            .onFailure { digestError = true }
+    }
 
     if (!showResult) {
         DailyQuizDatePickerScreen(
             modifier = modifier,
             selectedDate = selectedDate,
             attemptedDates = attemptedDates.value,
+            digestItem = digestItem,
+            showDigestError = digestError,
             onBack = onBack,
             onSelectDate = { selectedDate = it },
             onTakeTest = {
@@ -97,6 +112,8 @@ private fun DailyQuizDatePickerScreen(
     modifier: Modifier,
     selectedDate: LocalDate,
     attemptedDates: Set<LocalDate>,
+    digestItem: ContentRepository.DailyDigestRemote?,
+    showDigestError: Boolean,
     onBack: () -> Unit,
     onSelectDate: (LocalDate) -> Unit,
     onTakeTest: () -> Unit,
@@ -244,7 +261,22 @@ private fun DailyQuizDatePickerScreen(
                         Icon(Icons.Rounded.Leaderboard, contentDescription = null, tint = Color(0xFFFF9800))
                     }
                     Spacer(Modifier.width(10.dp))
-                    Text("Current Affairs Mock Test", color = Color(0xFF303030), fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
+                    Text(
+                        text = digestItem?.questionPrompt?.takeIf { it.isNotBlank() }?.let { "Question: $it" }
+                            ?: if (showDigestError) "Daily digest unavailable right now" else "Current Affairs Mock Test",
+                        color = Color(0xFF303030),
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 17.sp,
+                    )
+                }
+                val factText = digestItem?.factText?.takeIf { it.isNotBlank() }
+                if (factText != null) {
+                    Text(
+                        text = "Fact: $factText",
+                        color = Color(0xFF5A5A5A),
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+                    )
                 }
             }
 

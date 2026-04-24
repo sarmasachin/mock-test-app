@@ -10,6 +10,8 @@ data class AuthUserDto(
     @SerializedName("sixDigitPublicId") val sixDigitPublicId: Int,
     @SerializedName("signupState") val signupState: String? = null,
     @SerializedName("signupDistrict") val signupDistrict: String? = null,
+    @SerializedName("emailVerifiedAt") val emailVerifiedAt: String? = null,
+    @SerializedName("phoneVerifiedAt") val phoneVerifiedAt: String? = null,
 )
 
 data class LoginRequest(
@@ -82,6 +84,16 @@ data class PatchPasswordRequest(
 
 data class SimpleOkResponse(
     val ok: Boolean = false,
+    val message: String? = null,
+    @SerializedName("alreadyVerified") val alreadyVerified: Boolean = false,
+)
+
+data class EmailVerificationConfirmBody(
+    val otp: String,
+)
+
+data class TextMessageBody(
+    val message: String,
 )
 
 data class AttemptRequest(

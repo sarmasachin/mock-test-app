@@ -5,6 +5,33 @@ const { pool } = require('../db');
 
 const router = express.Router();
 
+function normalizeText(value) {
+  return String(value || '').trim();
+}
+
+function normalizeKey(value) {
+  return normalizeText(value).toLowerCase();
+}
+
+function isBlockedLocation(value) {
+  const key = normalizeKey(value);
+  return key === 'other' || key === 'not listed' || key === 'notlisted';
+}
+
+function uniqueByKey(values) {
+  const seen = new Set();
+  const out = [];
+  for (const value of values) {
+    const text = normalizeText(value);
+    if (!text) continue;
+    const key = normalizeKey(text);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+  }
+  return out;
+}
+
 function parseLimit(raw) {
   const parsed = parseInt(String(raw || '100'), 10);
   if (!Number.isFinite(parsed)) return 100;
@@ -124,10 +151,27 @@ router.get('/filters', async (_req, res) => {
       ),
     ]);
 
+    const uniqueTests = [];
+    const testSeenByTitle = new Set();
+    for (const row of tests.rows) {
+      const id = normalizeText(row.id);
+      const title = normalizeText(row.title);
+      if (!id || !title) continue;
+      const key = normalizeKey(title);
+      if (testSeenByTitle.has(key)) continue;
+      testSeenByTitle.add(key);
+      uniqueTests.push({ id, title });
+    }
+
+    const cleanStates = uniqueByKey(states.rows.map((row) => row.value))
+      .filter((value) => !isBlockedLocation(value));
+    const cleanCities = uniqueByKey(cities.rows.map((row) => row.value))
+      .filter((value) => !isBlockedLocation(value));
+
     return res.json({
-      tests: tests.rows.map((row) => ({ id: row.id, title: row.title })),
-      states: states.rows.map((row) => row.value),
-      cities: cities.rows.map((row) => row.value),
+      tests: uniqueTests,
+      states: cleanStates,
+      cities: cleanCities,
     });
   } catch (e) {
     console.error(e);

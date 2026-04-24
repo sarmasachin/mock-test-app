@@ -102,7 +102,9 @@ fun ResultScreenNew(
         if (historyWritten) return@LaunchedEffect
         val totalQuestions = scoreText.substringAfter("/").trim().toIntOrNull()
             ?: (correct + wrong).coerceAtLeast(1)
+        val attemptsUserKey = profile.emailLine.ifBlank { profile.userIdFormatted ?: "guest" }
         TestHistoryRepository.recordAttempt(
+            userKey = attemptsUserKey,
             testName = testName,
             correct = correct,
             total = totalQuestions.coerceAtLeast(1),

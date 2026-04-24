@@ -16,7 +16,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -40,6 +39,7 @@ private object ProfileInnerRoutes {
     const val MAIN = "profile_main"
     const val USERNAME = "profile_edit_username"
     const val EMAIL = "profile_edit_email"
+    const val EMAIL_VERIFY = "profile_email_verify"
     const val MOBILE = "profile_edit_mobile"
     const val GENDER = "profile_edit_gender"
     const val PASSWORD = "profile_edit_password"
@@ -135,12 +135,7 @@ fun ProfileRouteNew(
                         },
                         onLogout = { showLogoutDialog = true },
                         onDeleteAccount = { showDeleteDialog = true },
-                        onSendEmailVerification = {
-                            scope.launch {
-                                snackbar.showSuccess("Demo: email verification sent (connect backend).")
-                                AppPreferencesRepository.setEmailVerified(true)
-                            }
-                        },
+                        onSendEmailVerification = { innerNav.navigate(ProfileInnerRoutes.EMAIL_VERIFY) },
                         onSendPhoneVerification = {
                             scope.launch {
                                 snackbar.showSuccess("Demo: SMS OTP sent (connect backend).")
@@ -152,36 +147,31 @@ fun ProfileRouteNew(
                 composable(ProfileInnerRoutes.USERNAME) {
                     ProfileEditUsernameScreen(
                         onBack = { innerNav.popBackStack() },
-                        onShowSuccess = onEditSuccess,
-                        onShowError = onEditError,
                     )
                 }
                 composable(ProfileInnerRoutes.EMAIL) {
                     ProfileEditEmailScreen(
                         onBack = { innerNav.popBackStack() },
-                        onShowSuccess = onEditSuccess,
-                        onShowError = onEditError,
+                    )
+                }
+                composable(ProfileInnerRoutes.EMAIL_VERIFY) {
+                    ProfileEmailVerificationScreen(
+                        onBack = { innerNav.popBackStack() },
                     )
                 }
                 composable(ProfileInnerRoutes.MOBILE) {
                     ProfileEditMobileScreen(
                         onBack = { innerNav.popBackStack() },
-                        onShowSuccess = onEditSuccess,
-                        onShowError = onEditError,
                     )
                 }
                 composable(ProfileInnerRoutes.GENDER) {
                     ProfileEditGenderScreen(
                         onBack = { innerNav.popBackStack() },
-                        onShowSuccess = onEditSuccess,
-                        onShowError = onEditError,
                     )
                 }
                 composable(ProfileInnerRoutes.PASSWORD) {
                     ProfileEditPasswordScreen(
                         onBack = { innerNav.popBackStack() },
-                        onShowSuccess = onEditSuccess,
-                        onShowError = onEditError,
                     )
                 }
                 composable(ProfileInnerRoutes.NOTIFICATIONS) {
@@ -192,22 +182,16 @@ fun ProfileRouteNew(
                 composable(ProfileInnerRoutes.HELP_SUPPORT) {
                     ProfileHelpSupportScreen(
                         onBack = { innerNav.popBackStack() },
-                        onShowSuccess = onEditSuccess,
-                        onShowError = onEditError,
                     )
                 }
                 composable(ProfileInnerRoutes.FEEDBACK) {
                     ProfileFeedbackScreen(
                         onBack = { innerNav.popBackStack() },
-                        onShowSuccess = onEditSuccess,
-                        onShowError = onEditError,
                     )
                 }
                 composable(ProfileInnerRoutes.REPORT_ISSUE) {
                     ProfileReportIssueScreen(
                         onBack = { innerNav.popBackStack() },
-                        onShowSuccess = onEditSuccess,
-                        onShowError = onEditError,
                     )
                 }
             }

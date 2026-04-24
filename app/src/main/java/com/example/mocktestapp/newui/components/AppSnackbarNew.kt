@@ -31,9 +31,13 @@ fun rememberAppSnackbarHostStateNew(): SnackbarHostState = remember { SnackbarHo
 @Composable
 fun AppSnackbarHostNew(
     state: SnackbarHostState,
+    modifier: Modifier = Modifier,
 ) {
     val p = mockTestPalette()
-    SnackbarHost(hostState = state) { data ->
+    SnackbarHost(
+        hostState = state,
+        modifier = modifier,
+    ) { data ->
         val isSuccess = data.visuals.duration == SnackbarDuration.Long
         val container = if (isSuccess) p.answerCorrectStart else p.snackbarErrorContainer
         val content = if (isSuccess) p.textPrimary else p.snackbarOnError

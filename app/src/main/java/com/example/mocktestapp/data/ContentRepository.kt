@@ -386,6 +386,9 @@ object ContentRepository {
     }
 
     suspend fun loadNotifications(): List<PushNotificationItemRemote> = withContext(Dispatchers.IO) {
+        if (!AppPreferencesRepository.notificationsEnabledNow()) {
+            return@withContext emptyList()
+        }
         try {
             val items = RetrofitProvider.publicApi.getHomeContent().pushNotificationSettings?.items ?: emptyList()
             items

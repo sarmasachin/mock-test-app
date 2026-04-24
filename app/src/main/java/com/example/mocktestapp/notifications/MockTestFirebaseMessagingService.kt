@@ -7,8 +7,10 @@ import android.content.Intent
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.mocktestapp.MainActivity
+import com.example.mocktestapp.data.AppPreferencesRepository
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import kotlinx.coroutines.runBlocking
 
 /**
  * Receives FCM data/push when backend sends to device tokens.
@@ -23,6 +25,11 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         super.onMessageReceived(message)
         runCatching {
+            val notificationsOn = runBlocking { AppPreferencesRepository.notificationsEnabledNow() }
+            if (!notificationsOn) {
+                Log.d(TAG, "Notification dropped: user notifications disabled")
+                return@runCatching
+            }
             val title = message.notification?.title ?: message.data["title"] ?: "MockTestApp"
             val body = message.notification?.body ?: message.data["body"] ?: "New update"
             val open = Intent(this, MainActivity::class.java).apply {

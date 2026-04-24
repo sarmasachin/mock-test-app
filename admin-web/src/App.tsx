@@ -624,7 +624,7 @@ function TestsTab({
   const [examDate, setExamDate] = useState('');
   const [slotLabel, setSlotLabel] = useState('');
   const [capacityTotal, setCapacityTotal] = useState('500');
-  const [enrolledCount, setEnrolledCount] = useState('410');
+  const [enrolledCount, setEnrolledCount] = useState('0');
   const [attemptsAllowed, setAttemptsAllowed] = useState('1');
   const [languageMode, setLanguageMode] = useState('Bilingual');
   const [examMode, setExamMode] = useState('Online CBT');
@@ -746,7 +746,7 @@ function TestsTab({
       setExamDate('');
       setSlotLabel('');
       setCapacityTotal('500');
-      setEnrolledCount('410');
+      setEnrolledCount('0');
       setAttemptsAllowed('1');
       setLanguageMode('Bilingual');
       setExamMode('Online CBT');
@@ -992,8 +992,15 @@ function TestsTab({
             <div className="all-tests-section">
               <h4>Capacity & Rules</h4>
               <div className="all-tests-grid">
-                <input type="number" value={capacityTotal} onChange={(e) => setCapacityTotal(e.target.value)} placeholder="Capacity" />
-                <input type="number" value={enrolledCount} onChange={(e) => setEnrolledCount(e.target.value)} placeholder="Enrolled count" />
+                <input type="number" value={capacityTotal} onChange={(e) => setCapacityTotal(e.target.value)} placeholder="Capacity (e.g. 500)" />
+                <input
+                  type="number"
+                  value={enrolledCount}
+                  onChange={(e) => setEnrolledCount(e.target.value)}
+                  placeholder="Enrolled count (auto)"
+                  readOnly
+                  title="Auto-managed from user applications"
+                />
                 <input type="number" value={attemptsAllowed} onChange={(e) => setAttemptsAllowed(e.target.value)} placeholder="Attempts allowed" />
                 <input value={languageMode} onChange={(e) => setLanguageMode(e.target.value)} placeholder="Language mode" />
                 <input value={examMode} onChange={(e) => setExamMode(e.target.value)} placeholder="Exam mode" />

@@ -16,15 +16,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,8 +50,13 @@ import com.example.mocktestapp.data.auth.GoogleSignInHelper
 import com.example.mocktestapp.newui.components.AppSnackbarHostNew
 import com.example.mocktestapp.newui.components.rememberAppSnackbarHostStateNew
 import com.example.mocktestapp.newui.components.showError
+import com.example.mocktestapp.newui.components.showSuccess
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private tailrec fun Context.findComponentActivity(): ComponentActivity? =
@@ -80,19 +84,14 @@ fun AuthScreenNew(
         end = Offset(1600f, 2200f),
     )
 
-    Scaffold(
-        snackbarHost = { AppSnackbarHostNew(state = snackbar) },
-        containerColor = Color.Transparent,
-        // We already draw a full-screen gradient background, so we don't need
-        // the default system bar insets padding (which creates a white gap on top).
-        contentWindowInsets = WindowInsets(0),
-    ) { padding ->
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(bg)
+            .padding(18.dp),
+    ) {
         Box(
-            modifier = modifier
-                .fillMaxSize()
-                .background(bg)
-                .padding(padding)
-                .padding(18.dp),
+            modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center,
         ) {
             AuthCard(
@@ -101,9 +100,18 @@ fun AuthScreenNew(
                 onAuthSuccess = onAuthSuccess,
                 onProfileIncomplete = onProfileIncomplete,
                 onForgotPassword = onForgotPassword,
+                onSuccess = { msg -> scope.launch { snackbar.showSuccess(msg) } },
                 onError = { msg -> scope.launch { snackbar.showError(msg) } },
             )
         }
+        AppSnackbarHostNew(
+            state = snackbar,
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        )
     }
 }
 
@@ -114,6 +122,7 @@ private fun AuthCard(
     onAuthSuccess: () -> Unit,
     onProfileIncomplete: () -> Unit,
     onForgotPassword: () -> Unit,
+    onSuccess: (String) -> Unit,
     onError: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -133,18 +142,22 @@ private fun AuthCard(
         } else {
             scope.launch {
                 val idToken = GoogleSignInHelper.requestIdToken(act).getOrElse { e ->
-                    onError(e.message ?: "Google Sign-In failed")
+                    onError(networkAwareError(e, "Google Sign-In failed"))
                     return@launch
                 }
                 AuthRepository.loginWithGoogle(idToken)
                     .onSuccess { user ->
                         if (user.needsProfileCompletion()) {
+                            onSuccess("Login successful")
+                            delay(600)
                             onProfileIncomplete()
                         } else {
+                            onSuccess("Login successful")
+                            delay(600)
                             onAuthSuccess()
                         }
                     }
-                    .onFailure { e -> onError(e.message ?: "Google Sign-In failed") }
+                    .onFailure { e -> onError(networkAwareError(e, "Google Sign-In failed")) }
             }
         }
     }
@@ -175,6 +188,7 @@ private fun AuthCard(
                     onSwitch = { onModeChange(AuthModeNew.Signup) },
                     onAuthSuccess = onAuthSuccess,
                     onProfileIncomplete = onProfileIncomplete,
+                    onSuccess = onSuccess,
                     onError = onError,
                     onForgotPassword = onForgotPassword,
                     onGoogleSignIn = onGoogleSignIn,
@@ -183,6 +197,7 @@ private fun AuthCard(
                 SignupForm(
                     onSwitch = { onModeChange(AuthModeNew.Login) },
                     onSuccess = onAuthSuccess,
+                    onUiSuccess = onSuccess,
                     onError = onError,
                     onGoogleSignIn = onGoogleSignIn,
                 )
@@ -196,6 +211,7 @@ private fun LoginForm(
     onSwitch: () -> Unit,
     onAuthSuccess: () -> Unit,
     onProfileIncomplete: () -> Unit,
+    onSuccess: (String) -> Unit,
     onError: (String) -> Unit,
     onForgotPassword: () -> Unit,
     onGoogleSignIn: () -> Unit,
@@ -276,13 +292,17 @@ private fun LoginForm(
                         AuthRepository.login(id, password)
                             .onSuccess { user ->
                                 if (user.needsProfileCompletion()) {
+                                    onSuccess("Login successful")
+                                    delay(600)
                                     onProfileIncomplete()
                                 } else {
+                                    onSuccess("Login successful")
+                                    delay(600)
                                     onAuthSuccess()
                                 }
                             }
                             .onFailure { e ->
-                                onError(e.message ?: "Login failed")
+                                onError(networkAwareError(e, "Login failed"))
                             }
                     }
                 }
@@ -320,6 +340,7 @@ private fun LoginForm(
 private fun SignupForm(
     onSwitch: () -> Unit,
     onSuccess: () -> Unit,
+    onUiSuccess: (String) -> Unit,
     onError: (String) -> Unit,
     onGoogleSignIn: () -> Unit,
 ) {
@@ -473,9 +494,13 @@ private fun SignupForm(
                         state = state,
                         district = district,
                     )
-                        .onSuccess { onSuccess() }
+                        .onSuccess {
+                            onUiSuccess("Signup successful")
+                            delay(600)
+                            onSuccess()
+                        }
                         .onFailure { e ->
-                            onError(e.message ?: "Registration failed")
+                            onError(networkAwareError(e, "Registration failed"))
                         }
                 }
             }
@@ -504,6 +529,24 @@ private fun SignupForm(
                     interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                 ) { onSwitch() },
         )
+    }
+}
+
+private fun networkAwareError(error: Throwable?, fallback: String): String {
+    val raw = error?.message?.trim().orEmpty()
+    val lowered = raw.lowercase()
+    val likelyOffline =
+        error is UnknownHostException ||
+            error is SocketTimeoutException ||
+            error is ConnectException ||
+            lowered.contains("unable to resolve host") ||
+            lowered.contains("failed to connect") ||
+            lowered.contains("timeout") ||
+            lowered.contains("network")
+    return if (likelyOffline) {
+        "No internet connection. Please check your network and try again."
+    } else {
+        raw.ifBlank { fallback }
     }
 }
 

@@ -72,9 +72,27 @@ fun LeaderboardScreenNew(
 
     LaunchedEffect(Unit) {
         val filters = ContentRepository.loadLeaderboardFilters()
-        tests = filters.tests
+        tests = filters.tests.distinctBy { it.title.trim().lowercase() }
         cities = filters.cities
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it.lowercase() != "other" && it.lowercase() != "not listed" && it.lowercase() != "notlisted" }
+            .distinctBy { it.lowercase() }
         states = filters.states
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it.lowercase() != "other" && it.lowercase() != "not listed" && it.lowercase() != "notlisted" }
+            .distinctBy { it.lowercase() }
+    }
+
+    LaunchedEffect(tests, cities, states) {
+        if (selectedTest != "All tests" && tests.none { it.title.equals(selectedTest, ignoreCase = true) }) {
+            selectedTest = "All tests"
+        }
+        if (selectedCity != "All cities" && cities.none { it.equals(selectedCity, ignoreCase = true) }) {
+            selectedCity = "All cities"
+        }
+        if (selectedState != "All states" && states.none { it.equals(selectedState, ignoreCase = true) }) {
+            selectedState = "All states"
+        }
     }
     LaunchedEffect(selectedRange, selectedTest, selectedCity, selectedState, tests) {
         val testId = tests.firstOrNull { it.title == selectedTest }?.id
@@ -93,13 +111,13 @@ fun LeaderboardScreenNew(
             containerColor = p.surface,
         ) {
             AdvancedFiltersSheet(
-                tests = listOf("All tests") + tests.map { it.title },
+                tests = listOf("All tests") + tests.map { it.title }.distinctBy { it.lowercase() },
                 selectedTest = selectedTest,
                 onSelectTest = { selectedTest = it },
-                cities = listOf("All cities") + cities,
+                cities = listOf("All cities") + cities.distinctBy { it.lowercase() },
                 selectedCity = selectedCity,
                 onSelectCity = { selectedCity = it },
-                states = listOf("All states") + states,
+                states = listOf("All states") + states.distinctBy { it.lowercase() },
                 selectedState = selectedState,
                 onSelectState = { selectedState = it },
             )

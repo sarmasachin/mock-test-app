@@ -19,6 +19,21 @@ interface AppApiService {
     @PATCH("me/password")
     suspend fun patchPassword(@Body body: PatchPasswordRequest): SimpleOkResponse
 
+    @POST("me/email-verification/request")
+    suspend fun requestEmailVerificationOtp(): SimpleOkResponse
+
+    @POST("me/email-verification/confirm")
+    suspend fun confirmEmailVerification(@Body body: EmailVerificationConfirmBody): SimpleOkResponse
+
+    @POST("me/support")
+    suspend fun submitSupport(@Body body: TextMessageBody): SimpleOkResponse
+
+    @POST("me/feedback")
+    suspend fun submitFeedback(@Body body: TextMessageBody): SimpleOkResponse
+
+    @POST("me/report-issue")
+    suspend fun submitReportIssue(@Body body: TextMessageBody): SimpleOkResponse
+
     @DELETE("me")
     suspend fun deleteMe(): Response<Unit>
 

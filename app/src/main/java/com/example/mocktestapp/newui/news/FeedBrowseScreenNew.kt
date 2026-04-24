@@ -70,8 +70,8 @@ fun FeedBrowseScreenNew(
     onBack: () -> Unit,
     onOpenItem: (id: String) -> Unit,
     modifier: Modifier = Modifier,
-    topStoriesSectionLabel: String = "TOP STORIES",
-    listSectionTitle: String = "ALL HEADLINES",
+    topStoriesSectionLabel: String = "",
+    listSectionTitle: String = "",
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -409,16 +409,6 @@ private fun FeedListRow(
         )
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            if (alsoInTopCarousel) {
-                Text(
-                    text = "TOP STORY",
-                    color = p.accent,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.8.sp,
-                )
-                Spacer(Modifier.height(4.dp))
-            }
             Text(
                 text = item.headline,
                 color = p.textPrimary,

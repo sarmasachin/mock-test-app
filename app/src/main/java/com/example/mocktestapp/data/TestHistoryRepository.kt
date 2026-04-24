@@ -23,10 +23,13 @@ object TestHistoryRepository {
         dao = database.testAttemptDao()
     }
 
-    fun observeAttempts(): Flow<List<TestAttemptEntity>> =
-        dao?.observeAll() ?: flowOf(emptyList())
+    fun observeAttempts(userKey: String): Flow<List<TestAttemptEntity>> {
+        val safeUserKey = userKey.trim().ifBlank { "guest" }
+        return dao?.observeAllByUser(safeUserKey) ?: flowOf(emptyList())
+    }
 
     suspend fun recordAttempt(
+        userKey: String,
         testName: String,
         correct: Int,
         total: Int,
@@ -36,10 +39,12 @@ object TestHistoryRepository {
             Log.w(TAG, "recordAttempt skipped: database not initialized")
             return
         }
+        val safeUserKey = userKey.trim().ifBlank { "guest" }
         withContext(Dispatchers.IO) {
             try {
                 d.insert(
                     TestAttemptEntity(
+                        userKey = safeUserKey,
                         testName = testName,
                         correct = correct,
                         total = total,
@@ -67,6 +72,16 @@ object TestHistoryRepository {
         withContext(Dispatchers.IO) {
             runCatching { d.deleteAll() }.onFailure { e ->
                 Log.e(TAG, "Failed to clear test history", e)
+            }
+        }
+    }
+
+    suspend fun clearAll(userKey: String) {
+        val d = dao ?: return
+        val safeUserKey = userKey.trim().ifBlank { "guest" }
+        withContext(Dispatchers.IO) {
+            runCatching { d.deleteAllByUser(safeUserKey) }.onFailure { e ->
+                Log.e(TAG, "Failed to clear user test history", e)
             }
         }
     }

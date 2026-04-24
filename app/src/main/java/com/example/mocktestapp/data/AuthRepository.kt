@@ -3,6 +3,7 @@ package com.example.mocktestapp.data
 import android.content.Context
 import android.util.Log
 import com.example.mocktestapp.data.remote.AttemptRequest
+import com.example.mocktestapp.data.remote.EmailVerificationConfirmBody
 import com.example.mocktestapp.data.remote.AuthTokenStore
 import com.example.mocktestapp.data.remote.GoogleSignInRequest
 import com.example.mocktestapp.data.remote.LoginRequest
@@ -15,11 +16,13 @@ import com.example.mocktestapp.data.remote.RefreshRequest
 import com.example.mocktestapp.data.remote.RegisterRequest
 import com.example.mocktestapp.data.remote.AuthUserDto
 import com.example.mocktestapp.data.remote.RetrofitProvider
+import com.example.mocktestapp.data.remote.TextMessageBody
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import retrofit2.HttpException
 
 enum class RestoreSessionStatus {
@@ -33,6 +36,7 @@ enum class RestoreSessionStatus {
  */
 object AuthRepository {
     private const val TAG = "AuthRepository"
+    private const val RESTORE_TIMEOUT_MS = 3500L
 
     @Volatile
     private var accessTokenMem: String? = null
@@ -63,36 +67,47 @@ object AuthRepository {
         accessTokenMem = null
         refreshTokenMem = null
         AuthTokenStore.clear()
+        AppPreferencesRepository.setAuthBootstrapState(RestoreSessionStatus.LoggedOut)
     }
 
     suspend fun restoreSession(): RestoreSessionStatus = withContext(Dispatchers.IO) {
         loadStoredTokens()
         if (accessTokenMem.isNullOrBlank()) {
+            AppPreferencesRepository.setAuthBootstrapState(RestoreSessionStatus.LoggedOut)
             return@withContext RestoreSessionStatus.LoggedOut
         }
+        val cachedStatus = AppPreferencesRepository.getAuthBootstrapState()
         return@withContext try {
-            val me = RetrofitProvider.appApi.me()
+            val me = withTimeoutOrNull(RESTORE_TIMEOUT_MS) { RetrofitProvider.appApi.me() }
+            if (me == null) {
+                Log.w(TAG, "restoreSession timed out, using cached status")
+                return@withContext cachedStatus ?: RestoreSessionStatus.Ready
+            }
             AppPreferencesRepository.applyServerAuthProfile(
                 displayName = me.user.displayName,
                 email = me.user.email,
                 mobile = me.user.phone,
                 sixDigitPublicId = me.user.sixDigitPublicId,
+                isEmailVerified = !me.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
             )
-            if (me.user.needsProfileCompletion()) {
+            val status = if (me.user.needsProfileCompletion()) {
                 RestoreSessionStatus.ProfileIncomplete
             } else {
                 RestoreSessionStatus.Ready
             }
+            AppPreferencesRepository.setAuthBootstrapState(status)
+            status
         } catch (e: HttpException) {
             if (e.code() == 401) {
                 clearSession()
+                AppPreferencesRepository.setAuthBootstrapState(RestoreSessionStatus.LoggedOut)
             }
             Log.w(TAG, "restoreSession http ${e.code()}", e)
             RestoreSessionStatus.LoggedOut
         } catch (e: Exception) {
             Log.w(TAG, "restoreSession failed (network?)", e)
-            RestoreSessionStatus.LoggedOut
+            cachedStatus ?: RestoreSessionStatus.Ready
         }
     }
 
@@ -119,7 +134,15 @@ object AuthRepository {
                 email = resp.user.email,
                 mobile = resp.user.phone,
                 sixDigitPublicId = resp.user.sixDigitPublicId,
+                isEmailVerified = !resp.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = password,
+            )
+            AppPreferencesRepository.setAuthBootstrapState(
+                if (resp.user.needsProfileCompletion()) {
+                    RestoreSessionStatus.ProfileIncomplete
+                } else {
+                    RestoreSessionStatus.Ready
+                },
             )
             Result.success(resp.user)
         } catch (e: HttpException) {
@@ -138,7 +161,15 @@ object AuthRepository {
                 email = resp.user.email,
                 mobile = resp.user.phone,
                 sixDigitPublicId = resp.user.sixDigitPublicId,
+                isEmailVerified = !resp.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
+            )
+            AppPreferencesRepository.setAuthBootstrapState(
+                if (resp.user.needsProfileCompletion()) {
+                    RestoreSessionStatus.ProfileIncomplete
+                } else {
+                    RestoreSessionStatus.Ready
+                },
             )
             Result.success(resp.user)
         } catch (e: HttpException) {
@@ -173,7 +204,15 @@ object AuthRepository {
                 email = resp.user.email,
                 mobile = resp.user.phone,
                 sixDigitPublicId = resp.user.sixDigitPublicId,
+                isEmailVerified = !resp.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = password,
+            )
+            AppPreferencesRepository.setAuthBootstrapState(
+                if (resp.user.needsProfileCompletion()) {
+                    RestoreSessionStatus.ProfileIncomplete
+                } else {
+                    RestoreSessionStatus.Ready
+                },
             )
             Result.success(resp.user)
         } catch (e: HttpException) {
@@ -223,9 +262,45 @@ object AuthRepository {
                 email = u.email,
                 mobile = u.phone,
                 sixDigitPublicId = u.sixDigitPublicId,
+                isEmailVerified = !u.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
             )
             Result.success(Unit)
+        } catch (e: HttpException) {
+            Result.failure(Exception(parseHttpError(e)))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun requestEmailVerificationOtp(): Result<String> = withContext(Dispatchers.IO) {
+        loadStoredTokens()
+        if (accessTokenMem.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("Sign in required"))
+        }
+        try {
+            val resp = RetrofitProvider.appApi.requestEmailVerificationOtp()
+            Result.success(resp.message ?: "Verification code sent")
+        } catch (e: HttpException) {
+            Result.failure(Exception(parseHttpError(e)))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun confirmEmailVerification(otp: String): Result<String> = withContext(Dispatchers.IO) {
+        loadStoredTokens()
+        if (accessTokenMem.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("Sign in required"))
+        }
+        try {
+            val resp = RetrofitProvider.appApi.confirmEmailVerification(
+                EmailVerificationConfirmBody(otp = otp.trim()),
+            )
+            AppPreferencesRepository.setEmailVerified(true)
+            Result.success(
+                if (resp.alreadyVerified) "Email already verified" else (resp.message ?: "Email verified successfully"),
+            )
         } catch (e: HttpException) {
             Result.failure(Exception(parseHttpError(e)))
         } catch (e: Exception) {
@@ -299,6 +374,51 @@ object AuthRepository {
         }
     }
 
+    suspend fun submitHelpSupport(message: String): Result<Unit> = withContext(Dispatchers.IO) {
+        loadStoredTokens()
+        if (accessTokenMem.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("Sign in required"))
+        }
+        try {
+            RetrofitProvider.appApi.submitSupport(TextMessageBody(message.trim()))
+            Result.success(Unit)
+        } catch (e: HttpException) {
+            Result.failure(Exception(parseHttpError(e)))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun submitFeedback(message: String): Result<Unit> = withContext(Dispatchers.IO) {
+        loadStoredTokens()
+        if (accessTokenMem.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("Sign in required"))
+        }
+        try {
+            RetrofitProvider.appApi.submitFeedback(TextMessageBody(message.trim()))
+            Result.success(Unit)
+        } catch (e: HttpException) {
+            Result.failure(Exception(parseHttpError(e)))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun submitIssueReport(message: String): Result<Unit> = withContext(Dispatchers.IO) {
+        loadStoredTokens()
+        if (accessTokenMem.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("Sign in required"))
+        }
+        try {
+            RetrofitProvider.appApi.submitReportIssue(TextMessageBody(message.trim()))
+            Result.success(Unit)
+        } catch (e: HttpException) {
+            Result.failure(Exception(parseHttpError(e)))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun postAttemptRemote(
         testName: String,
         correct: Int,
@@ -333,6 +453,9 @@ object AuthRepository {
 
     private fun parseErrorJsonString(raw: String): String {
         if (raw.isBlank()) return ""
+        if (raw.contains("<html", ignoreCase = true) || raw.contains("<!doctype", ignoreCase = true)) {
+            return "Server is temporarily unavailable"
+        }
         return try {
             JsonParser.parseString(raw).asJsonObject.get("error")?.asString ?: raw
         } catch (_: Exception) {

@@ -147,8 +147,9 @@ fun JobAlertScreenNew(
     }
     FeedBrowseScreenNew(
         title = "Job alert",
-        subtitle = "Hero carousel + full feed below",
-        listSectionSubtitle = "Including top stories · thumbnail + summary · tap to read",
+        subtitle = "",
+        listSectionTitle = "",
+        listSectionSubtitle = "",
         feedIcon = Icons.Rounded.WorkOutline,
         items = items,
         imageSeedPrefix = JobAlertFeedImageSeedPrefix,
@@ -170,8 +171,9 @@ fun ExamAlertScreenNew(
     }
     FeedBrowseScreenNew(
         title = "Exam alert",
-        subtitle = "Hero carousel + full feed below",
-        listSectionSubtitle = "Including top stories · thumbnail + summary · tap to read",
+        subtitle = "",
+        listSectionTitle = "",
+        listSectionSubtitle = "",
         feedIcon = Icons.Rounded.CalendarMonth,
         items = items,
         imageSeedPrefix = ExamAlertFeedImageSeedPrefix,

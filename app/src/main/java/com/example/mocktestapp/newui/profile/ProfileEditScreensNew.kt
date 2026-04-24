@@ -27,6 +27,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -53,7 +54,25 @@ import com.example.mocktestapp.newui.auth.isValidEmail
 import com.example.mocktestapp.newui.auth.isValidMobile
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+private enum class InlineMessageType { Success, Error }
+
+private fun normalizeProfileInlineMessage(raw: String?, fallback: String): String {
+    val msg = raw?.trim().orEmpty()
+    if (msg.isBlank()) return fallback
+    val key = msg.lowercase()
+    return when {
+        "unable to resolve host" in key ||
+            "failed to connect" in key ||
+            "timeout" in key ||
+            "network" in key -> "Check your internet connection"
+        "401" in key || "unauthorized" in key || "sign in required" in key -> "Session expired. Please login again"
+        "503" in key || "maintenance" in key || "service unavailable" in key -> "Server is temporarily unavailable"
+        else -> msg
+    }
+}
 
 @Composable
 private fun ProfileEditFieldColors() = mockTestPalette().let { p ->
@@ -73,8 +92,6 @@ private fun ProfileEditFieldColors() = mockTestPalette().let { p ->
 @Composable
 fun ProfileEditUsernameScreen(
     onBack: () -> Unit,
-    onShowSuccess: (String) -> Unit,
-    onShowError: (String) -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -88,6 +105,9 @@ fun ProfileEditUsernameScreen(
     val scope = rememberCoroutineScope()
     val scroll = rememberScrollState()
     val fieldShape = RoundedCornerShape(12.dp)
+    var inlineMessage by remember { mutableStateOf("") }
+    var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
+    var submitted by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -113,28 +133,55 @@ fun ProfileEditUsernameScreen(
                 Text("Username", color = p.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
             }
             Spacer(Modifier.height(18.dp))
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
-                label = { Text("Username") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ProfileEditFieldColors(),
-                shape = fieldShape,
-            )
+            if (!submitted) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = {
+                        name = it
+                        if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
+                    },
+                    label = { Text("Username") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ProfileEditFieldColors(),
+                    shape = fieldShape,
+                )
+                if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = inlineMessage,
+                        color = p.error,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
             Spacer(Modifier.height(20.dp))
             Button(
                 onClick = {
+                    if (submitted) {
+                        submitted = false
+                        inlineMessage = ""
+                        return@Button
+                    }
                     val n = name.trim()
                     if (n.isBlank()) {
-                        onShowError("Username required")
+                        inlineType = InlineMessageType.Error
+                        inlineMessage = "Username required"
                         return@Button
                     }
                     scope.launch {
                         val r = AuthRepository.patchProfileRemote(displayName = n)
                         r.fold(
-                            onSuccess = { onShowSuccess("Username saved") },
-                            onFailure = { e -> onShowError(e.message ?: "Could not save") },
+                            onSuccess = {
+                                inlineType = InlineMessageType.Success
+                                inlineMessage = "Username saved successfully"
+                                submitted = true
+                            },
+                            onFailure = { e ->
+                                inlineType = InlineMessageType.Error
+                                inlineMessage = normalizeProfileInlineMessage(e.message, "Could not save username")
+                            },
                         )
                     }
                 },
@@ -142,7 +189,16 @@ fun ProfileEditUsernameScreen(
                 colors = ButtonDefaults.buttonColors(containerColor = p.accent),
                 shape = RoundedCornerShape(12.dp),
             ) {
-                Text("Save", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text(if (submitted) "Edit again" else "Save", color = Color.White, fontWeight = FontWeight.SemiBold)
+            }
+            if (inlineType == InlineMessageType.Success && inlineMessage.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = inlineMessage,
+                    color = Color(0xFF16A34A),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
             }
         }
     }
@@ -151,8 +207,6 @@ fun ProfileEditUsernameScreen(
 @Composable
 fun ProfileEditEmailScreen(
     onBack: () -> Unit,
-    onShowSuccess: (String) -> Unit,
-    onShowError: (String) -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -167,6 +221,9 @@ fun ProfileEditEmailScreen(
     val scope = rememberCoroutineScope()
     val scroll = rememberScrollState()
     val fieldShape = RoundedCornerShape(12.dp)
+    var inlineMessage by remember { mutableStateOf("") }
+    var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
+    var submitted by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -215,28 +272,55 @@ fun ProfileEditEmailScreen(
                     fontSize = 14.sp,
                 )
                 Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = { email = it.trim() },
-                    label = { Text("Email") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ProfileEditFieldColors(),
-                    shape = fieldShape,
-                )
+                if (!submitted) {
+                    OutlinedTextField(
+                        value = email,
+                        onValueChange = {
+                            email = it.trim()
+                            if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
+                        },
+                        label = { Text("Email") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ProfileEditFieldColors(),
+                        shape = fieldShape,
+                    )
+                    if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = inlineMessage,
+                            color = p.error,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                }
                 Spacer(Modifier.height(20.dp))
                 Button(
                     onClick = {
+                        if (submitted) {
+                            submitted = false
+                            inlineMessage = ""
+                            return@Button
+                        }
                         val em = email.trim()
                         if (!isValidEmail(em)) {
-                            onShowError("Enter a valid email")
+                            inlineType = InlineMessageType.Error
+                            inlineMessage = "Enter a valid email"
                             return@Button
                         }
                         scope.launch {
                             val r = AuthRepository.patchProfileRemote(email = em)
                             r.fold(
-                                onSuccess = { onShowSuccess("Email saved") },
-                                onFailure = { e -> onShowError(e.message ?: "Could not save") },
+                                onSuccess = {
+                                    inlineType = InlineMessageType.Success
+                                    inlineMessage = "Email saved successfully"
+                                    submitted = true
+                                },
+                                onFailure = { e ->
+                                    inlineType = InlineMessageType.Error
+                                    inlineMessage = normalizeProfileInlineMessage(e.message, "Could not save email")
+                                },
                             )
                         }
                     },
@@ -244,7 +328,16 @@ fun ProfileEditEmailScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = p.accent),
                     shape = RoundedCornerShape(12.dp),
                 ) {
-                    Text("Save", color = Color.White, fontWeight = FontWeight.SemiBold)
+                    Text(if (submitted) "Edit again" else "Save", color = Color.White, fontWeight = FontWeight.SemiBold)
+                }
+                if (inlineType == InlineMessageType.Success && inlineMessage.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = inlineMessage,
+                        color = Color(0xFF16A34A),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
                 }
             }
         }
@@ -254,8 +347,6 @@ fun ProfileEditEmailScreen(
 @Composable
 fun ProfileEditMobileScreen(
     onBack: () -> Unit,
-    onShowSuccess: (String) -> Unit,
-    onShowError: (String) -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -269,6 +360,9 @@ fun ProfileEditMobileScreen(
     val scope = rememberCoroutineScope()
     val scroll = rememberScrollState()
     val fieldShape = RoundedCornerShape(12.dp)
+    var inlineMessage by remember { mutableStateOf("") }
+    var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
+    var submitted by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -294,29 +388,56 @@ fun ProfileEditMobileScreen(
                 Text("Mobile number", color = p.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
             }
             Spacer(Modifier.height(18.dp))
-            OutlinedTextField(
-                value = mobile,
-                onValueChange = { v -> mobile = v.filter(Char::isDigit).take(10) },
-                label = { Text("10-digit mobile") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                modifier = Modifier.fillMaxWidth(),
-                colors = ProfileEditFieldColors(),
-                shape = fieldShape,
-            )
+            if (!submitted) {
+                OutlinedTextField(
+                    value = mobile,
+                    onValueChange = { v ->
+                        mobile = v.filter(Char::isDigit).take(10)
+                        if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
+                    },
+                    label = { Text("10-digit mobile") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ProfileEditFieldColors(),
+                    shape = fieldShape,
+                )
+                if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = inlineMessage,
+                        color = p.error,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
             Spacer(Modifier.height(20.dp))
             Button(
                 onClick = {
+                    if (submitted) {
+                        submitted = false
+                        inlineMessage = ""
+                        return@Button
+                    }
                     val mob = mobile.trim().filter(Char::isDigit).take(10)
                     if (mob.length != 10 || !isValidMobile(mob)) {
-                        onShowError("Enter a valid 10-digit mobile")
+                        inlineType = InlineMessageType.Error
+                        inlineMessage = "Enter a valid 10-digit mobile"
                         return@Button
                     }
                     scope.launch {
                         val r = AuthRepository.patchProfileRemote(phone = mob)
                         r.fold(
-                            onSuccess = { onShowSuccess("Mobile number saved") },
-                            onFailure = { e -> onShowError(e.message ?: "Could not save") },
+                            onSuccess = {
+                                inlineType = InlineMessageType.Success
+                                inlineMessage = "Mobile number saved successfully"
+                                submitted = true
+                            },
+                            onFailure = { e ->
+                                inlineType = InlineMessageType.Error
+                                inlineMessage = normalizeProfileInlineMessage(e.message, "Could not save mobile number")
+                            },
                         )
                     }
                 },
@@ -324,7 +445,16 @@ fun ProfileEditMobileScreen(
                 colors = ButtonDefaults.buttonColors(containerColor = p.accent),
                 shape = RoundedCornerShape(12.dp),
             ) {
-                Text("Save", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text(if (submitted) "Edit again" else "Save", color = Color.White, fontWeight = FontWeight.SemiBold)
+            }
+            if (inlineType == InlineMessageType.Success && inlineMessage.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = inlineMessage,
+                    color = Color(0xFF16A34A),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
             }
         }
     }
@@ -333,8 +463,6 @@ fun ProfileEditMobileScreen(
 @Composable
 fun ProfileEditGenderScreen(
     onBack: () -> Unit,
-    onShowSuccess: (String) -> Unit,
-    onShowError: (String) -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -349,6 +477,9 @@ fun ProfileEditGenderScreen(
     val scroll = rememberScrollState()
     val fieldShape = RoundedCornerShape(12.dp)
     val options = remember { listOf("Male", "Female", "Other") }
+    var inlineMessage by remember { mutableStateOf("") }
+    var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
+    var submitted by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -374,23 +505,35 @@ fun ProfileEditGenderScreen(
                 Text("Gender", color = p.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
             }
             Spacer(Modifier.height(18.dp))
-            OutlinedTextField(
-                value = gender,
-                onValueChange = { value ->
-                    val v = value.trim()
-                    gender = when {
-                        v.equals("male", ignoreCase = true) -> "Male"
-                        v.equals("female", ignoreCase = true) -> "Female"
-                        v.equals("other", ignoreCase = true) -> "Other"
-                        else -> value
-                    }
-                },
-                label = { Text("Gender (Male / Female / Other)") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ProfileEditFieldColors(),
-                shape = fieldShape,
-            )
+            if (!submitted) {
+                OutlinedTextField(
+                    value = gender,
+                    onValueChange = { value ->
+                        val v = value.trim()
+                        gender = when {
+                            v.equals("male", ignoreCase = true) -> "Male"
+                            v.equals("female", ignoreCase = true) -> "Female"
+                            v.equals("other", ignoreCase = true) -> "Other"
+                            else -> value
+                        }
+                        if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
+                    },
+                    label = { Text("Gender (Male / Female / Other)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ProfileEditFieldColors(),
+                    shape = fieldShape,
+                )
+                if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = inlineMessage,
+                        color = p.error,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
             Spacer(Modifier.height(8.dp))
             Text(
                 text = "Allowed: ${options.joinToString(" / ")}",
@@ -400,18 +543,31 @@ fun ProfileEditGenderScreen(
             Spacer(Modifier.height(20.dp))
             Button(
                 onClick = {
+                    if (submitted) {
+                        submitted = false
+                        inlineMessage = ""
+                        return@Button
+                    }
                     val selected = gender.trim().replaceFirstChar { c ->
                         if (c.isLowerCase()) c.titlecase() else c.toString()
                     }
                     if (selected !in options) {
-                        onShowError("Select valid gender: Male / Female / Other")
+                        inlineType = InlineMessageType.Error
+                        inlineMessage = "Select valid gender: Male / Female / Other"
                         return@Button
                     }
                     scope.launch {
                         val r = AppPreferencesRepository.updateGender(selected)
                         r.fold(
-                            onSuccess = { onShowSuccess("Gender saved") },
-                            onFailure = { e -> onShowError(e.message ?: "Could not save") },
+                            onSuccess = {
+                                inlineType = InlineMessageType.Success
+                                inlineMessage = "Gender saved successfully"
+                                submitted = true
+                            },
+                            onFailure = { e ->
+                                inlineType = InlineMessageType.Error
+                                inlineMessage = normalizeProfileInlineMessage(e.message, "Could not save gender")
+                            },
                         )
                     }
                 },
@@ -419,7 +575,16 @@ fun ProfileEditGenderScreen(
                 colors = ButtonDefaults.buttonColors(containerColor = p.accent),
                 shape = RoundedCornerShape(12.dp),
             ) {
-                Text("Save", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text(if (submitted) "Edit again" else "Save", color = Color.White, fontWeight = FontWeight.SemiBold)
+            }
+            if (inlineType == InlineMessageType.Success && inlineMessage.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = inlineMessage,
+                    color = Color(0xFF16A34A),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
             }
         }
     }
@@ -428,8 +593,6 @@ fun ProfileEditGenderScreen(
 @Composable
 fun ProfileEditPasswordScreen(
     onBack: () -> Unit,
-    onShowSuccess: (String) -> Unit,
-    onShowError: (String) -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -442,6 +605,9 @@ fun ProfileEditPasswordScreen(
     val scope = rememberCoroutineScope()
     val scroll = rememberScrollState()
     val fieldShape = RoundedCornerShape(12.dp)
+    var inlineMessage by remember { mutableStateOf("") }
+    var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
+    var submitted by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -473,72 +639,106 @@ fun ProfileEditPasswordScreen(
                 fontSize = 14.sp,
             )
             Spacer(Modifier.height(14.dp))
-            OutlinedTextField(
-                value = oldPass,
-                onValueChange = { oldPass = it },
-                label = { Text("Current password") },
-                singleLine = true,
-                visualTransformation = if (showOldPass) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                trailingIcon = {
-                    IconButton(onClick = { showOldPass = !showOldPass }) {
-                        Icon(
-                            imageVector = if (showOldPass) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                            contentDescription = if (showOldPass) "Hide current password" else "Show current password",
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ProfileEditFieldColors(),
-                shape = fieldShape,
-            )
-            Spacer(Modifier.height(10.dp))
-            OutlinedTextField(
-                value = newPass,
-                onValueChange = { newPass = it },
-                label = { Text("New password") },
-                singleLine = true,
-                visualTransformation = if (showNewPass) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                trailingIcon = {
-                    IconButton(onClick = { showNewPass = !showNewPass }) {
-                        Icon(
-                            imageVector = if (showNewPass) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                            contentDescription = if (showNewPass) "Hide new password" else "Show new password",
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ProfileEditFieldColors(),
-                shape = fieldShape,
-            )
-            Spacer(Modifier.height(10.dp))
-            OutlinedTextField(
-                value = confirmPass,
-                onValueChange = { confirmPass = it },
-                label = { Text("Confirm new password") },
-                singleLine = true,
-                visualTransformation = if (showConfirmPass) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                trailingIcon = {
-                    IconButton(onClick = { showConfirmPass = !showConfirmPass }) {
-                        Icon(
-                            imageVector = if (showConfirmPass) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                            contentDescription = if (showConfirmPass) "Hide confirm password" else "Show confirm password",
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ProfileEditFieldColors(),
-                shape = fieldShape,
-            )
+            if (!submitted) {
+                OutlinedTextField(
+                    value = oldPass,
+                    onValueChange = {
+                        oldPass = it
+                        if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
+                    },
+                    label = { Text("Current password") },
+                    singleLine = true,
+                    visualTransformation = if (showOldPass) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        IconButton(onClick = { showOldPass = !showOldPass }) {
+                            Icon(
+                                imageVector = if (showOldPass) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                                contentDescription = if (showOldPass) "Hide current password" else "Show current password",
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ProfileEditFieldColors(),
+                    shape = fieldShape,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = newPass,
+                    onValueChange = {
+                        newPass = it
+                        if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
+                    },
+                    label = { Text("New password") },
+                    singleLine = true,
+                    visualTransformation = if (showNewPass) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        IconButton(onClick = { showNewPass = !showNewPass }) {
+                            Icon(
+                                imageVector = if (showNewPass) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                                contentDescription = if (showNewPass) "Hide new password" else "Show new password",
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ProfileEditFieldColors(),
+                    shape = fieldShape,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = confirmPass,
+                    onValueChange = {
+                        confirmPass = it
+                        if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
+                    },
+                    label = { Text("Confirm new password") },
+                    singleLine = true,
+                    visualTransformation = if (showConfirmPass) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        IconButton(onClick = { showConfirmPass = !showConfirmPass }) {
+                            Icon(
+                                imageVector = if (showConfirmPass) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                                contentDescription = if (showConfirmPass) "Hide confirm password" else "Show confirm password",
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ProfileEditFieldColors(),
+                    shape = fieldShape,
+                )
+                if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = inlineMessage,
+                        color = p.error,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
             Spacer(Modifier.height(20.dp))
             Button(
                 onClick = {
+                    if (submitted) {
+                        submitted = false
+                        inlineMessage = ""
+                        return@Button
+                    }
                     when {
-                        oldPass.isBlank() -> onShowError("Enter current password")
-                        newPass.length < 4 -> onShowError("New password must be at least 4 characters")
-                        newPass != confirmPass -> onShowError("New password and confirm do not match")
+                        oldPass.isBlank() -> {
+                            inlineType = InlineMessageType.Error
+                            inlineMessage = "Enter current password"
+                        }
+                        newPass.length < 4 -> {
+                            inlineType = InlineMessageType.Error
+                            inlineMessage = "New password must be at least 4 characters"
+                        }
+                        newPass != confirmPass -> {
+                            inlineType = InlineMessageType.Error
+                            inlineMessage = "New password and confirm do not match"
+                        }
                         else -> {
                             scope.launch {
                                 val r = AuthRepository.changePasswordRemote(oldPass, newPass)
@@ -547,9 +747,17 @@ fun ProfileEditPasswordScreen(
                                         oldPass = ""
                                         newPass = ""
                                         confirmPass = ""
-                                        onShowSuccess("Password updated")
+                                        inlineType = InlineMessageType.Success
+                                        inlineMessage = "Password updated successfully"
+                                        submitted = true
                                     },
-                                    onFailure = { e -> onShowError(e.message ?: "Could not update password") },
+                                    onFailure = { e ->
+                                        inlineType = InlineMessageType.Error
+                                        inlineMessage = normalizeProfileInlineMessage(
+                                            e.message,
+                                            "Could not update password",
+                                        )
+                                    },
                                 )
                             }
                         }
@@ -559,7 +767,241 @@ fun ProfileEditPasswordScreen(
                 colors = ButtonDefaults.buttonColors(containerColor = p.accent),
                 shape = RoundedCornerShape(12.dp),
             ) {
-                Text("Save password", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (submitted) "Edit again" else "Save password",
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            if (inlineType == InlineMessageType.Success && inlineMessage.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = inlineMessage,
+                    color = Color(0xFF16A34A),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ProfileEmailVerificationScreen(
+    onBack: () -> Unit,
+) {
+    val p = mockTestPalette()
+    val bg = Brush.verticalGradient(colors = p.gradientColors())
+    val profile by AppPreferencesRepository.editableProfile.collectAsState(
+        initial = AppPreferencesRepository.EditableProfileState("", "", "", ""),
+    )
+    val emailVerified by AppPreferencesRepository.emailVerified.collectAsState(initial = false)
+    var email by remember { mutableStateOf("") }
+    var otp by remember { mutableStateOf("") }
+    var otpRequested by remember { mutableStateOf(false) }
+    var resendSeconds by remember { mutableStateOf(0) }
+    var inlineMessage by remember { mutableStateOf("") }
+    var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
+    var verificationCompleted by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val isVerifiedNow = emailVerified || verificationCompleted
+
+    LaunchedEffect(profile.email) {
+        email = profile.email
+    }
+    LaunchedEffect(resendSeconds, otpRequested, isVerifiedNow) {
+        if (otpRequested && !isVerifiedNow && resendSeconds > 0) {
+            delay(1000)
+            resendSeconds -= 1
+        }
+    }
+    LaunchedEffect(isVerifiedNow) {
+        if (isVerifiedNow) {
+            // Give user feedback moment, then auto-return to profile.
+            delay(1800)
+            onBack()
+        }
+    }
+
+    Scaffold(
+        containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets(0),
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(bg)
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp, vertical = 10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "Back",
+                        tint = p.textPrimary,
+                    )
+                }
+                Spacer(Modifier.size(4.dp))
+                Text("Email verification", color = p.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+            }
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = email,
+                onValueChange = { email = it.trim() },
+                label = { Text("Email") },
+                singleLine = true,
+                readOnly = true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ProfileEditFieldColors(),
+                shape = RoundedCornerShape(12.dp),
+            )
+            if (!otpRequested && inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = inlineMessage,
+                    color = p.error,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            if (!otpRequested && !isVerifiedNow) {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            AuthRepository.requestEmailVerificationOtp().fold(
+                                onSuccess = {
+                                    otpRequested = true
+                                    resendSeconds = 30
+                                    inlineType = InlineMessageType.Success
+                                    inlineMessage = "OTP sent to your email"
+                                },
+                                onFailure = { e ->
+                                    inlineType = InlineMessageType.Error
+                                    inlineMessage = normalizeProfileInlineMessage(
+                                        e.message,
+                                        "Could not send verification code",
+                                    )
+                                },
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text("Send OTP", color = Color.White, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            if (otpRequested && !isVerifiedNow) {
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = otp,
+                    onValueChange = {
+                        otp = it.filter(Char::isDigit).take(6)
+                        if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
+                    },
+                    label = { Text("Enter 6-digit OTP") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ProfileEditFieldColors(),
+                    shape = RoundedCornerShape(12.dp),
+                )
+                if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = inlineMessage,
+                        color = p.error,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                if (otp.length != 6) {
+                                    inlineType = InlineMessageType.Error
+                                    inlineMessage = "Enter valid 6-digit OTP"
+                                    return@launch
+                                }
+                                AuthRepository.confirmEmailVerification(otp).fold(
+                                    onSuccess = { msg ->
+                                        inlineType = InlineMessageType.Success
+                                        inlineMessage = msg
+                                        otpRequested = false
+                                        verificationCompleted = true
+                                    },
+                                    onFailure = { e ->
+                                        inlineType = InlineMessageType.Error
+                                        inlineMessage = normalizeProfileInlineMessage(
+                                            e.message,
+                                            "Could not verify email",
+                                        )
+                                    },
+                                )
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text("Verify OTP", color = Color.White, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    onClick = {
+                        if (resendSeconds > 0) return@TextButton
+                        scope.launch {
+                            AuthRepository.requestEmailVerificationOtp().fold(
+                                onSuccess = {
+                                    resendSeconds = 30
+                                    inlineType = InlineMessageType.Success
+                                    inlineMessage = "OTP sent to your email"
+                                },
+                                onFailure = { e ->
+                                    inlineType = InlineMessageType.Error
+                                    inlineMessage = normalizeProfileInlineMessage(
+                                        e.message,
+                                        "Could not send verification code",
+                                    )
+                                },
+                            )
+                        }
+                    },
+                    enabled = resendSeconds == 0,
+                ) {
+                    Text(if (resendSeconds > 0) "Resend OTP (${resendSeconds}s)" else "Resend OTP")
+                }
+            }
+
+            if (inlineType == InlineMessageType.Success && inlineMessage.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = inlineMessage,
+                    color = Color(0xFF16A34A),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            if (isVerifiedNow) {
+                Spacer(Modifier.height(8.dp))
+                Text("Email verified successfully.", color = Color(0xFF16A34A), fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = onBack,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text("Done", color = Color.White, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }
@@ -703,13 +1145,15 @@ fun ProfileNotificationsScreen(
 @Composable
 fun ProfileHelpSupportScreen(
     onBack: () -> Unit,
-    onShowSuccess: (String) -> Unit,
-    onShowError: (String) -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     var message by remember { mutableStateOf("") }
     val fieldShape = RoundedCornerShape(12.dp)
+    var inlineMessage by remember { mutableStateOf("") }
+    var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
+    var submitted by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -740,30 +1184,72 @@ fun ProfileHelpSupportScreen(
                 fontSize = 14.sp,
             )
             Spacer(Modifier.height(12.dp))
-            OutlinedTextField(
-                value = message,
-                onValueChange = { message = it },
-                label = { Text("Write your message") },
-                minLines = 5,
-                maxLines = 8,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ProfileEditFieldColors(),
-                shape = fieldShape,
-            )
+            if (!submitted) {
+                OutlinedTextField(
+                    value = message,
+                    onValueChange = {
+                        message = it
+                        if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
+                            inlineMessage = ""
+                        }
+                    },
+                    label = { Text("Write your message") },
+                    minLines = 5,
+                    maxLines = 8,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ProfileEditFieldColors(),
+                    shape = fieldShape,
+                )
+            }
+            if (inlineMessage.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = inlineMessage,
+                    color = if (inlineType == InlineMessageType.Success) Color(0xFF16A34A) else p.error,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
             Spacer(Modifier.height(20.dp))
             Button(
                 onClick = {
+                    if (submitted) {
+                        submitted = false
+                        message = ""
+                        inlineMessage = ""
+                        return@Button
+                    }
                     if (message.trim().isBlank()) {
-                        onShowError("Please enter your message")
+                        inlineType = InlineMessageType.Error
+                        inlineMessage = "Please enter your message"
                     } else {
-                        onShowSuccess("Support message saved")
+                        scope.launch {
+                            AuthRepository.submitHelpSupport(message).fold(
+                                onSuccess = {
+                                    inlineType = InlineMessageType.Success
+                                    inlineMessage = "Support message submitted successfully"
+                                    submitted = true
+                                },
+                                onFailure = { e ->
+                                    inlineType = InlineMessageType.Error
+                                    inlineMessage = normalizeProfileInlineMessage(
+                                        e.message,
+                                        "Failed to submit support message",
+                                    )
+                                },
+                            )
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = p.accent),
                 shape = RoundedCornerShape(12.dp),
             ) {
-                Text("Submit", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (submitted) "Send another response" else "Submit",
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
         }
     }
@@ -772,13 +1258,15 @@ fun ProfileHelpSupportScreen(
 @Composable
 fun ProfileFeedbackScreen(
     onBack: () -> Unit,
-    onShowSuccess: (String) -> Unit,
-    onShowError: (String) -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     var feedbackText by remember { mutableStateOf("") }
     val fieldShape = RoundedCornerShape(12.dp)
+    var inlineMessage by remember { mutableStateOf("") }
+    var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
+    var submitted by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -809,30 +1297,72 @@ fun ProfileFeedbackScreen(
                 fontSize = 14.sp,
             )
             Spacer(Modifier.height(12.dp))
-            OutlinedTextField(
-                value = feedbackText,
-                onValueChange = { feedbackText = it },
-                label = { Text("Write feedback") },
-                minLines = 5,
-                maxLines = 8,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ProfileEditFieldColors(),
-                shape = fieldShape,
-            )
+            if (!submitted) {
+                OutlinedTextField(
+                    value = feedbackText,
+                    onValueChange = {
+                        feedbackText = it
+                        if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
+                            inlineMessage = ""
+                        }
+                    },
+                    label = { Text("Write feedback") },
+                    minLines = 5,
+                    maxLines = 8,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ProfileEditFieldColors(),
+                    shape = fieldShape,
+                )
+            }
+            if (inlineMessage.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = inlineMessage,
+                    color = if (inlineType == InlineMessageType.Success) Color(0xFF16A34A) else p.error,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
             Spacer(Modifier.height(20.dp))
             Button(
                 onClick = {
+                    if (submitted) {
+                        submitted = false
+                        feedbackText = ""
+                        inlineMessage = ""
+                        return@Button
+                    }
                     if (feedbackText.trim().isBlank()) {
-                        onShowError("Please enter feedback")
+                        inlineType = InlineMessageType.Error
+                        inlineMessage = "Please enter feedback"
                     } else {
-                        onShowSuccess("Feedback submitted")
+                        scope.launch {
+                            AuthRepository.submitFeedback(feedbackText).fold(
+                                onSuccess = {
+                                    inlineType = InlineMessageType.Success
+                                    inlineMessage = "Feedback submitted successfully"
+                                    submitted = true
+                                },
+                                onFailure = { e ->
+                                    inlineType = InlineMessageType.Error
+                                    inlineMessage = normalizeProfileInlineMessage(
+                                        e.message,
+                                        "Failed to submit feedback",
+                                    )
+                                },
+                            )
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = p.accent),
                 shape = RoundedCornerShape(12.dp),
             ) {
-                Text("Submit", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (submitted) "Send another response" else "Submit",
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
         }
     }
@@ -841,13 +1371,15 @@ fun ProfileFeedbackScreen(
 @Composable
 fun ProfileReportIssueScreen(
     onBack: () -> Unit,
-    onShowSuccess: (String) -> Unit,
-    onShowError: (String) -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     var issueText by remember { mutableStateOf("") }
     val fieldShape = RoundedCornerShape(12.dp)
+    var inlineMessage by remember { mutableStateOf("") }
+    var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
+    var submitted by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -878,30 +1410,72 @@ fun ProfileReportIssueScreen(
                 fontSize = 14.sp,
             )
             Spacer(Modifier.height(12.dp))
-            OutlinedTextField(
-                value = issueText,
-                onValueChange = { issueText = it },
-                label = { Text("Write issue details") },
-                minLines = 5,
-                maxLines = 8,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ProfileEditFieldColors(),
-                shape = fieldShape,
-            )
+            if (!submitted) {
+                OutlinedTextField(
+                    value = issueText,
+                    onValueChange = {
+                        issueText = it
+                        if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
+                            inlineMessage = ""
+                        }
+                    },
+                    label = { Text("Write issue details") },
+                    minLines = 5,
+                    maxLines = 8,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ProfileEditFieldColors(),
+                    shape = fieldShape,
+                )
+            }
+            if (inlineMessage.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = inlineMessage,
+                    color = if (inlineType == InlineMessageType.Success) Color(0xFF16A34A) else p.error,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
             Spacer(Modifier.height(20.dp))
             Button(
                 onClick = {
+                    if (submitted) {
+                        submitted = false
+                        issueText = ""
+                        inlineMessage = ""
+                        return@Button
+                    }
                     if (issueText.trim().isBlank()) {
-                        onShowError("Please enter issue details")
+                        inlineType = InlineMessageType.Error
+                        inlineMessage = "Please enter issue details"
                     } else {
-                        onShowSuccess("Issue reported")
+                        scope.launch {
+                            AuthRepository.submitIssueReport(issueText).fold(
+                                onSuccess = {
+                                    inlineType = InlineMessageType.Success
+                                    inlineMessage = "Issue submitted successfully"
+                                    submitted = true
+                                },
+                                onFailure = { e ->
+                                    inlineType = InlineMessageType.Error
+                                    inlineMessage = normalizeProfileInlineMessage(
+                                        e.message,
+                                        "Failed to submit issue report",
+                                    )
+                                },
+                            )
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = p.accent),
                 shape = RoundedCornerShape(12.dp),
             ) {
-                Text("Submit", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (submitted) "Send another response" else "Submit",
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
         }
     }

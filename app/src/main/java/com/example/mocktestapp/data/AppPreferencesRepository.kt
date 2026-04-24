@@ -66,6 +66,7 @@ object AppPreferencesRepository {
     private val keyPendingResultCorrect = intPreferencesKey("pending_result_correct")
     private val keyPendingResultWrong = intPreferencesKey("pending_result_wrong")
     private val keyAppliedTestSeries = stringPreferencesKey("applied_test_series")
+    private val keyAuthBootstrapState = stringPreferencesKey("auth_bootstrap_state")
 
     private const val DefaultStartSeriesLockMs = 20_000L
     private const val DefaultStartSeriesActiveWindowMs = 30 * 60 * 1000L
@@ -213,6 +214,7 @@ object AppPreferencesRepository {
         email: String,
         mobile: String,
         sixDigitPublicId: Int,
+        isEmailVerified: Boolean,
         passwordPlain: String,
     ) {
         if (!::appContext.isInitialized) return
@@ -229,6 +231,7 @@ object AppPreferencesRepository {
                 if (passwordPlain.isNotBlank()) {
                     prefs[keyProfilePassword] = passwordPlain
                 }
+                prefs[keyEmailVerified] = if (isEmailVerified) 1 else 0
             }
         }.onFailure { Log.e(TAG, "applyServerAuthProfile failed", it) }
     }
@@ -392,6 +395,13 @@ object AppPreferencesRepository {
 
     val notificationsEnabled: Flow<Boolean>
         get() = storeOrNull()?.data?.map { (it[keyProfileNotificationsEnabled] ?: 1) == 1 } ?: flowOf(true)
+
+    suspend fun notificationsEnabledNow(): Boolean {
+        if (!::appContext.isInitialized) return true
+        return runCatching {
+            (store().data.first()[keyProfileNotificationsEnabled] ?: 1) == 1
+        }.getOrDefault(true)
+    }
 
     val pendingResultState: Flow<PendingResultState?>
         get() = storeOrNull()?.data?.map { prefs ->
@@ -619,8 +629,26 @@ object AppPreferencesRepository {
                 prefs[keyProfileUserCode] = 0
                 prefs[keyEmailVerified] = 0
                 prefs[keyPhoneVerified] = 0
+                prefs[keyAuthBootstrapState] = RestoreSessionStatus.LoggedOut.name
             }
         }.onFailure { Log.e(TAG, "clearAuthSessionPrefs failed", it) }
+    }
+
+    suspend fun setAuthBootstrapState(status: RestoreSessionStatus) {
+        if (!::appContext.isInitialized) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyAuthBootstrapState] = status.name
+            }
+        }.onFailure { Log.e(TAG, "setAuthBootstrapState failed", it) }
+    }
+
+    suspend fun getAuthBootstrapState(): RestoreSessionStatus? {
+        if (!::appContext.isInitialized) return null
+        return runCatching {
+            val raw = store().data.first()[keyAuthBootstrapState].orEmpty()
+            RestoreSessionStatus.entries.firstOrNull { it.name == raw }
+        }.getOrNull()
     }
 
     suspend fun exportSnapshotJson(): String {

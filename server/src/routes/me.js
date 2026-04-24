@@ -3,9 +3,41 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { pool } = require('../db');
+const { sha256Hex } = require('../cryptoUtil');
 const { mapUserRow } = require('../userMapper');
+const { isMailConfigured, sendEmailVerificationOtp } = require('../mail');
 
 const router = express.Router();
+const EMAIL_VERIFY_OTP_MINUTES = () =>
+  parseInt(process.env.EMAIL_VERIFY_OTP_MINUTES || '15', 10);
+
+function pickSixDigit() {
+  return 100000 + Math.floor(Math.random() * 900000);
+}
+
+async function appendInboxItem(settingKey, item, userId) {
+  const cur = await pool.query(
+    `SELECT setting_value FROM app_settings WHERE setting_key = $1 LIMIT 1`,
+    [settingKey],
+  );
+  let payload = { items: [] };
+  if (cur.rows[0]) {
+    try {
+      payload = JSON.parse(String(cur.rows[0].setting_value || '{}')) || { items: [] };
+    } catch (_e) {
+      payload = { items: [] };
+    }
+  }
+  const existing = Array.isArray(payload.items) ? payload.items : [];
+  const next = { items: [item, ...existing].slice(0, 500) };
+  await pool.query(
+    `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+     VALUES ($1, $2, $3::uuid)
+     ON CONFLICT (setting_key)
+     DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [settingKey, JSON.stringify(next), userId],
+  );
+}
 
 router.get('/', async (req, res) => {
   try {
@@ -138,6 +170,179 @@ router.patch('/password', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Password update failed' });
+  }
+});
+
+router.post('/email-verification/request', async (req, res) => {
+  try {
+    const userRes = await pool.query(`SELECT id, email, email_verified_at FROM users WHERE id = $1::uuid LIMIT 1`, [req.userId]);
+    const user = userRes.rows[0];
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.email_verified_at) {
+      return res.status(200).json({ ok: true, message: 'Email is already verified' });
+    }
+    if (!isMailConfigured()) {
+      return res.status(503).json({
+        error: 'Email verification is not configured. Add SMTP settings to server .env.',
+      });
+    }
+    const otp = String(pickSixDigit());
+    const tokenHash = sha256Hex(otp);
+    const expires = new Date();
+    expires.setMinutes(expires.getMinutes() + EMAIL_VERIFY_OTP_MINUTES());
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE user_one_time_tokens SET used_at = now()
+         WHERE user_id = $1::uuid AND purpose = 'email_verify' AND used_at IS NULL`,
+        [user.id],
+      );
+      await client.query(
+        `INSERT INTO user_one_time_tokens (user_id, purpose, token_hash, expires_at)
+         VALUES ($1::uuid, 'email_verify', $2, $3)`,
+        [user.id, tokenHash, expires.toISOString()],
+      );
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+    await sendEmailVerificationOtp({ to: user.email, otp });
+    return res.status(200).json({
+      ok: true,
+      message: 'We sent a 6-digit verification code to your email.',
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Could not send verification code' });
+  }
+});
+
+router.post('/email-verification/confirm', async (req, res) => {
+  const otpRaw = String((req.body || {}).otp || '').replace(/\D/g, '');
+  if (otpRaw.length !== 6) {
+    return res.status(400).json({ error: 'Enter a valid 6-digit code' });
+  }
+  const tokenHash = sha256Hex(otpRaw);
+  const client = await pool.connect();
+  try {
+    const userRes = await client.query(
+      `SELECT id, email_verified_at FROM users WHERE id = $1::uuid LIMIT 1`,
+      [req.userId],
+    );
+    const user = userRes.rows[0];
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.email_verified_at) return res.json({ ok: true, alreadyVerified: true });
+    const tok = await client.query(
+      `SELECT id FROM user_one_time_tokens
+       WHERE user_id = $1::uuid
+         AND purpose = 'email_verify'
+         AND token_hash = $2
+         AND used_at IS NULL
+         AND expires_at > now()
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [req.userId, tokenHash],
+    );
+    const tokenRow = tok.rows[0];
+    if (!tokenRow) return res.status(400).json({ error: 'Invalid or expired code' });
+    await client.query('BEGIN');
+    await client.query(
+      `UPDATE users SET email_verified_at = now(), updated_at = now() WHERE id = $1::uuid`,
+      [req.userId],
+    );
+    await client.query(`UPDATE user_one_time_tokens SET used_at = now() WHERE id = $1`, [tokenRow.id]);
+    await client.query(
+      `UPDATE user_one_time_tokens SET used_at = now()
+       WHERE user_id = $1::uuid AND purpose = 'email_verify' AND used_at IS NULL AND id <> $2`,
+      [req.userId, tokenRow.id],
+    );
+    await client.query('COMMIT');
+    return res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(e);
+    return res.status(500).json({ error: 'Email verification failed' });
+  } finally {
+    client.release();
+  }
+});
+
+router.post('/support', async (req, res) => {
+  const message = String((req.body || {}).message || '').trim();
+  if (!message) return res.status(400).json({ error: 'Message is required' });
+  try {
+    const userQ = await pool.query(
+      `SELECT email, display_name FROM users WHERE id = $1::uuid LIMIT 1`,
+      [req.userId],
+    );
+    const user = userQ.rows[0];
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    await appendInboxItem('feedbackInbox', {
+      id: `support-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
+      user: String(user.display_name || user.email || 'User'),
+      subject: 'Help & Support',
+      message,
+      createdAt: new Date().toISOString(),
+      status: 'new',
+    }, req.userId);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to submit support message' });
+  }
+});
+
+router.post('/feedback', async (req, res) => {
+  const message = String((req.body || {}).message || '').trim();
+  if (!message) return res.status(400).json({ error: 'Feedback is required' });
+  try {
+    const userQ = await pool.query(
+      `SELECT email, display_name FROM users WHERE id = $1::uuid LIMIT 1`,
+      [req.userId],
+    );
+    const user = userQ.rows[0];
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    await appendInboxItem('feedbackInbox', {
+      id: `feedback-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
+      user: String(user.display_name || user.email || 'User'),
+      subject: 'Feedback',
+      message,
+      createdAt: new Date().toISOString(),
+      status: 'new',
+    }, req.userId);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to submit feedback' });
+  }
+});
+
+router.post('/report-issue', async (req, res) => {
+  const message = String((req.body || {}).message || '').trim();
+  if (!message) return res.status(400).json({ error: 'Issue details are required' });
+  try {
+    const userQ = await pool.query(
+      `SELECT email, display_name FROM users WHERE id = $1::uuid LIMIT 1`,
+      [req.userId],
+    );
+    const user = userQ.rows[0];
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    await appendInboxItem('reportIssueInbox', {
+      id: `issue-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
+      user: String(user.display_name || user.email || 'User'),
+      subject: 'Reported Issue',
+      message,
+      createdAt: new Date().toISOString(),
+      status: 'new',
+    }, req.userId);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to submit issue report' });
   }
 });
 
