@@ -62,6 +62,47 @@ function shuffleOptionsAndRemap(item, dayKey) {
   };
 }
 
+function shuffleQuizOptions(item, dayKey) {
+  const options = [
+    { text: item.optionA, originalIndex: 0 },
+    { text: item.optionB, originalIndex: 1 },
+    { text: item.optionC, originalIndex: 2 },
+    { text: item.optionD, originalIndex: 3 },
+  ];
+  const list = [...options];
+  for (let i = list.length - 1; i > 0; i -= 1) {
+    const r = seededRandom(`daily-quiz-opt-${item.id}-${dayKey}-${i}`);
+    const j = Math.floor(r * (i + 1));
+    const tmp = list[i];
+    list[i] = list[j];
+    list[j] = tmp;
+  }
+  const correctIndex = list.findIndex((x) => x.originalIndex === Number(item.correctIndex));
+  return {
+    options: list.map((x) => x.text),
+    correctIndex: correctIndex >= 0 ? correctIndex : 0,
+  };
+}
+
+function pickDailyQuizItem(items, dayKey) {
+  if (!items.length) return null;
+  const published = items.filter((x) => x && x.isPublished !== false);
+  if (!published.length) return null;
+  const sortedNewestFirst = [...published].sort(
+    (a, b) => new Date(String(b.createdAt || b.updatedAt || 0)) - new Date(String(a.createdAt || a.updatedAt || 0)),
+  );
+  const recentCount = Math.max(1, Math.min(20, Math.ceil(sortedNewestFirst.length * 0.35)));
+  const recentPool = sortedNewestFirst.slice(0, recentCount);
+  const oldPool = sortedNewestFirst.slice(recentCount);
+  const preferRecent = dayKey % 2 === 0;
+  const chosenPool = preferRecent
+    ? (recentPool.length ? recentPool : oldPool)
+    : (oldPool.length ? oldPool : recentPool);
+  const r = seededRandom(`daily-quiz-item-${dayKey}-${chosenPool.length}`);
+  const idx = Math.floor(r * chosenPool.length) % chosenPool.length;
+  return chosenPool[idx];
+}
+
 async function loadDailyQuizSettings() {
   try {
     const { rows } = await pool.query(
@@ -131,6 +172,39 @@ router.get('/today', async (_req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to load daily digest' });
+  }
+});
+
+router.get('/quiz-today', async (_req, res) => {
+  try {
+    const settings = await pool.query(
+      `SELECT setting_value FROM app_settings WHERE setting_key = 'dailyQuizItems' LIMIT 1`,
+    );
+    const raw = settings.rows[0]?.setting_value;
+    const parsed = raw ? JSON.parse(String(raw || '{}')) : {};
+    const items = Array.isArray(parsed.items) ? parsed.items : [];
+    if (!items.length) {
+      return res.status(404).json({ error: 'No daily quiz content available' });
+    }
+    const schedule = await loadDailyQuizSettings();
+    const dayKey = resolveDailyKey(Date.now(), schedule);
+    const item = pickDailyQuizItem(items, dayKey);
+    if (!item) {
+      return res.status(404).json({ error: 'No daily quiz content available' });
+    }
+    const shuffled = shuffleQuizOptions(item, dayKey);
+    return res.json({
+      item: {
+        id: item.id,
+        questionPrompt: String(item.questionPrompt || ''),
+        options: shuffled.options,
+        correctIndex: shuffled.correctIndex,
+        explanation: String(item.explanation || ''),
+      },
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load daily quiz' });
   }
 });
 

@@ -469,6 +469,34 @@ async function setJsonSetting(settingKey, value, userId) {
   );
 }
 
+function normalizeDailyQuizItem(raw, fallbackId) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const id = String(src.id || fallbackId || '').trim() || `dq-${Date.now()}-${Math.floor(Math.random() * 9999)}`;
+  const questionPrompt = String(src.questionPrompt || '').trim().slice(0, 500);
+  const optionA = String(src.optionA || '').trim().slice(0, 180);
+  const optionB = String(src.optionB || '').trim().slice(0, 180);
+  const optionC = String(src.optionC || '').trim().slice(0, 180);
+  const optionD = String(src.optionD || '').trim().slice(0, 180);
+  const correctIndex = Number(src.correctIndex);
+  const explanation = String(src.explanation || '').trim().slice(0, 1500);
+  const isPublished = src.isPublished !== false;
+  if (!questionPrompt || !optionA || !optionB || !optionC || !optionD) return null;
+  if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3) return null;
+  return {
+    id,
+    questionPrompt,
+    optionA,
+    optionB,
+    optionC,
+    optionD,
+    correctIndex,
+    explanation,
+    isPublished,
+    createdAt: String(src.createdAt || new Date().toISOString()),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 async function enqueueNotification(userId, payload) {
   const current = await getJsonSetting('notificationScheduling', { items: [] });
   const items = Array.isArray(current.items) ? current.items : [];
@@ -1541,6 +1569,83 @@ router.delete('/digest/:id', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to delete daily digest item' });
+  }
+});
+
+router.get('/daily-quiz', async (_req, res) => {
+  try {
+    const payload = await getJsonSetting('dailyQuizItems', { items: [] });
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    return res.json({ items });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load daily quiz items' });
+  }
+});
+
+router.post('/daily-quiz', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const normalized = normalizeDailyQuizItem(body);
+    if (!normalized) {
+      return res.status(400).json({ error: 'Question, four options, and valid correctIndex are required' });
+    }
+    const current = await getJsonSetting('dailyQuizItems', { items: [] });
+    const items = Array.isArray(current.items) ? current.items : [];
+    const next = { items: [normalized, ...items].slice(0, 500) };
+    await setJsonSetting('dailyQuizItems', next, req.userId);
+    return res.status(201).json({ item: normalized });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to create daily quiz item' });
+  }
+});
+
+router.patch('/daily-quiz/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'Invalid daily quiz item id' });
+    const current = await getJsonSetting('dailyQuizItems', { items: [] });
+    const items = Array.isArray(current.items) ? current.items : [];
+    const idx = items.findIndex((x) => String(x.id || '') === id);
+    if (idx < 0) return res.status(404).json({ error: 'Daily quiz item not found' });
+    const normalized = normalizeDailyQuizItem(
+      {
+        ...items[idx],
+        ...(req.body || {}),
+        id,
+        createdAt: items[idx].createdAt,
+      },
+      id,
+    );
+    if (!normalized) {
+      return res.status(400).json({ error: 'Question, four options, and valid correctIndex are required' });
+    }
+    const nextItems = [...items];
+    nextItems[idx] = normalized;
+    await setJsonSetting('dailyQuizItems', { items: nextItems }, req.userId);
+    return res.json({ item: normalized });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to update daily quiz item' });
+  }
+});
+
+router.delete('/daily-quiz/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'Invalid daily quiz item id' });
+    const current = await getJsonSetting('dailyQuizItems', { items: [] });
+    const items = Array.isArray(current.items) ? current.items : [];
+    const nextItems = items.filter((x) => String(x.id || '') !== id);
+    if (nextItems.length === items.length) {
+      return res.status(404).json({ error: 'Daily quiz item not found' });
+    }
+    await setJsonSetting('dailyQuizItems', { items: nextItems }, req.userId);
+    return res.status(204).send();
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to delete daily quiz item' });
   }
 });
 

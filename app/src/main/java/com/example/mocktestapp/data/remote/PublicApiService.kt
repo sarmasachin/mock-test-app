@@ -25,6 +25,9 @@ interface PublicApiService {
     @GET("digest/today")
     suspend fun getDailyDigestToday(): DailyDigestTodayResponse
 
+    @GET("digest/quiz-today")
+    suspend fun getDailyQuizToday(): DailyQuizTodayResponse
+
     @GET("home/content")
     suspend fun getHomeContent(): HomeContentResponse
 

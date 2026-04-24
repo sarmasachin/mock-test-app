@@ -33,6 +33,12 @@ object ContentRepository {
         val correctIndex: Int,
         val factText: String,
     )
+    data class DailyQuizRemote(
+        val questionPrompt: String,
+        val options: List<String>,
+        val correctIndex: Int,
+        val explanation: String,
+    )
     data class HomeSectionRemote(
         val id: String,
         val title: String,
@@ -218,6 +224,21 @@ object ContentRepository {
             )
         } catch (e: Exception) {
             Log.w(TAG, "loadDailyDigestItem", e)
+            null
+        }
+    }
+
+    suspend fun loadDailyQuizItem(): DailyQuizRemote? = withContext(Dispatchers.IO) {
+        try {
+            val row = RetrofitProvider.publicApi.getDailyQuizToday().item
+            DailyQuizRemote(
+                questionPrompt = row.questionPrompt,
+                options = row.options,
+                correctIndex = row.correctIndex,
+                explanation = row.explanation.orEmpty(),
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "loadDailyQuizItem", e)
             null
         }
     }

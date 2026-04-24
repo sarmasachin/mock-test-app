@@ -63,43 +63,228 @@ fun DailyDigestScreenNew(
 ) {
     val today = remember { LocalDate.now() }
     var selectedDate by remember { mutableStateOf(today) }
+    var showQuiz by remember { mutableStateOf(false) }
     var showResult by remember { mutableStateOf(false) }
     val attemptedDates = remember { mutableStateOf(setOf(today.minusDays(1))) }
-    var digestItem by remember { mutableStateOf<ContentRepository.DailyDigestRemote?>(null) }
-    var digestError by remember { mutableStateOf(false) }
+    var quizItem by remember { mutableStateOf<ContentRepository.DailyQuizRemote?>(null) }
+    var quizError by remember { mutableStateOf(false) }
+    var selectedOptionIndex by remember { mutableStateOf<Int?>(null) }
+    var submittedOptionIndex by remember { mutableStateOf<Int?>(null) }
 
     LaunchedEffect(Unit) {
-        runCatching { ContentRepository.loadDailyDigestItem() }
+        runCatching { ContentRepository.loadDailyQuizItem() }
             .onSuccess {
-                digestItem = it
-                digestError = it == null
+                quizItem = it
+                quizError = it == null
             }
-            .onFailure { digestError = true }
+            .onFailure { quizError = true }
     }
 
-    if (!showResult) {
+    if (!showQuiz && !showResult) {
         DailyQuizDatePickerScreen(
             modifier = modifier,
             selectedDate = selectedDate,
             attemptedDates = attemptedDates.value,
-            digestItem = digestItem,
-            showDigestError = digestError,
+            digestItem = null,
+            showDigestError = quizError,
             onBack = onBack,
             onSelectDate = { selectedDate = it },
             onTakeTest = {
-                attemptedDates.value = attemptedDates.value + selectedDate
+                if (quizItem == null) {
+                    quizError = true
+                } else {
+                    attemptedDates.value = attemptedDates.value + selectedDate
+                    selectedOptionIndex = null
+                    showQuiz = true
+                }
+            },
+        )
+    } else if (showQuiz) {
+        DailyQuizQuestionScreen(
+            modifier = modifier,
+            question = quizItem,
+            selectedOptionIndex = selectedOptionIndex,
+            onBack = {
+                showQuiz = false
+                selectedOptionIndex = null
+            },
+            onSelectOption = { selectedOptionIndex = it },
+            onSubmit = {
+                submittedOptionIndex = selectedOptionIndex
+                showQuiz = false
                 showResult = true
             },
         )
     } else {
-        DailyQuizResultScreen(
+        DailyQuizResultLiveScreen(
             modifier = modifier,
+            question = quizItem,
+            selectedOptionIndex = submittedOptionIndex,
             onBack = onBack,
-            onClose = { showResult = false },
-            onLeaderboard = { },
-            onReAttempt = { showResult = false },
-            onSolution = { },
+            onClose = {
+                showResult = false
+                submittedOptionIndex = null
+            },
+            onReAttempt = {
+                selectedOptionIndex = null
+                showResult = false
+                showQuiz = true
+            },
         )
+    }
+}
+
+@Composable
+private fun DailyQuizQuestionScreen(
+    modifier: Modifier,
+    question: ContentRepository.DailyQuizRemote?,
+    selectedOptionIndex: Int?,
+    onBack: () -> Unit,
+    onSelectOption: (Int) -> Unit,
+    onSubmit: () -> Unit,
+) {
+    Scaffold(
+        containerColor = Color(0xFFF5F6FA),
+        contentWindowInsets = WindowInsets(0),
+    ) { padding ->
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = Color(0xFF3D3D3D))
+                }
+                Text(
+                    text = "Daily Quiz",
+                    color = Color(0xFF272727),
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = question?.questionPrompt?.ifBlank { "Question unavailable" } ?: "Question unavailable",
+                        color = Color(0xFF202020),
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 18.sp,
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    question?.options.orEmpty().forEachIndexed { index, option ->
+                        val selected = selectedOptionIndex == index
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp)
+                                .clickable { onSelectOption(index) },
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (selected) Color(0xFFE7EEFF) else Color(0xFFF8F8F8),
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Text(
+                                text = "${'A' + index}. $option",
+                                color = Color(0xFF2F2F2F),
+                                fontSize = 15.sp,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Button(
+                onClick = onSubmit,
+                enabled = selectedOptionIndex != null && question != null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = DailyBlue),
+                shape = DailyCardRadius,
+            ) {
+                Text("SUBMIT", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DailyQuizResultLiveScreen(
+    modifier: Modifier,
+    question: ContentRepository.DailyQuizRemote?,
+    selectedOptionIndex: Int?,
+    onBack: () -> Unit,
+    onClose: () -> Unit,
+    onReAttempt: () -> Unit,
+) {
+    val correctIndex = question?.correctIndex ?: -1
+    val isCorrect = selectedOptionIndex != null && selectedOptionIndex == correctIndex
+    val scoreText = if (isCorrect) "1 / 1" else "0 / 1"
+    Scaffold(
+        containerColor = Color(0xFFF4F5F9),
+        contentWindowInsets = WindowInsets(0),
+    ) { padding ->
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { onClose(); onBack() }) {
+                    Icon(Icons.Rounded.Close, contentDescription = "Close", tint = Color(0xFF555555))
+                }
+                Text(
+                    text = "Daily Quiz Result",
+                    color = Color(0xFF2B2B2B),
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 22.sp,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = DailyPanelRadius,
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text("Score: $scoreText", color = DailyBlue, fontWeight = FontWeight.Bold, fontSize = 24.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = if (isCorrect) "Great! Your answer is correct." else "Your answer is incorrect.",
+                        color = if (isCorrect) Color(0xFF16A34A) else Color(0xFFDC2626),
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    val selectedText = selectedOptionIndex?.let { idx ->
+                        question?.options?.getOrNull(idx)
+                    } ?: "Not answered"
+                    val correctText = question?.options?.getOrNull(correctIndex).orEmpty()
+                    Text("Your answer: $selectedText", color = Color(0xFF3D3D3D), fontSize = 14.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Correct answer: $correctText", color = Color(0xFF3D3D3D), fontSize = 14.sp)
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Button(
+                onClick = onReAttempt,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = DailyBlue),
+                shape = DailyCardRadius,
+            ) {
+                Text("RE-ATTEMPT", color = Color.White, fontWeight = FontWeight.SemiBold)
+            }
+        }
     }
 }
 
@@ -263,7 +448,7 @@ private fun DailyQuizDatePickerScreen(
                     Spacer(Modifier.width(10.dp))
                     Text(
                         text = digestItem?.questionPrompt?.takeIf { it.isNotBlank() }?.let { "Question: $it" }
-                            ?: if (showDigestError) "Daily digest unavailable right now" else "Current Affairs Mock Test",
+                            ?: if (showDigestError) "Daily quiz unavailable right now" else "Current Affairs Daily Quiz",
                         color = Color(0xFF303030),
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 17.sp,

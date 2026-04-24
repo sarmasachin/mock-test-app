@@ -174,6 +174,18 @@ data class DailyDigestTodayResponse(
     val item: DailyDigestItemDto,
 )
 
+data class DailyQuizItemDto(
+    val id: String,
+    @SerializedName("questionPrompt") val questionPrompt: String,
+    val options: List<String>,
+    @SerializedName("correctIndex") val correctIndex: Int,
+    val explanation: String? = null,
+)
+
+data class DailyQuizTodayResponse(
+    val item: DailyQuizItemDto,
+)
+
 data class HomeContentSectionDto(
     val id: String,
     val title: String,

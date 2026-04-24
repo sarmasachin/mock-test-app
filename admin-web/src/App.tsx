@@ -99,6 +99,18 @@ type DailyDigestItem = {
   is_published: boolean;
 };
 
+type DailyQuizItem = {
+  id: string;
+  questionPrompt: string;
+  optionA: string;
+  optionB: string;
+  optionC: string;
+  optionD: string;
+  correctIndex: number;
+  explanation: string;
+  isPublished: boolean;
+};
+
 
 type ArticleItem = {
   id: string;
@@ -1812,64 +1824,205 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
 }
 
 function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
-  const [items, setItems] = useState<TestItem[]>([]);
+  const [items, setItems] = useState<DailyQuizItem[]>([]);
+  const [questionPrompt, setQuestionPrompt] = useState('');
+  const [optionA, setOptionA] = useState('');
+  const [optionB, setOptionB] = useState('');
+  const [optionC, setOptionC] = useState('');
+  const [optionD, setOptionD] = useState('');
+  const [correctIndex, setCorrectIndex] = useState('0');
+  const [explanation, setExplanation] = useState('');
+  const [isPublished, setIsPublished] = useState(true);
+  const [editingId, setEditingId] = useState('');
   const [error, setError] = useState('');
+
   async function load() {
     try {
       setError('');
-      const res = await apiClient.get('/admin/tests');
-      const allItems: TestItem[] = res.data?.items || [];
-      setItems(allItems.filter((item) => item.test_kind === 'quiz'));
+      const res = await apiClient.get('/admin/daily-quiz');
+      setItems(res.data?.items || []);
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load quizzes');
+      setError(err?.response?.data?.error || 'Failed to load daily quiz items');
     }
   }
 
-  async function togglePublish(item: TestItem) {
+  async function createDailyQuizItem(e: FormEvent) {
+    e.preventDefault();
     try {
       setError('');
-      await apiClient.patch(`/admin/tests/${item.id}`, {
-        title: item.title,
-        slug: item.slug,
-        subcategory: item.subcategory,
-        metaLine: item.meta_line,
-        durationMinutes: item.duration_minutes,
-        questionCount: item.question_count,
-        testKind: item.test_kind,
-        isPublished: !item.is_published,
+      await apiClient.post('/admin/daily-quiz', {
+        questionPrompt,
+        optionA,
+        optionB,
+        optionC,
+        optionD,
+        correctIndex: Number(correctIndex),
+        explanation,
+        isPublished,
       });
+      setQuestionPrompt('');
+      setOptionA('');
+      setOptionB('');
+      setOptionC('');
+      setOptionD('');
+      setCorrectIndex('0');
+      setExplanation('');
+      setIsPublished(true);
       await load();
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to update daily quiz status');
+      setError(err?.response?.data?.error || 'Failed to create daily quiz item');
+    }
+  }
+
+  async function saveDailyQuizItem(item: DailyQuizItem) {
+    try {
+      setError('');
+      await apiClient.patch(`/admin/daily-quiz/${item.id}`, {
+        questionPrompt: item.questionPrompt,
+        optionA: item.optionA,
+        optionB: item.optionB,
+        optionC: item.optionC,
+        optionD: item.optionD,
+        correctIndex: item.correctIndex,
+        explanation: item.explanation,
+        isPublished: item.isPublished,
+      });
+      setEditingId('');
+      await load();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to update daily quiz item');
+    }
+  }
+
+  async function deleteDailyQuizItem(id: string) {
+    if (!window.confirm('Delete this daily quiz item?')) return;
+    try {
+      setError('');
+      await apiClient.delete(`/admin/daily-quiz/${id}`);
+      await load();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to delete daily quiz item');
     }
   }
 
   return (
     <section className="panel-card">
       <div className="panel-head">
-        <h3>Daily Quiz Control</h3>
+        <h3>Daily Quiz (separate from Daily Digest)</h3>
       </div>
+      <form onSubmit={createDailyQuizItem} className="question-form">
+        <input value={questionPrompt} onChange={(e) => setQuestionPrompt(e.target.value)} placeholder="Quiz question prompt" required />
+        <input value={optionA} onChange={(e) => setOptionA(e.target.value)} placeholder="Option A" required />
+        <input value={optionB} onChange={(e) => setOptionB(e.target.value)} placeholder="Option B" required />
+        <input value={optionC} onChange={(e) => setOptionC(e.target.value)} placeholder="Option C" required />
+        <input value={optionD} onChange={(e) => setOptionD(e.target.value)} placeholder="Option D" required />
+        <select value={correctIndex} onChange={(e) => setCorrectIndex(e.target.value)}>
+          <option value="0">Correct: A</option>
+          <option value="1">Correct: B</option>
+          <option value="2">Correct: C</option>
+          <option value="3">Correct: D</option>
+        </select>
+        <input value={explanation} onChange={(e) => setExplanation(e.target.value)} placeholder="Explanation (optional)" />
+        <label className="check-wrap">
+          <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
+          published
+        </label>
+        <div className="inline-form">
+          <button type="submit">Add Daily Quiz Item</button>
+        </div>
+      </form>
       <div className="inline-form">
-        <button onClick={load}>Load Daily Quizzes</button>
+        <button onClick={load}>Refresh Daily Quiz Items</button>
       </div>
       {error && <p className="error">{error}</p>}
       <div className="list table tests-table">
         <div className="row row-head">
-          <span>Title</span>
-          <span>Slug</span>
-          <span>Type</span>
-          <span>Status</span>
-          <span>Action 1</span>
-          <span>Action 2</span>
+          <span>Question</span>
+          <span>Correct</span>
+          <span>Published</span>
+          <span>A</span>
+          <span>B</span>
+          <span>C</span>
+          <span>D</span>
+          <span>Action</span>
         </div>
         {items.map((item) => (
           <div key={item.id} className="row">
-            <span>{item.title}</span>
-            <span>{item.slug}</span>
-            <span>{item.test_kind}</span>
-            <span>{item.is_published ? 'Published' : 'Hidden'}</span>
-            <button onClick={() => togglePublish(item)}>{item.is_published ? 'Hide Quiz' : 'Publish Quiz'}</button>
-            <span>-</span>
+            {editingId === item.id ? (
+              <>
+                <input
+                  value={item.questionPrompt}
+                  onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, questionPrompt: e.target.value } : x)))}
+                />
+                <select
+                  value={String(item.correctIndex)}
+                  onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, correctIndex: Number(e.target.value) } : x)))}
+                >
+                  <option value="0">A</option>
+                  <option value="1">B</option>
+                  <option value="2">C</option>
+                  <option value="3">D</option>
+                </select>
+                <label className="check-wrap">
+                  <input
+                    type="checkbox"
+                    checked={item.isPublished}
+                    onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, isPublished: e.target.checked } : x)))}
+                  />
+                  published
+                </label>
+                <input value={item.optionA} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, optionA: e.target.value } : x)))} />
+                <input value={item.optionB} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, optionB: e.target.value } : x)))} />
+                <input value={item.optionC} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, optionC: e.target.value } : x)))} />
+                <input value={item.optionD} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, optionD: e.target.value } : x)))} />
+                <div className="inline-form">
+                  <button onClick={() => saveDailyQuizItem(item)}>Save</button>
+                  <button className="ghost" onClick={() => setEditingId('')}>Cancel</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <span>{item.questionPrompt}</span>
+                <span>{['A', 'B', 'C', 'D'][item.correctIndex]}</span>
+                <span>{item.isPublished ? 'Published' : 'Hidden'}</span>
+                <span>{item.optionA}</span>
+                <span>{item.optionB}</span>
+                <span>{item.optionC}</span>
+                <span>{item.optionD}</span>
+                <div className="inline-form">
+                  <button onClick={() => setEditingId(item.id)}>Edit</button>
+                  <button className="danger" onClick={() => deleteDailyQuizItem(item.id)}>Delete</button>
+                </div>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="list table users-table">
+        <div className="row row-head">
+          <span>Question</span>
+          <span>Explanation</span>
+          <span>Status</span>
+          <span>Toggle</span>
+        </div>
+        {items.map((item) => (
+          <div key={item.id} className="row">
+            <span>{item.questionPrompt.slice(0, 60)}</span>
+            <span>{item.explanation.slice(0, 80)}</span>
+            <span>{item.isPublished ? 'Published' : 'Hidden'}</span>
+            <button
+              onClick={async () => {
+                try {
+                  setError('');
+                  await apiClient.patch(`/admin/daily-quiz/${item.id}`, { ...item, isPublished: !item.isPublished });
+                  await load();
+                } catch (err: any) {
+                  setError(err?.response?.data?.error || 'Failed to update daily quiz publish status');
+                }
+              }}
+            >
+              {item.isPublished ? 'Unpublish' : 'Publish'}
+            </button>
           </div>
         ))}
       </div>

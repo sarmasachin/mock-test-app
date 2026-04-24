@@ -530,7 +530,7 @@ fun MainBottomNavHost(
             }
 
             composable(RoutesNew.DAILY) {
-                DailyDigestScreenNew(
+                DailyDigestContentScreenNew(
                     onBack = { mainNavController.popBackOrHome() },
                 )
             }
@@ -554,7 +554,7 @@ fun MainBottomNavHost(
             }
 
             composable(RoutesNew.MENU_QUIZ) {
-                DailyDigestContentScreenNew(
+                DailyDigestScreenNew(
                     onBack = { mainNavController.popBackOrHome() },
                 )
             }
