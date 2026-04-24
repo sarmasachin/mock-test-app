@@ -1,7 +1,7 @@
 -- Seed one default admin user for fresh setup
--- Email: admin@mocktest.com
+-- Email: sharma.sahchinctr@gmail.com
 -- Mobile: (empty; login with email)
--- Password: Admin@1234
+-- Password: 123456
 
 BEGIN;
 
@@ -10,7 +10,7 @@ DECLARE
     chosen_id INTEGER;
 BEGIN
     IF EXISTS (
-        SELECT 1 FROM users WHERE email_normalized = lower(trim('admin@mocktest.com'))
+        SELECT 1 FROM users WHERE email_normalized = lower(trim('sharma.sahchinctr@gmail.com'))
     ) THEN
         UPDATE users
         SET
@@ -20,9 +20,9 @@ BEGIN
             phone = CASE WHEN phone = '' THEN '' ELSE phone END,
             signup_state = 'Himachal Pradesh',
             signup_district = 'Bilaspur',
-            password_hash = '$2a$12$.Zd2JdjQnjgPiC44UgQIQ.ZV4EFlZiMUIdXEbmLDQy3FR39M0SsRq',
+            password_hash = '$2a$12$jX56hgCA8XziZPo27td65ezmbLv6pNoRX3qJtsOTdcdN1EUwzP6/u',
             updated_at = now()
-        WHERE email_normalized = lower(trim('admin@mocktest.com'));
+        WHERE email_normalized = lower(trim('sharma.sahchinctr@gmail.com'));
     ELSE
         LOOP
             chosen_id := 100000 + floor(random() * 900000)::int;
@@ -38,8 +38,8 @@ BEGIN
                     is_admin,
                     is_super_admin
                 ) VALUES (
-                    'admin@mocktest.com',
-                    '$2a$12$.Zd2JdjQnjgPiC44UgQIQ.ZV4EFlZiMUIdXEbmLDQy3FR39M0SsRq',
+                    'sharma.sahchinctr@gmail.com',
+                    '$2a$12$jX56hgCA8XziZPo27td65ezmbLv6pNoRX3qJtsOTdcdN1EUwzP6/u',
                     'Super Admin',
                     '',
                     chosen_id,
@@ -52,7 +52,7 @@ BEGIN
             EXCEPTION
                 WHEN unique_violation THEN
                     IF EXISTS (
-                        SELECT 1 FROM users WHERE email_normalized = lower(trim('admin@mocktest.com'))
+                        SELECT 1 FROM users WHERE email_normalized = lower(trim('sharma.sahchinctr@gmail.com'))
                     ) THEN
                         EXIT;
                     END IF;
