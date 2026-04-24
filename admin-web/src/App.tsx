@@ -65,6 +65,8 @@ type TestItem = {
   negative_marking_text?: string;
   test_type_label?: string;
   valid_until?: string | null;
+  answer_key_release_at?: string | null;
+  result_release_at?: string | null;
   dynamic_date_enabled?: boolean;
   date_cycle_days?: number;
   test_kind: TestKind;
@@ -148,12 +150,22 @@ type HomeBannerItem = {
   imageUrl: string;
   enabled: boolean;
 };
+type HomeNewsSlideItem = {
+  id: string;
+  articleId: string;
+  headline: string;
+  imageUrl: string;
+  enabled: boolean;
+};
 type HomeContentSettings = {
   welcomeText: string;
   quickActionsTitle: string;
   sections: HomeContentSection[];
   quickActionSections: HomeQuickActionSection[];
   banners: HomeBannerItem[];
+  newsSlides: HomeNewsSlideItem[];
+  startSeriesLockSeconds: number;
+  startSeriesActiveWindowMinutes: number;
 };
 type AuditLogItem = {
   id: number;
@@ -255,6 +267,14 @@ function normalizeBoolean(value: unknown, fallback = true) {
     if (value === 0) return false;
   }
   return fallback;
+}
+
+function toDateTimeLocal(value?: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
 }
 
 function App() {
@@ -611,6 +631,8 @@ function TestsTab({
   const [negativeMarkingText, setNegativeMarkingText] = useState('Yes (-1)');
   const [testTypeLabel, setTestTypeLabel] = useState('Full Mock');
   const [validUntil, setValidUntil] = useState('');
+  const [answerKeyReleaseAt, setAnswerKeyReleaseAt] = useState('');
+  const [resultReleaseAt, setResultReleaseAt] = useState('');
   const [dynamicDateEnabled, setDynamicDateEnabled] = useState(false);
   const [dateCycleDays, setDateCycleDays] = useState('0');
   const [search, setSearch] = useState('');
@@ -668,6 +690,8 @@ function TestsTab({
             negative_marking_text: String(x.negative_marking_text || 'No'),
             test_type_label: String(x.test_type_label || 'Full Mock'),
             valid_until: x.valid_until || '',
+            answer_key_release_at: x.answer_key_release_at || '',
+            result_release_at: x.result_release_at || '',
             dynamic_date_enabled: normalizeBoolean(x.dynamic_date_enabled, false),
             date_cycle_days: Number(x.date_cycle_days || 0),
           }))
@@ -705,6 +729,8 @@ function TestsTab({
         negativeMarkingText: negativeMarkingText.trim() || 'No',
         testTypeLabel: testTypeLabel.trim() || 'Full Mock',
         validUntil: validUntil.trim(),
+        answerKeyReleaseAt: answerKeyReleaseAt || null,
+        resultReleaseAt: resultReleaseAt || null,
         dynamicDateEnabled,
         dateCycleDays: Number(dateCycleDays || '0'),
         testKind: kind,
@@ -727,6 +753,8 @@ function TestsTab({
       setNegativeMarkingText('Yes (-1)');
       setTestTypeLabel('Full Mock');
       setValidUntil('');
+      setAnswerKeyReleaseAt('');
+      setResultReleaseAt('');
       setDynamicDateEnabled(false);
       setDateCycleDays('0');
       await load();
@@ -760,6 +788,8 @@ function TestsTab({
         negativeMarkingText: current.negative_marking_text || 'No',
         testTypeLabel: current.test_type_label || 'Full Mock',
         validUntil: current.valid_until || '',
+        answerKeyReleaseAt: current.answer_key_release_at || null,
+        resultReleaseAt: current.result_release_at || null,
         dynamicDateEnabled: normalizeBoolean(current.dynamic_date_enabled, false),
         dateCycleDays: current.date_cycle_days || 0,
         testKind: current.test_kind,
@@ -917,6 +947,10 @@ function TestsTab({
       </div>
       {mode === 'allTests' && (
         <>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Home category mapping tip: keep the same <b>Subcategory</b> for related exams (e.g. Patwari), and keep each
+            <b> Test title</b> unique (e.g. Patwari - HP, Patwari - Punjab) so users can choose the correct exam.
+          </p>
           <form onSubmit={createTest} className="all-tests-create">
             <div className="all-tests-section">
               <h4>Basic</h4>
@@ -936,6 +970,18 @@ function TestsTab({
               <div className="all-tests-grid">
                 <input type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} />
                 <input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} />
+                <input
+                  type="datetime-local"
+                  value={answerKeyReleaseAt}
+                  onChange={(e) => setAnswerKeyReleaseAt(e.target.value)}
+                  placeholder="Answer key release"
+                />
+                <input
+                  type="datetime-local"
+                  value={resultReleaseAt}
+                  onChange={(e) => setResultReleaseAt(e.target.value)}
+                  placeholder="Result release"
+                />
                 <input value={slotLabel} onChange={(e) => setSlotLabel(e.target.value)} placeholder="Slot label (e.g. Morning)" />
                 <input type="number" value={durationMinutes} onChange={(e) => setDurationMinutes(e.target.value)} placeholder="Duration (minutes)" />
                 <input type="number" value={questionCount} onChange={(e) => setQuestionCount(e.target.value)} placeholder="Question count" />
@@ -1049,6 +1095,20 @@ function TestsTab({
                         type="date"
                         value={item.valid_until || ''}
                         onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, valid_until: e.target.value } : x)))}
+                      />
+                      <input
+                        type="datetime-local"
+                        value={toDateTimeLocal(item.answer_key_release_at)}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, answer_key_release_at: e.target.value } : x)))
+                        }
+                      />
+                      <input
+                        type="datetime-local"
+                        value={toDateTimeLocal(item.result_release_at)}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, result_release_at: e.target.value } : x)))
+                        }
                       />
                     </div>
                     <div>
@@ -1467,14 +1527,39 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState('');
   const [error, setError] = useState('');
+  const [dailyReleaseHour, setDailyReleaseHour] = useState('10');
+  const [dailyReleaseMinute, setDailyReleaseMinute] = useState('0');
+  const [dailyTimezoneOffset, setDailyTimezoneOffset] = useState('330');
 
   async function load() {
     try {
       setError('');
-      const res = await apiClient.get('/admin/digest');
-      setItems(res.data?.items || []);
+      const [digestRes, settingsRes] = await Promise.all([
+        apiClient.get('/admin/digest'),
+        apiClient.get('/admin/settings'),
+      ]);
+      setItems(digestRes.data?.items || []);
+      const schedule = settingsRes.data?.settings?.dailyQuizSettings || {};
+      setDailyReleaseHour(String(Math.max(0, Math.min(23, Number(schedule.releaseHour ?? 10)))));
+      setDailyReleaseMinute(String(Math.max(0, Math.min(59, Number(schedule.releaseMinute ?? 0)))));
+      setDailyTimezoneOffset(String(Math.max(-720, Math.min(840, Number(schedule.timezoneOffsetMinutes ?? 330)))));
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Failed to load daily digest items');
+    }
+  }
+  async function saveDailySchedule() {
+    try {
+      setError('');
+      await apiClient.patch('/admin/settings', {
+        dailyQuizSettings: {
+          releaseHour: Number(dailyReleaseHour || '10'),
+          releaseMinute: Number(dailyReleaseMinute || '0'),
+          timezoneOffsetMinutes: Number(dailyTimezoneOffset || '330'),
+        },
+      });
+      await load();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to save daily quiz schedule');
     }
   }
   async function createDigestItem(e: FormEvent) {
@@ -1567,6 +1652,33 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
           <button type="submit">Add Digest Item</button>
         </div>
       </form>
+      <div className="inline-form" style={{ marginBottom: 8 }}>
+        <input
+          type="number"
+          min={0}
+          max={23}
+          value={dailyReleaseHour}
+          onChange={(e) => setDailyReleaseHour(e.target.value)}
+          placeholder="Release hour (0-23)"
+        />
+        <input
+          type="number"
+          min={0}
+          max={59}
+          value={dailyReleaseMinute}
+          onChange={(e) => setDailyReleaseMinute(e.target.value)}
+          placeholder="Release minute (0-59)"
+        />
+        <input
+          type="number"
+          min={-720}
+          max={840}
+          value={dailyTimezoneOffset}
+          onChange={(e) => setDailyTimezoneOffset(e.target.value)}
+          placeholder="Timezone offset minutes (IST=330)"
+        />
+        <button type="button" onClick={saveDailySchedule}>Save Daily Quiz Time</button>
+      </div>
       <button onClick={load}>Refresh Digest Items</button>
       <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search digest items" />
       {error && <p className="error">{error}</p>}
@@ -2519,7 +2631,11 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
       },
     ],
     banners: [],
+    newsSlides: [],
+    startSeriesLockSeconds: 20,
+    startSeriesActiveWindowMinutes: 30,
   });
+  const [newsItems, setNewsItems] = useState<ArticleItem[]>([]);
   const [newSectionTitle, setNewSectionTitle] = useState('');
   const [newSectionItems, setNewSectionItems] = useState('');
   const [newQuickSectionTitle, setNewQuickSectionTitle] = useState('');
@@ -2532,8 +2648,11 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   async function load() {
     try {
       setError('');
-      const res = await apiClient.get('/admin/settings');
+      const [settingsRes, articleRes] = await Promise.all([apiClient.get('/admin/settings'), apiClient.get('/admin/articles')]);
+      const res = settingsRes;
       const home = res.data?.settings?.homeContent;
+      const allArticles: ArticleItem[] = articleRes.data?.items || [];
+      setNewsItems(allArticles.filter((item) => item.feed_kind === 'news' && item.is_published));
       if (home && typeof home === 'object') {
         setSettings({
           welcomeText: String(home.welcomeText || 'Welcome Rahul'),
@@ -2565,6 +2684,17 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
                 enabled: b.enabled !== false,
               }))
             : [],
+          newsSlides: Array.isArray(home.newsSlides)
+            ? home.newsSlides.map((slide: any, idx: number) => ({
+                id: String(slide.id || `news-slide-${idx + 1}`),
+                articleId: String(slide.articleId || ''),
+                headline: String(slide.headline || ''),
+                imageUrl: String(slide.imageUrl || ''),
+                enabled: slide.enabled !== false,
+              }))
+            : [],
+          startSeriesLockSeconds: Number(home.startSeriesLockSeconds || 20),
+          startSeriesActiveWindowMinutes: Number(home.startSeriesActiveWindowMinutes || 30),
         });
       }
     } catch (err: any) {
@@ -2687,6 +2817,25 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
     }
   }
 
+  function addNewsSlide(article: ArticleItem) {
+    setSettings((p) => {
+      if (p.newsSlides.some((x) => x.articleId === article.id)) return p;
+      return {
+        ...p,
+        newsSlides: [
+          ...p.newsSlides,
+          {
+            id: `news-slide-${Date.now()}-${article.id.slice(0, 8)}`,
+            articleId: article.id,
+            headline: article.headline,
+            imageUrl: '',
+            enabled: true,
+          },
+        ],
+      };
+    });
+  }
+
   return (
     <section className="panel-card">
       <div className="panel-head">
@@ -2702,6 +2851,22 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
           value={settings.quickActionsTitle}
           onChange={(e) => setSettings((p) => ({ ...p, quickActionsTitle: e.target.value }))}
           placeholder="Quick actions title"
+        />
+        <input
+          type="number"
+          min={0}
+          max={86400}
+          value={settings.startSeriesLockSeconds}
+          onChange={(e) => setSettings((p) => ({ ...p, startSeriesLockSeconds: Number(e.target.value || 0) }))}
+          placeholder="Start lock seconds"
+        />
+        <input
+          type="number"
+          min={1}
+          max={10080}
+          value={settings.startSeriesActiveWindowMinutes}
+          onChange={(e) => setSettings((p) => ({ ...p, startSeriesActiveWindowMinutes: Number(e.target.value || 1) }))}
+          placeholder="Active window minutes"
         />
       </div>
       <div className="inline-form">
@@ -2783,6 +2948,116 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
                 setSettings((p) => ({
                   ...p,
                   sections: p.sections.filter((x) => x.id !== section.id),
+                }))
+              }
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="list table">
+        <div className="row row-head" style={{ gridTemplateColumns: '2fr 120px 120px' }}>
+          <span>Published News (Add to slider)</span>
+          <span>Add</span>
+          <span>Open</span>
+        </div>
+        {newsItems.map((article) => (
+          <div key={article.id} className="row" style={{ gridTemplateColumns: '2fr 120px 120px' }}>
+            <span title={article.summary || ''}>{article.headline}</span>
+            <button type="button" onClick={() => addNewsSlide(article)} disabled={settings.newsSlides.some((x) => x.articleId === article.id)}>
+              {settings.newsSlides.some((x) => x.articleId === article.id) ? 'Added' : 'Add'}
+            </button>
+            <button type="button" className="ghost" onClick={() => window.open(article.link_url || '', '_blank')} disabled={!article.link_url}>
+              Link
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="list table">
+        <div className="row row-head" style={{ gridTemplateColumns: '1.4fr 1.4fr 120px 90px 90px 90px' }}>
+          <span>News headline</span>
+          <span>Banner Image URL</span>
+          <span>Enabled</span>
+          <span>Up</span>
+          <span>Down</span>
+          <span>Delete</span>
+        </div>
+        {settings.newsSlides.map((slide, index) => (
+          <div key={slide.id} className="row" style={{ gridTemplateColumns: '1.4fr 1.4fr 120px 90px 90px 90px' }}>
+            <input
+              value={slide.headline}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  newsSlides: p.newsSlides.map((x) => (x.id === slide.id ? { ...x, headline: e.target.value } : x)),
+                }))
+              }
+            />
+            <input
+              value={slide.imageUrl}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  newsSlides: p.newsSlides.map((x) => (x.id === slide.id ? { ...x, imageUrl: e.target.value } : x)),
+                }))
+              }
+              placeholder="Paste news image URL"
+            />
+            <label className="check-wrap">
+              <input
+                type="checkbox"
+                checked={slide.enabled}
+                onChange={(e) =>
+                  setSettings((p) => ({
+                    ...p,
+                    newsSlides: p.newsSlides.map((x) => (x.id === slide.id ? { ...x, enabled: e.target.checked } : x)),
+                  }))
+                }
+              />
+              on
+            </label>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() =>
+                setSettings((p) => {
+                  if (index === 0) return p;
+                  const next = [...p.newsSlides];
+                  const tmp = next[index - 1];
+                  next[index - 1] = next[index];
+                  next[index] = tmp;
+                  return { ...p, newsSlides: next };
+                })
+              }
+              disabled={index === 0}
+            >
+              Up
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() =>
+                setSettings((p) => {
+                  if (index >= p.newsSlides.length - 1) return p;
+                  const next = [...p.newsSlides];
+                  const tmp = next[index + 1];
+                  next[index + 1] = next[index];
+                  next[index] = tmp;
+                  return { ...p, newsSlides: next };
+                })
+              }
+              disabled={index >= settings.newsSlides.length - 1}
+            >
+              Down
+            </button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() =>
+                setSettings((p) => ({
+                  ...p,
+                  newsSlides: p.newsSlides.filter((x) => x.id !== slide.id),
                 }))
               }
             >

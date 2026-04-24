@@ -27,4 +27,16 @@ interface PublicApiService {
 
     @GET("home/content")
     suspend fun getHomeContent(): HomeContentResponse
+
+    @GET("leaderboard")
+    suspend fun getLeaderboard(
+        @Query("range") range: String,
+        @Query("city") city: String? = null,
+        @Query("state") state: String? = null,
+        @Query("testCatalogId") testCatalogId: String? = null,
+        @Query("limit") limit: Int = 100,
+    ): LeaderboardResponse
+
+    @GET("leaderboard/filters")
+    suspend fun getLeaderboardFilters(): LeaderboardFiltersResponse
 }

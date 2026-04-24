@@ -48,12 +48,21 @@ object ContentRepository {
         val title: String,
         val items: List<HomeQuickActionItemRemote>,
     )
+    data class HomeNewsSlideRemote(
+        val id: String,
+        val articleId: String,
+        val headline: String?,
+        val imageUrl: String,
+    )
     data class HomeContentRemote(
         val welcomeText: String?,
         val quickActionsTitle: String?,
         val sections: List<HomeSectionRemote>,
         val quickActionSections: List<HomeQuickActionSectionRemote>,
         val banners: List<String>,
+        val newsSlides: List<HomeNewsSlideRemote>,
+        val startSeriesLockSeconds: Int,
+        val startSeriesActiveWindowMinutes: Int,
     )
     data class SubmitApplicationContentRemote(
         val title: String?,
@@ -93,6 +102,34 @@ object ContentRepository {
         val level3: String,
         val iconKey: String?,
         val enabled: Boolean,
+    )
+    data class PollItemRemote(
+        val id: String,
+        val question: String,
+        val options: List<String>,
+        val allowMultiple: Boolean,
+    )
+    data class PushNotificationItemRemote(
+        val id: String,
+        val title: String,
+        val message: String,
+        val createdAt: String?,
+    )
+    data class LeaderboardItemRemote(
+        val rank: Int,
+        val name: String,
+        val city: String,
+        val state: String,
+        val score: Int,
+    )
+    data class LeaderboardFilterTestRemote(
+        val id: String,
+        val title: String,
+    )
+    data class LeaderboardFiltersRemote(
+        val tests: List<LeaderboardFilterTestRemote>,
+        val cities: List<String>,
+        val states: List<String>,
     )
 
     suspend fun loadNewsFeed(feedKind: String): List<ManualNewsItem> = withContext(Dispatchers.IO) {
@@ -212,6 +249,18 @@ object ContentRepository {
                     )
                 },
                 banners = content.banners.filter { it.enabled && it.imageUrl.isNotBlank() }.map { it.imageUrl },
+                newsSlides = content.newsSlides
+                    .filter { it.enabled && it.articleId.isNotBlank() && it.imageUrl.isNotBlank() }
+                    .map {
+                        HomeNewsSlideRemote(
+                            id = it.id,
+                            articleId = it.articleId,
+                            headline = it.headline,
+                            imageUrl = it.imageUrl,
+                        )
+                    },
+                startSeriesLockSeconds = (content.startSeriesLockSeconds ?: 20).coerceIn(0, 86_400),
+                startSeriesActiveWindowMinutes = (content.startSeriesActiveWindowMinutes ?: 30).coerceIn(1, 10_080),
             )
         } catch (e: Exception) {
             Log.w(TAG, "loadHomeContent", e)
@@ -298,6 +347,109 @@ object ContentRepository {
         }
     }
 
+    suspend fun loadPollItems(): List<PollItemRemote> = withContext(Dispatchers.IO) {
+        try {
+            val items = RetrofitProvider.publicApi.getHomeContent().pollSettings?.items ?: emptyList()
+            items
+                .filter { it.enabled && it.question.isNotBlank() && it.options.isNotEmpty() }
+                .map {
+                    PollItemRemote(
+                        id = it.id,
+                        question = it.question,
+                        options = it.options.filter { option -> option.isNotBlank() },
+                        allowMultiple = it.allowMultiple,
+                    )
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "loadPollItems", e)
+            emptyList()
+        }
+    }
+
+    suspend fun submitPollVote(
+        pollId: String,
+        optionIndexes: List<Int>,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val id = pollId.trim()
+        if (id.isBlank()) return@withContext false
+        val normalized = optionIndexes.distinct().filter { it >= 0 }
+        if (normalized.isEmpty()) return@withContext false
+        try {
+            RetrofitProvider.appApi.postPollVote(
+                pollId = id,
+                body = com.example.mocktestapp.data.remote.PollVoteRequest(normalized),
+            ).ok
+        } catch (e: Exception) {
+            Log.w(TAG, "submitPollVote", e)
+            false
+        }
+    }
+
+    suspend fun loadNotifications(): List<PushNotificationItemRemote> = withContext(Dispatchers.IO) {
+        try {
+            val items = RetrofitProvider.publicApi.getHomeContent().pushNotificationSettings?.items ?: emptyList()
+            items
+                .filter {
+                    it.enabled &&
+                        (it.status.isNullOrBlank() || it.status.equals("sent", ignoreCase = true) || it.status.equals("draft", ignoreCase = true)) &&
+                        (!it.title.isNullOrBlank() || !it.message.isNullOrBlank())
+                }
+                .map {
+                    PushNotificationItemRemote(
+                        id = it.id,
+                        title = it.title.orEmpty().ifBlank { "Notification" },
+                        message = it.message.orEmpty().ifBlank { "No message" },
+                        createdAt = it.createdAt,
+                    )
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "loadNotifications", e)
+            emptyList()
+        }
+    }
+
+    suspend fun loadLeaderboardFilters(): LeaderboardFiltersRemote = withContext(Dispatchers.IO) {
+        try {
+            val data = RetrofitProvider.publicApi.getLeaderboardFilters()
+            LeaderboardFiltersRemote(
+                tests = data.tests.map { LeaderboardFilterTestRemote(id = it.id, title = it.title) },
+                cities = data.cities.filter { it.isNotBlank() },
+                states = data.states.filter { it.isNotBlank() },
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "loadLeaderboardFilters", e)
+            LeaderboardFiltersRemote(emptyList(), emptyList(), emptyList())
+        }
+    }
+
+    suspend fun loadLeaderboard(
+        range: String,
+        city: String?,
+        state: String?,
+        testCatalogId: String?,
+    ): List<LeaderboardItemRemote> = withContext(Dispatchers.IO) {
+        try {
+            RetrofitProvider.publicApi.getLeaderboard(
+                range = range,
+                city = city?.takeIf { it.isNotBlank() },
+                state = state?.takeIf { it.isNotBlank() },
+                testCatalogId = testCatalogId?.takeIf { it.isNotBlank() },
+                limit = 100,
+            ).items.map {
+                LeaderboardItemRemote(
+                    rank = it.rank,
+                    name = it.name,
+                    city = it.city.orEmpty(),
+                    state = it.state.orEmpty(),
+                    score = it.score,
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "loadLeaderboard", e)
+            emptyList()
+        }
+    }
+
     private fun manualFallback(kind: String): List<ManualNewsItem> = when (kind) {
         "job" -> ManualJobAlertContent.items
         "exam" -> ManualExamAlertContent.items
@@ -355,6 +507,8 @@ object ContentRepository {
             negativeMarkingText = negativeMarkingText,
             testTypeLabel = testTypeLabel,
             validUntil = validUntil?.let { "Available till $it" },
+            answerKeyReleaseAt = answerKeyReleaseAt,
+            resultReleaseAt = resultReleaseAt,
         )
     }
 

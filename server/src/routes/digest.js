@@ -62,6 +62,45 @@ function shuffleOptionsAndRemap(item, dayKey) {
   };
 }
 
+async function loadDailyQuizSettings() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT setting_value FROM app_settings WHERE setting_key = 'dailyQuizSettings' LIMIT 1`,
+    );
+    const raw = rows[0]?.setting_value;
+    const parsed = raw ? JSON.parse(String(raw || '{}')) : {};
+    return {
+      releaseHour: Math.max(0, Math.min(23, Number(parsed.releaseHour ?? 10))),
+      releaseMinute: Math.max(0, Math.min(59, Number(parsed.releaseMinute ?? 0))),
+      timezoneOffsetMinutes: Math.max(-720, Math.min(840, Number(parsed.timezoneOffsetMinutes ?? 330))),
+    };
+  } catch (_e) {
+    return { releaseHour: 10, releaseMinute: 0, timezoneOffsetMinutes: 330 };
+  }
+}
+
+function resolveDailyKey(nowMs, schedule) {
+  const offsetMs = Number(schedule.timezoneOffsetMinutes || 0) * 60 * 1000;
+  const localNow = new Date(nowMs + offsetMs);
+  const releaseAnchor = new Date(Date.UTC(
+    localNow.getUTCFullYear(),
+    localNow.getUTCMonth(),
+    localNow.getUTCDate(),
+    Number(schedule.releaseHour || 0),
+    Number(schedule.releaseMinute || 0),
+    0,
+    0,
+  ));
+  let effective = localNow;
+  if (localNow.getTime() < releaseAnchor.getTime()) {
+    effective = new Date(localNow.getTime() - 24 * 60 * 60 * 1000);
+  }
+  const y = effective.getUTCFullYear();
+  const m = String(effective.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(effective.getUTCDate()).padStart(2, '0');
+  return Number(`${y}${m}${d}`);
+}
+
 router.get('/today', async (_req, res) => {
   try {
     const { rows } = await pool.query(
@@ -73,9 +112,8 @@ router.get('/today', async (_req, res) => {
     if (!rows.length) {
       return res.status(404).json({ error: 'No daily digest content available' });
     }
-    const now = new Date();
-    const dayOfYear = Math.floor((Date.now() - Date.UTC(now.getUTCFullYear(), 0, 0)) / 86400000);
-    const dayKey = Number(`${now.getUTCFullYear()}${String(dayOfYear).padStart(3, '0')}`);
+    const schedule = await loadDailyQuizSettings();
+    const dayKey = resolveDailyKey(Date.now(), schedule);
     const item = pickDailyDigestItem(rows, dayKey);
     if (!item) {
       return res.status(404).json({ error: 'No daily digest content available' });

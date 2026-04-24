@@ -32,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -44,13 +45,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mocktestapp.data.AppPreferencesRepository
+import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.data.TestHistoryRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 import java.io.File
 import java.io.FileOutputStream
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.delay
 
 @Composable
 fun ResultScreenNew(
@@ -73,6 +77,24 @@ fun ResultScreenNew(
             userIdFormatted = null,
         ),
     )
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    var answerKeyReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
+    var resultReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
+    LaunchedEffect(testName) {
+        val snapshot = ContentRepository.loadTestByTitle(testName)
+        answerKeyReleaseAtMs = parseIsoMillis(snapshot?.answerKeyReleaseAt)
+        resultReleaseAtMs = parseIsoMillis(snapshot?.resultReleaseAt)
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            nowMs = System.currentTimeMillis()
+        }
+    }
+    val isResultLocked = (resultReleaseAtMs ?: 0L) > nowMs
+    val isAnswerKeyLocked = (answerKeyReleaseAtMs ?: 0L) > nowMs
+    val resultCountdown = formatCountdown((resultReleaseAtMs ?: 0L) - nowMs)
+    val answerKeyCountdown = formatCountdown((answerKeyReleaseAtMs ?: 0L) - nowMs)
 
     // One Room insert per completed result; survives rotation but resets when this result’s inputs change.
     var historyWritten by rememberSaveable(testName, scoreText, correct, wrong) { mutableStateOf(false) }
@@ -132,6 +154,15 @@ fun ResultScreenNew(
                     )
 
                     Spacer(Modifier.height(14.dp))
+                    if (isResultLocked) {
+                        Text(
+                            text = "Result unlock in $resultCountdown",
+                            color = p.textPrimary,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 18.sp,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -149,14 +180,16 @@ fun ResultScreenNew(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         GhostPillButton(
-                            text = "Answer Key",
-                            onClick = onAnswerKey,
+                            text = if (isAnswerKeyLocked) "Answer Key • $answerKeyCountdown" else "Answer Key",
+                            onClick = { if (!isAnswerKeyLocked) onAnswerKey() },
                             modifier = Modifier.weight(1f),
+                            enabled = !isAnswerKeyLocked,
                         )
                         SolidPillButton(
                             text = "Review",
-                            onClick = onReview,
+                            onClick = { if (!isResultLocked) onReview() },
                             modifier = Modifier.weight(1f),
+                            enabled = !isResultLocked,
                         )
                     }
 
@@ -164,6 +197,7 @@ fun ResultScreenNew(
                     GhostPillButton(
                         text = "Share score",
                         onClick = {
+                            if (isResultLocked) return@GhostPillButton
                             try {
                                 val now = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a").format(LocalDateTime.now())
                                 val userName = profile.displayName.ifBlank { "Guest User" }
@@ -199,6 +233,7 @@ fun ResultScreenNew(
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
+                        enabled = !isResultLocked,
                     )
                 }
             }
@@ -393,11 +428,13 @@ private fun StatMini(
 private fun GhostPillButton(
     text: String,
     onClick: () -> Unit,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val p = mockTestPalette()
     Button(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier.height(46.dp),
         shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.buttonColors(
@@ -414,11 +451,13 @@ private fun GhostPillButton(
 private fun SolidPillButton(
     text: String,
     onClick: () -> Unit,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val p = mockTestPalette()
     Button(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier.height(46.dp),
         shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.buttonColors(
@@ -428,4 +467,22 @@ private fun SolidPillButton(
     ) {
         Text(text = text, fontWeight = FontWeight.Bold)
     }
+}
+
+private fun parseIsoMillis(iso: String?): Long? {
+    if (iso.isNullOrBlank()) return null
+    return try {
+        Instant.parse(iso).toEpochMilli()
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun formatCountdown(remainingMs: Long): String {
+    if (remainingMs <= 0L) return "00:00:00"
+    val totalSeconds = remainingMs / 1000L
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return String.format("%02d:%02d:%02d", hours, minutes, seconds)
 }

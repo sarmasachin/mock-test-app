@@ -6,6 +6,7 @@ import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.PATCH
 import retrofit2.http.POST
+import retrofit2.http.Path
 
 interface AppApiService {
 
@@ -23,4 +24,10 @@ interface AppApiService {
 
     @POST("attempts")
     suspend fun postAttempt(@Body body: AttemptRequest): AttemptResponse
+
+    @POST("polls/{pollId}/vote")
+    suspend fun postPollVote(
+        @Path("pollId") pollId: String,
+        @Body body: PollVoteRequest,
+    ): PollVoteResponse
 }

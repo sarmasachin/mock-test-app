@@ -40,6 +40,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -49,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mocktestapp.data.ContentRepository
+import com.example.mocktestapp.data.AppPreferencesRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 import java.time.LocalDate
@@ -80,6 +82,7 @@ fun StartTestPreviewScreenNew(
     }
     var testSnapshot by remember(testName) { mutableStateOf<TestCardNew?>(null) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val appliedSeries by AppPreferencesRepository.appliedTestSeries.collectAsState(initial = emptyList())
 
     LaunchedEffect(testName) {
         testSnapshot = ContentRepository.loadTestByTitle(testName)
@@ -106,7 +109,19 @@ fun StartTestPreviewScreenNew(
         enrolledLabel = "12.5k",
     )
     val unlockAt = remember(test.examDate) { parseUnlockAtMillis(test.examDate) }
-    val isLocked = unlockAt?.let { nowMs < it } ?: false
+    val queuedEntry = remember(appliedSeries, testName, nowMs) {
+        appliedSeries.firstOrNull { it.testName.equals(testName, ignoreCase = true) }
+            ?: appliedSeries
+                .filter { it.expiresAtMillis > nowMs }
+                .minByOrNull { it.unlockAtMillis }
+    }
+    val queueRemainingMs = queuedEntry?.let { (it.unlockAtMillis - nowMs).coerceAtLeast(0L) } ?: 0L
+    val queueHours = (queueRemainingMs / 3_600_000L).toInt()
+    val queueMins = ((queueRemainingMs % 3_600_000L) / 60_000L).toInt()
+    val queueSecs = ((queueRemainingMs % 60_000L) / 1_000L).toInt()
+    val queueCountdown = String.format("%02d:%02d:%02d", queueHours, queueMins, queueSecs)
+    val fallbackLocked = unlockAt?.let { nowMs < it } ?: false
+    val isLocked = if (queuedEntry != null) queueRemainingMs > 0L else fallbackLocked
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -171,10 +186,21 @@ fun StartTestPreviewScreenNew(
             Spacer(Modifier.height(16.dp))
             if (isLocked) {
                 Text(
-                    text = "Test locked till scheduled time (${test.examDate ?: "upcoming"})",
+                    text = if (queuedEntry != null) {
+                        "Start Test Series locked • starts in $queueCountdown"
+                    } else {
+                        "Test locked till scheduled time (${test.examDate ?: "upcoming"})"
+                    },
                     color = p.textSecondary,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = queueCountdown,
+                    color = p.textPrimary,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.ExtraBold,
                 )
                 Spacer(Modifier.height(8.dp))
             }

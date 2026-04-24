@@ -26,6 +26,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -34,8 +39,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
+import java.time.Instant
+import kotlinx.coroutines.delay
 
 @Composable
 fun AnswerKeyScreenNew(
@@ -45,6 +53,20 @@ fun AnswerKeyScreenNew(
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    var answerKeyReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
+    LaunchedEffect(testName) {
+        val snapshot = ContentRepository.loadTestByTitle(testName)
+        answerKeyReleaseAtMs = parseIsoMillis(snapshot?.answerKeyReleaseAt)
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            nowMs = System.currentTimeMillis()
+        }
+    }
+    val isLocked = (answerKeyReleaseAtMs ?: 0L) > nowMs
+    val countdown = formatCountdown((answerKeyReleaseAtMs ?: 0L) - nowMs)
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -83,6 +105,31 @@ fun AnswerKeyScreenNew(
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.height(18.dp))
+            if (isLocked) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surface),
+                    border = BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Answer Key unlock in",
+                            color = p.textSecondary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = countdown,
+                            color = p.textPrimary,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 22.sp,
+                        )
+                    }
+                }
+                return@Scaffold
+            }
 
             val items = dummyAnswerKeyItems()
 
@@ -107,6 +154,24 @@ fun AnswerKeyScreenNew(
             }
         }
     }
+}
+
+private fun parseIsoMillis(iso: String?): Long? {
+    if (iso.isNullOrBlank()) return null
+    return try {
+        Instant.parse(iso).toEpochMilli()
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun formatCountdown(remainingMs: Long): String {
+    if (remainingMs <= 0L) return "00:00:00"
+    val totalSeconds = remainingMs / 1000L
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return String.format("%02d:%02d:%02d", hours, minutes, seconds)
 }
 
 private enum class AnswerStatus {

@@ -15,9 +15,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,11 +42,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
-import java.time.LocalDate
 
 @Composable
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -62,26 +65,25 @@ fun LeaderboardScreenNew(
     var showFilterSheet by remember { mutableStateOf(false) }
     val filterSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    val allEntries = remember { demoLeaderboardEntries() }
-    val tests = remember(allEntries) { listOf("All tests") + allEntries.map { it.testName }.distinct() }
-    val cities = remember(allEntries) { listOf("All cities") + allEntries.map { it.city }.distinct() }
-    val states = remember(allEntries) { listOf("All states") + allEntries.map { it.state }.distinct() }
+    var tests by remember { mutableStateOf<List<ContentRepository.LeaderboardFilterTestRemote>>(emptyList()) }
+    var cities by remember { mutableStateOf<List<String>>(emptyList()) }
+    var states by remember { mutableStateOf<List<String>>(emptyList()) }
+    var leaderboardRows by remember { mutableStateOf<List<ContentRepository.LeaderboardItemRemote>>(emptyList()) }
 
-    val filteredEntries = remember(allEntries, selectedTest, selectedRange, selectedCity, selectedState) {
-        val today = LocalDate.of(2026, 4, 14)
-        allEntries
-            .asSequence()
-            .filter { selectedTest == "All tests" || it.testName == selectedTest }
-            .filter {
-                when (selectedRange) {
-                    TimeRangeFilter.Weekly -> !it.attemptDate.isBefore(today.minusDays(7))
-                    TimeRangeFilter.Monthly -> !it.attemptDate.isBefore(today.minusDays(30))
-                }
-            }
-            .filter { selectedCity == "All cities" || it.city == selectedCity }
-            .filter { selectedState == "All states" || it.state == selectedState }
-            .sortedByDescending { it.score }
-            .toList()
+    LaunchedEffect(Unit) {
+        val filters = ContentRepository.loadLeaderboardFilters()
+        tests = filters.tests
+        cities = filters.cities
+        states = filters.states
+    }
+    LaunchedEffect(selectedRange, selectedTest, selectedCity, selectedState, tests) {
+        val testId = tests.firstOrNull { it.title == selectedTest }?.id
+        leaderboardRows = ContentRepository.loadLeaderboard(
+            range = if (selectedRange == TimeRangeFilter.Weekly) "weekly" else "monthly",
+            city = selectedCity.takeUnless { it == "All cities" },
+            state = selectedState.takeUnless { it == "All states" },
+            testCatalogId = testId,
+        )
     }
 
     if (showFilterSheet) {
@@ -91,13 +93,13 @@ fun LeaderboardScreenNew(
             containerColor = p.surface,
         ) {
             AdvancedFiltersSheet(
-                tests = tests,
+                tests = listOf("All tests") + tests.map { it.title },
                 selectedTest = selectedTest,
                 onSelectTest = { selectedTest = it },
-                cities = cities,
+                cities = listOf("All cities") + cities,
                 selectedCity = selectedCity,
                 onSelectCity = { selectedCity = it },
-                states = states,
+                states = listOf("All states") + states,
                 selectedState = selectedState,
                 onSelectState = { selectedState = it },
             )
@@ -133,16 +135,16 @@ fun LeaderboardScreenNew(
                     fontSize = 18.sp,
                     fontWeight = FontWeight.ExtraBold,
                 )
+                Spacer(Modifier.weight(1f))
+                LeaderboardScopeChip(
+                    label = "More Filters",
+                    selected = selectedTest != "All tests" || selectedCity != "All cities" || selectedState != "All states",
+                    onClick = { showFilterSheet = true },
+                    modifier = Modifier.width(132.dp),
+                )
             }
 
             Spacer(Modifier.height(12.dp))
-            Text(
-                text = "Time range",
-                color = p.textSecondary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.height(6.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -160,26 +162,10 @@ fun LeaderboardScreenNew(
                     modifier = Modifier.weight(1f),
                 )
             }
-            Spacer(Modifier.height(6.dp))
-            LeaderboardScopeChip(
-                label = "More filters",
-                selected = selectedTest != "All tests" || selectedCity != "All cities" || selectedState != "All states",
-                onClick = { showFilterSheet = true },
-            )
 
             Spacer(Modifier.height(8.dp))
             Text(
-                text = activeFilterSummary(
-                    selectedTest = selectedTest,
-                    selectedCity = selectedCity,
-                    selectedState = selectedState,
-                ),
-                color = p.textSecondary,
-                fontSize = 12.sp,
-            )
-            Spacer(Modifier.height(10.dp))
-            Text(
-                text = "Showing ${filteredEntries.size} users",
+                text = "Showing ${leaderboardRows.size} users",
                 color = p.textSecondary,
                 fontSize = 12.sp,
             )
@@ -190,26 +176,17 @@ fun LeaderboardScreenNew(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                itemsIndexed(filteredEntries) { index, user ->
+                itemsIndexed(leaderboardRows) { index, user ->
                     LeaderboardRow(
-                        rank = index + 1,
+                        rank = user.rank.takeIf { it > 0 } ?: (index + 1),
                         name = user.name,
-                        scoreText = "${user.score}/500 • ${user.city}",
+                        scoreText = "${user.score}/500 • ${user.city.ifBlank { user.state }}",
                     )
                 }
             }
         }
     }
 }
-
-private data class LeaderboardUser(
-    val name: String,
-    val score: Int,
-    val testName: String,
-    val city: String,
-    val state: String,
-    val attemptDate: LocalDate,
-)
 
 private enum class TimeRangeFilter {
     Weekly,
@@ -221,6 +198,7 @@ private fun LeaderboardScopeChip(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
+    fitContent: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val p = mockTestPalette()
@@ -230,13 +208,22 @@ private fun LeaderboardScopeChip(
     Box(
         modifier = modifier
             .height(40.dp)
+            .then(if (fitContent) Modifier.wrapContentWidth() else Modifier)
             .clip(shape)
             .background(bg)
             .border(1.dp, p.border.copy(alpha = if (selected) 0.35f else 0.18f), shape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text = label, color = fg, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Text(
+            text = label,
+            color = fg,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 14.dp),
+        )
     }
 }
 
@@ -246,56 +233,20 @@ private fun FilterChipRow(
     selected: String,
     onSelect: (String) -> Unit,
 ) {
-    Row(
+    LazyRow(
         modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
+            .fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        options.forEach { option ->
+        items(count = options.size, key = { idx -> options[idx] }) { index ->
+            val option = options[index]
             LeaderboardScopeChip(
                 label = option,
                 selected = selected == option,
                 onClick = { onSelect(option) },
+                fitContent = true,
             )
         }
-    }
-}
-
-private fun demoLeaderboardEntries(): List<LeaderboardUser> {
-    val baseNames = listOf("Rahul Sharma", "Anjali Verma", "Rohan Singh", "Neha Gupta", "Aman Kumar")
-    val tests = listOf("Nursing Mock Test", "Reasoning Sprint", "English Booster")
-    val cities = listOf("Delhi", "Lucknow", "Jaipur", "Bhopal", "Patna")
-    val states = listOf("Delhi", "UP", "Rajasthan", "MP", "Bihar")
-    val today = LocalDate.of(2026, 4, 14)
-    return (0 until 100).map { idx ->
-        val name = baseNames[idx % baseNames.size] + " #${idx + 1}"
-        val score = 500 - (idx * 3).coerceAtLeast(0)
-        LeaderboardUser(
-            name = name,
-            score = score.coerceAtLeast(0),
-            testName = tests[idx % tests.size],
-            city = cities[idx % cities.size],
-            state = states[idx % states.size],
-            attemptDate = today.minusDays((idx % 35).toLong()),
-        )
-    }
-}
-
-private fun activeFilterSummary(
-    selectedTest: String,
-    selectedCity: String,
-    selectedState: String,
-): String {
-    val activeFilters = buildList {
-        if (selectedTest != "All tests") add(selectedTest)
-        if (selectedCity != "All cities") add(selectedCity)
-        if (selectedState != "All states") add(selectedState)
-    }
-    return if (activeFilters.isEmpty()) {
-        "Filters: All tests, cities and states"
-    } else {
-        "Filters: ${activeFilters.joinToString(" • ")}"
     }
 }
 

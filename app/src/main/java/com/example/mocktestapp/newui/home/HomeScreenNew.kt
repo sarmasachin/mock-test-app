@@ -85,6 +85,7 @@ import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.example.mocktestapp.BuildConfig
+import com.example.mocktestapp.MockTestApp
 import com.example.mocktestapp.data.AppPreferencesRepository
 import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.data.TestHistoryRepository
@@ -113,6 +114,11 @@ private data class HomeQuickActionSection(
     val title: String,
     val items: List<HomeQuickActionItem>,
 )
+private data class StartSeriesCardState(
+    val isLocked: Boolean,
+    val countdownText: String,
+    val activeTestName: String?,
+)
 
 @Composable
 fun HomeScreenNew(
@@ -123,7 +129,7 @@ fun HomeScreenNew(
     onOpenActivity: () -> Unit,
     onOpenCategory: (String) -> Unit,
     onSeeAllCategories: () -> Unit,
-    onStartTest: () -> Unit,
+    onStartTest: (String) -> Unit,
     onLeaderboard: () -> Unit,
     onResults: () -> Unit,
     onOpenPendingResult: (String, Int, Int, Int) -> Unit,
@@ -131,6 +137,7 @@ fun HomeScreenNew(
     onOpenJobAlert: () -> Unit,
     onOpenExamAlert: () -> Unit,
     onOpenNews: () -> Unit,
+    onOpenNewsArticle: (String) -> Unit,
     onOpenProgressReport: () -> Unit,
     onOpenDaily: () -> Unit,
     onOpenMenuQuiz: () -> Unit,
@@ -192,7 +199,7 @@ fun HomeScreenNew(
             ),
         )
     }
-    var bannerUrls by remember { mutableStateOf<List<String>>(emptyList()) }
+    var bannerSlides by remember { mutableStateOf<List<HomeCarouselSlide>>(emptyList()) }
     var postSubmitCardTitle by remember { mutableStateOf("Result Pending") }
     var postSubmitCardReadyTitle by remember { mutableStateOf("Result Ready") }
     var postSubmitCardDateLabel by remember { mutableStateOf("Result date/time") }
@@ -207,23 +214,48 @@ fun HomeScreenNew(
     var lastVisitMillis by remember { mutableStateOf(0L) }
     var showLastVisit by remember { mutableStateOf(false) }
     val pendingResult by AppPreferencesRepository.pendingResultState.collectAsState(initial = null)
+    val appliedSeries by AppPreferencesRepository.appliedTestSeries.collectAsState(initial = emptyList())
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var hiddenSessionAt by remember { mutableStateOf(0L) }
+    val startSeriesState = remember(appliedSeries, nowMs) {
+        val eligible = appliedSeries
+            .sortedBy { it.unlockAtMillis }
+            .firstOrNull { nowMs < it.expiresAtMillis }
+        if (eligible == null) {
+            StartSeriesCardState(
+                isLocked = false,
+                countdownText = "",
+                activeTestName = null,
+            )
+        } else {
+            val remainingMs = (eligible.unlockAtMillis - nowMs).coerceAtLeast(0L)
+            val hours = (remainingMs / 3_600_000L).toInt()
+            val mins = ((remainingMs % 3_600_000L) / 60_000L).toInt()
+            val secs = ((remainingMs % 60_000L) / 1_000L).toInt()
+            val countdown = String.format("%02d:%02d:%02d", hours, mins, secs)
+            StartSeriesCardState(
+                isLocked = remainingMs > 0L,
+                countdownText = countdown,
+                activeTestName = eligible.testName,
+            )
+        }
+    }
 
     LaunchedEffect(Unit) {
         val now = System.currentTimeMillis()
-        val ts = visitPrefs.getLong("last_home_visit_ts", 0L)
-        val seenForTs = visitPrefs.getLong("last_home_visit_seen_for_ts", -1L)
-        lastVisitMillis = ts
-        if (ts <= 0L || seenForTs == ts) {
+        val previousVisitTs = visitPrefs.getLong("last_home_visit_ts", 0L)
+        val appLaunchTs = MockTestApp.appLaunchTimeMillis
+        val shownForLaunchTs = visitPrefs.getLong("last_home_visit_shown_for_launch_ts", -1L)
+        lastVisitMillis = previousVisitTs
+        if (previousVisitTs <= 0L || shownForLaunchTs == appLaunchTs) {
             showLastVisit = false
         } else {
             showLastVisit = true
-            delay(30_000L)
+            delay(20_000L)
             showLastVisit = false
         }
         visitPrefs.edit()
-            .putLong("last_home_visit_seen_for_ts", ts)
+            .putLong("last_home_visit_shown_for_launch_ts", appLaunchTs)
             .putLong("last_home_visit_ts", now)
             .apply()
     }
@@ -266,7 +298,18 @@ fun HomeScreenNew(
                 )
             }
         }
-        bannerUrls = remote.banners
+        val mixedSlides = mutableListOf<HomeCarouselSlide>()
+        mixedSlides += remote.banners.map { imageUrl ->
+            HomeCarouselSlide(imageUrl = imageUrl)
+        }
+        mixedSlides += remote.newsSlides.map { slide ->
+            HomeCarouselSlide(
+                imageUrl = slide.imageUrl,
+                title = slide.headline,
+                articleId = slide.articleId,
+            )
+        }
+        bannerSlides = mixedSlides
     }
     LaunchedEffect(Unit) {
         val instruction = ContentRepository.loadInstructionContent() ?: return@LaunchedEffect
@@ -332,7 +375,11 @@ fun HomeScreenNew(
                 ) {
                 TopRow(
                     welcomeText = homeWelcomeText,
-                    onOpenDrawer = { scope.launch { drawerState.open() } },
+                    onOpenDrawer = {
+                        scope.launch {
+                            if (!drawerState.isOpen) drawerState.open()
+                        }
+                    },
                     onOpenPoll = onOpenPoll,
                     onOpenNotifications = onOpenNotifications,
                 )
@@ -346,7 +393,13 @@ fun HomeScreenNew(
                     Spacer(Modifier.height(12.dp))
                     HomeBannerCarouselNew(
                         modifier = Modifier.padding(horizontal = 14.dp),
-                        imageUrls = bannerUrls,
+                        slides = bannerSlides,
+                        onSlideClick = { slide ->
+                            val articleId = slide.articleId
+                            if (!articleId.isNullOrBlank()) {
+                                onOpenNewsArticle(articleId)
+                            }
+                        },
                     )
 
                     Spacer(Modifier.height(14.dp))
@@ -438,12 +491,16 @@ fun HomeScreenNew(
                         Spacer(Modifier.height(12.dp))
                         ActionsGrid(
                             actions = section.items,
+                            startSeriesState = startSeriesState,
                             onAction = { actionKey ->
-                                when (actionKey) {
-                                    "startTest" -> onStartTest()
-                                    "leaderboard" -> onLeaderboard()
-                                    "results" -> onResults()
-                                    "bookmarks", "tool" -> onBookmarks()
+                                val normalizedKey = actionKey.trim().lowercase()
+                                when {
+                                    normalizedKey == "starttest" || normalizedKey == "start_test" || normalizedKey == "start test" -> {
+                                        onStartTest(startSeriesState.activeTestName ?: "bsc nursing moc test")
+                                    }
+                                    normalizedKey == "leaderboard" || normalizedKey == "leader_board" || normalizedKey == "leader board" -> onLeaderboard()
+                                    normalizedKey.contains("result") || normalizedKey == "score" || normalizedKey == "results_history" -> onResults()
+                                    normalizedKey == "bookmarks" || normalizedKey == "bookmark" || normalizedKey == "tool" || normalizedKey == "tools" -> onBookmarks()
                                 }
                             },
                         )
@@ -888,6 +945,7 @@ private fun SeeAllChip(
 @Composable
 private fun ActionsGrid(
     actions: List<HomeQuickActionItem>,
+    startSeriesState: StartSeriesCardState,
     onAction: (String) -> Unit,
 ) {
     val normalized = if (actions.isNotEmpty()) {
@@ -905,11 +963,18 @@ private fun ActionsGrid(
         rows.forEach { rowItems ->
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 rowItems.forEach { item ->
+                    val isStartSeries = item.actionKey == "startTest"
+                    val subtitle = if (isStartSeries && startSeriesState.isLocked) {
+                        "Starts in ${startSeriesState.countdownText}"
+                    } else {
+                        ""
+                    }
                     ActionCard(
                         title = item.title,
-                        subtitle = "",
+                        subtitle = subtitle,
                         actionKey = item.actionKey,
                         iconKey = item.iconKey,
+                        enabled = true,
                         onClick = { onAction(item.actionKey) },
                         modifier = Modifier.weight(1f),
                     )
@@ -928,6 +993,7 @@ private fun ActionCard(
     subtitle: String,
     actionKey: String,
     iconKey: String? = null,
+    enabled: Boolean = true,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -940,9 +1006,11 @@ private fun ActionCard(
         modifier = modifier
             .fillMaxWidth()
             .height(122.dp)
-            .clickable(onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick),
         shape = shape,
-        colors = CardDefaults.cardColors(containerColor = p.surface),
+        colors = CardDefaults.cardColors(
+            containerColor = if (enabled) p.surface else p.surface.copy(alpha = 0.7f),
+        ),
         border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
     ) {
         Column(
@@ -1055,14 +1123,13 @@ private fun AppDrawer(
             drawerTonalElevation = 6.dp,
             windowInsets = WindowInsets(0, 0, 0, 0),
             modifier = Modifier
-                .fillMaxHeight()
                 .width(drawerWidthDp)
                 .clip(drawerShape)
                 .border(1.dp, border, drawerShape),
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxHeight()
+                    .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
             ) {
                 Spacer(Modifier.height(4.dp))

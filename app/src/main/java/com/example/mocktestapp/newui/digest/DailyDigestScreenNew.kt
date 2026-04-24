@@ -1,11 +1,8 @@
 package com.example.mocktestapp.newui.digest
 
-import android.util.Log
-import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,14 +16,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Quiz
 import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Event
-import androidx.compose.material.icons.rounded.Lightbulb
-import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Leaderboard
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -34,768 +32,458 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.mocktestapp.data.AppPreferencesRepository
-import com.example.mocktestapp.data.ContentRepository
-import com.example.mocktestapp.data.TestHistoryRepository
-import com.example.mocktestapp.newui.components.AppSnackbarHostNew
-import com.example.mocktestapp.newui.components.rememberAppSnackbarHostStateNew
-import com.example.mocktestapp.newui.components.showError
-import com.example.mocktestapp.newui.theme.palette.gradientColors
-import com.example.mocktestapp.newui.theme.palette.mockTestPalette
-import com.example.mocktestapp.util.CalendarEventHelper
-import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.format.DateTimeFormatter
-import java.util.Calendar
-import kotlinx.coroutines.flow.flowOf
-
-private data class DigestQuestionDto(
-    val prompt: String,
-    val options: List<String>,
-    val correctIndex: Int,
-)
-
-private data class DailyDigestColors(
-    val streakBorderHex: String = "",
-    val streakIconHex: String = "",
-    val streakGradientEndHex: String = "",
-    val questionAccentHex: String = "",
-    val questionBorderHex: String = "",
-    val factAccentHex: String = "",
-    val factBorderHex: String = "",
-)
-
-private data class DailyDigestConfig(
-    val pageTitle: String = "Daily Digest",
-    val streakTitle: String = "Daily streak",
-    val streakHint: String = "Open your digest daily to keep streak growing.",
-    val questionSectionTitle: String = "Question of the day",
-    val factSectionTitle: String = "Fact of the day",
-    val tapHint: String = "Tap one option to reveal answer.",
-    val correctFeedback: String = "Correct! Nice work.",
-    val wrongFeedbackPrefix: String = "Not this one. Correct answer:",
-    val calendarButtonTitle: String = "Add reminder to calendar",
-    val calendarEventTitle: String = "MockTest daily digest reminder",
-    val calendarEventDescription: String = "Revise daily digest and solve one quick question.",
-    val questions: List<DigestQuestionDto> = listOf(
-        DigestQuestionDto(
-            prompt = "Which number is a prime?",
-            options = listOf("21", "29", "35", "39"),
-            correctIndex = 1,
-        ),
-        DigestQuestionDto(
-            prompt = "Who wrote the Indian national song Vande Mataram?",
-            options = listOf("Rabindranath Tagore", "Bankim Chandra Chattopadhyay", "Sarojini Naidu", "Subramania Bharati"),
-            correctIndex = 1,
-        ),
-    ),
-    val facts: List<String> = listOf(
-        "Micro-revision works best in short daily chunks. 15 focused minutes beat 2 distracted hours.",
-        "Spaced repetition improves retention dramatically when reviews are distributed over days.",
-    ),
-    val colors: DailyDigestColors? = null,
-) {
-    companion object {
-        val DEFAULT = DailyDigestConfig()
-    }
-}
-
-private object DailyDigestConfigRepository {
-    val config = flowOf(DailyDigestConfig.DEFAULT)
-}
-
-private fun String.parseComposeColorOrNull(): Color? = null
-
-private data class DailyDigestHistoryEntry(
-    val date: String,
-    val selected: String,
-    val correct: String,
-    val wasCorrect: Boolean,
-)
 
 @Composable
 fun DailyDigestScreenNew(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
 ) {
-    val p = mockTestPalette()
-    val bg = Brush.verticalGradient(colors = p.gradientColors())
-    val streak by AppPreferencesRepository.streakDays.collectAsState(initial = 0)
-    val attempts by TestHistoryRepository.observeAttempts().collectAsState(initial = emptyList())
-    val cfg by DailyDigestConfigRepository.config.collectAsState(initial = DailyDigestConfig.DEFAULT)
-    val context = LocalContext.current
-    val snackbar = rememberAppSnackbarHostStateNew()
-    val scope = rememberCoroutineScope()
-    val profile by AppPreferencesRepository.drawerUserProfile.collectAsState(
-        initial = AppPreferencesRepository.DrawerUserProfile(
-            displayName = "",
-            emailLine = "",
-            userIdFormatted = null,
-        ),
-    )
+    val today = remember { LocalDate.now() }
+    var selectedDate by remember { mutableStateOf(today) }
+    var showResult by remember { mutableStateOf(false) }
+    val attemptedDates = remember { mutableStateOf(setOf(today.minusDays(1))) }
 
-    val cc = cfg.colors ?: DailyDigestColors()
-    val streakBorder = cc.streakBorderHex.parseComposeColorOrNull()
-        ?: Color(0xFFFF9800).copy(alpha = 0.35f)
-    val streakIcon = cc.streakIconHex.parseComposeColorOrNull() ?: Color(0xFFFF9800)
-    val streakGradEnd = cc.streakGradientEndHex.parseComposeColorOrNull()
-        ?: Color(0xFFFF9800).copy(alpha = 0.1f)
-    val qAccent = cc.questionAccentHex.parseComposeColorOrNull() ?: p.accent
-    val qBorder = cc.questionBorderHex.parseComposeColorOrNull() ?: p.accent.copy(alpha = 0.35f)
-    val fAccent = cc.factAccentHex.parseComposeColorOrNull() ?: p.success
-    val fBorder = cc.factBorderHex.parseComposeColorOrNull() ?: p.success.copy(alpha = 0.35f)
-
-    LaunchedEffect(Unit) {
-        try {
-            AppPreferencesRepository.recordDigestOpenedToday()
-        } catch (e: Exception) {
-            Log.e("DailyDigest", "Streak update failed", e)
-        }
-    }
-    var remoteDigest by remember { mutableStateOf<ContentRepository.DailyDigestRemote?>(null) }
-    LaunchedEffect(Unit) {
-        remoteDigest = ContentRepository.loadDailyDigestItem()
-    }
-
-    val today = LocalDate.now()
-    val dayIndex = today.dayOfYear
-    val dateLabel = remember(today) {
-        DateTimeFormatter.ofPattern("EEEE, MMM d, yyyy").format(today)
-    }
-    val qs = (cfg.questions ?: DailyDigestConfig.DEFAULT.questions).orEmpty()
-    val facts = (cfg.facts ?: DailyDigestConfig.DEFAULT.facts).orEmpty()
-    val fallbackQuestion = qs[dayIndex % qs.size.coerceAtLeast(1)]
-    val qItem = remoteDigest?.let {
-        DigestQuestionDto(
-            prompt = it.questionPrompt,
-            options = (it.options + List(4) { "" }).take(4),
-            correctIndex = it.correctIndex.coerceIn(0, 3),
+    if (!showResult) {
+        DailyQuizDatePickerScreen(
+            modifier = modifier,
+            selectedDate = selectedDate,
+            attemptedDates = attemptedDates.value,
+            onBack = onBack,
+            onSelectDate = { selectedDate = it },
+            onTakeTest = {
+                attemptedDates.value = attemptedDates.value + selectedDate
+                showResult = true
+            },
         )
-    } ?: fallbackQuestion
-    val fact = remoteDigest?.factText ?: facts[dayIndex % facts.size.coerceAtLeast(1)]
+    } else {
+        DailyQuizResultScreen(
+            modifier = modifier,
+            onBack = onBack,
+            onClose = { showResult = false },
+            onLeaderboard = { },
+            onReAttempt = { showResult = false },
+            onSolution = { },
+        )
+    }
+}
 
-    val digestPrefs = remember(context) {
-        context.getSharedPreferences("daily_digest_lock", Context.MODE_PRIVATE)
-    }
-    val userScope = profile.userIdFormatted ?: "guest"
-    val digestLockKey = remember(dayIndex, userScope) { "digest_choice_${userScope}_$dayIndex" }
-    val digestHistoryKey = remember(dayIndex, userScope) { "digest_history_${userScope}_$dayIndex" }
-    var chosenOption by remember(dayIndex, qItem.prompt ?: "") { mutableIntStateOf(-1) }
-    LaunchedEffect(digestLockKey) {
-        chosenOption = digestPrefs.getInt(digestLockKey, -1)
-    }
+private val DailyBlue = Color(0xFF1652D4)
+private val DailyCardRadius = RoundedCornerShape(8.dp)
+private val DailyPanelRadius = RoundedCornerShape(10.dp)
+
+@Composable
+private fun DailyQuizDatePickerScreen(
+    modifier: Modifier,
+    selectedDate: LocalDate,
+    attemptedDates: Set<LocalDate>,
+    onBack: () -> Unit,
+    onSelectDate: (LocalDate) -> Unit,
+    onTakeTest: () -> Unit,
+) {
+    val month = YearMonth.from(selectedDate)
+    val firstDay = month.atDay(1)
+    val startOffset = firstDay.dayOfWeek.value % 7
+    val dayCount = month.lengthOfMonth()
+    val prevMonth = month.minusMonths(1)
+    val prevMonthDays = prevMonth.lengthOfMonth()
 
     Scaffold(
-        containerColor = Color.Transparent,
+        containerColor = Color(0xFFF5F6FA),
         contentWindowInsets = WindowInsets(0),
-        snackbarHost = { AppSnackbarHostNew(state = snackbar) },
     ) { padding ->
         Column(
             modifier = modifier
                 .fillMaxSize()
-                .background(bg)
-                .padding(padding)
-                .padding(horizontal = 18.dp, vertical = 14.dp)
-                .verticalScroll(rememberScrollState()),
+                .padding(padding),
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(
-                        imageVector = Icons.Rounded.ArrowBack,
-                        contentDescription = "Back",
-                        tint = p.textPrimary,
-                    )
+                    Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = Color(0xFF3D3D3D))
                 }
-                Spacer(Modifier.size(6.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = cfg.pageTitle,
-                        color = p.textPrimary,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                    )
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = dateLabel,
-                        color = p.textSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
+                Text(
+                    text = "Select Date",
+                    color = Color(0xFF272727),
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = { }) {
+                    Icon(Icons.Rounded.Share, contentDescription = "Share", tint = Color(0xFF3D3D3D))
                 }
             }
-            Spacer(Modifier.height(16.dp))
 
-            DailyDigestHeroCard(
-                headline = "Today's learning boost",
-                subline = "1 question + 1 fact. Read daily and build consistency.",
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DailyBlue)
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = { onSelectDate(selectedDate.minusMonths(1)) }) {
+                    Text("‹", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                }
+                Text(
+                    text = month.format(DateTimeFormatter.ofPattern("MMMM  yyyy")),
+                    color = Color.White,
+                    fontSize = 32.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                    textAlign = TextAlign.Center,
+                )
+                IconButton(onClick = { onSelectDate(selectedDate.plusMonths(1)) }) {
+                    Text("›", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                }
+            }
 
-            Spacer(Modifier.height(12.dp))
-            DigestStreakCard(
-                streak = streak,
-                title = cfg.streakTitle,
-                hint = cfg.streakHint,
-                borderColor = streakBorder,
-                iconTint = streakIcon,
-                gradientEnd = streakGradEnd,
-            )
-            Spacer(Modifier.height(10.dp))
-            DigestGamificationCard(
-                streak = streak,
-                attemptCount = attempts.size,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
+                listOf("S", "M", "T", "W", "T", "F", "S").forEach {
+                    Text(text = it, color = Color(0xFF8B8B8B), fontSize = 15.sp, modifier = Modifier.width(36.dp), textAlign = TextAlign.Center)
+                }
+            }
+            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                repeat(6) { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                    ) {
+                        repeat(7) { col ->
+                            val index = row * 7 + col
+                            val dayNumber = index - startOffset + 1
+                            val isCurrentMonth = dayNumber in 1..dayCount
+                            val date = when {
+                                isCurrentMonth -> month.atDay(dayNumber)
+                                dayNumber <= 0 -> prevMonth.atDay(prevMonthDays + dayNumber)
+                                else -> month.plusMonths(1).atDay(dayNumber - dayCount)
+                            }
+                            val isSelected = date == selectedDate
+                            val isAttempted = attemptedDates.contains(date)
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when {
+                                            isSelected -> DailyBlue
+                                            isAttempted -> Color(0xFFD6D8DF)
+                                            else -> Color.Transparent
+                                        },
+                                    )
+                                    .clickable { onSelectDate(date) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = date.dayOfMonth.toString(),
+                                    color = when {
+                                        isSelected -> Color.White
+                                        isCurrentMonth -> Color(0xFF313131)
+                                        else -> Color(0xFFCBCBCB)
+                                    },
+                                    fontSize = 20.sp,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
-            Spacer(Modifier.height(14.dp))
-            DigestQuestionCard(
-                item = qItem,
-                chosenOption = chosenOption,
-                onChoose = { selected ->
-                    if (chosenOption >= 0) return@DigestQuestionCard
-                    chosenOption = selected
-                    digestPrefs.edit().putInt(digestLockKey, selected).apply()
-                    val correctIndex = qItem.correctIndex.coerceIn(0, 3)
-                    val selectedText = qItem.options.getOrElse(selected) { "" }
-                    val correctText = qItem.options.getOrElse(correctIndex) { "" }
-                    val line = listOf(
-                        dateLabel,
-                        selectedText,
-                        correctText,
-                        if (selected == correctIndex) "1" else "0",
-                    ).joinToString("|")
-                    digestPrefs.edit().putString(digestHistoryKey, line).apply()
-                },
-                sectionTitle = cfg.questionSectionTitle,
-                tapHint = cfg.tapHint,
-                correctFeedback = cfg.correctFeedback,
-                wrongPrefix = cfg.wrongFeedbackPrefix,
-                accent = qAccent,
-                borderColor = qBorder,
-            )
-            Spacer(Modifier.height(12.dp))
-            DigestFactCard(
-                body = fact,
-                sectionTitle = cfg.factSectionTitle,
-                accent = fAccent,
-                borderColor = fBorder,
-            )
-            Spacer(Modifier.height(12.dp))
-            DailyDigestHistoryCard(
-                userScope = userScope,
-                prefs = digestPrefs,
-                currentDayIndex = dayIndex,
-            )
-
-            Spacer(Modifier.height(16.dp))
             Button(
-                onClick = {
-                    val cal = Calendar.getInstance().apply {
-                        add(Calendar.DAY_OF_YEAR, 7)
-                        set(Calendar.HOUR_OF_DAY, 10)
-                        set(Calendar.MINUTE, 0)
-                        set(Calendar.SECOND, 0)
-                        set(Calendar.MILLISECOND, 0)
-                    }
-                    val end = Calendar.getInstance().apply {
-                        timeInMillis = cal.timeInMillis
-                        add(Calendar.HOUR_OF_DAY, 1)
-                    }
-                    val opened = CalendarEventHelper.openInsertExamReminder(
-                        context = context,
-                        title = cfg.calendarEventTitle,
-                        description = cfg.calendarEventDescription,
-                        beginTimeMillis = cal.timeInMillis,
-                        endTimeMillis = end.timeInMillis,
-                    )
-                    if (!opened) {
-                        scope.launch { snackbar.showError("No calendar app found on this device.") }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = p.primaryButton,
-                    contentColor = p.onPrimaryButton,
-                ),
+                onClick = onTakeTest,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .height(52.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = DailyBlue),
+                shape = DailyCardRadius,
+            ) {
+                Text("TAKE TEST", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 19.sp)
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = DailyPanelRadius,
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
             ) {
                 Row(
+                    modifier = Modifier.fillMaxWidth().padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
                 ) {
-                    Icon(Icons.Rounded.Event, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(text = cfg.calendarButtonTitle, fontWeight = FontWeight.Bold)
+                    Box(
+                        modifier = Modifier.size(38.dp).clip(CircleShape).background(Color(0xFFFFF1E4)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Rounded.Leaderboard, contentDescription = null, tint = Color(0xFFFF9800))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Text("Current Affairs Mock Test", color = Color(0xFF303030), fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
                 }
             }
+
             Spacer(Modifier.height(8.dp))
-            Text(
-                text = "Tip: Add reminder to keep your streak active.",
-                color = p.textSecondary,
-                fontSize = 12.sp,
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.Center,
-            )
+            LegendRow(label = "Attempted Test", color = Color(0xFFD6D8DF))
+            Spacer(Modifier.height(8.dp))
+            LegendRow(label = "Current date selected", color = DailyBlue)
+            Spacer(Modifier.height(12.dp))
         }
     }
 }
 
 @Composable
-private fun DigestGamificationCard(
-    streak: Int,
-    attemptCount: Int,
-) {
-    val p = mockTestPalette()
-    val level = (attemptCount / 5) + 1
-    val badge = when {
-        streak >= 30 -> "Legend Badge"
-        streak >= 14 -> "Gold Consistency Badge"
-        streak >= 7 -> "Silver Streak Badge"
-        streak >= 3 -> "Bronze Starter Badge"
-        else -> "New Learner Badge"
-    }
-    val reward = when {
-        streak >= 30 -> "Reward unlocked: Mega revision pass"
-        streak >= 14 -> "Reward unlocked: Double streak bonus"
-        streak >= 7 -> "Reward unlocked: Weekly achiever"
-        else -> "Next reward at 7-day streak"
-    }
-    val shape = RoundedCornerShape(16.dp)
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .border(1.dp, p.accent.copy(alpha = 0.28f), shape),
-        shape = shape,
-        colors = CardDefaults.cardColors(containerColor = p.surface),
+private fun LegendRow(label: String, color: Color) {
+    Row(
+        modifier = Modifier.padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Text("Gamification", color = p.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold)
-            Spacer(Modifier.height(6.dp))
-            Text("Level $level • $badge", color = p.accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
-            Text("Streak rewards: $reward", color = p.textSecondary, fontSize = 12.sp, lineHeight = 17.sp)
-        }
+        Box(modifier = Modifier.size(14.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(8.dp))
+        Text(label, color = Color(0xFF505050), fontSize = 15.sp)
     }
 }
 
 @Composable
-private fun DailyDigestHistoryCard(
-    userScope: String,
-    prefs: android.content.SharedPreferences,
-    currentDayIndex: Int,
+private fun DailyQuizResultScreen(
+    modifier: Modifier,
+    onBack: () -> Unit,
+    onClose: () -> Unit,
+    onLeaderboard: () -> Unit,
+    onReAttempt: () -> Unit,
+    onSolution: () -> Unit,
 ) {
-    val p = mockTestPalette()
-    val history = (0..13).mapNotNull { back ->
-        val day = currentDayIndex - back
-        if (day <= 0) return@mapNotNull null
-        val raw = prefs.getString("digest_history_${userScope}_$day", null) ?: return@mapNotNull null
-        val parts = raw.split("|")
-        if (parts.size < 4) return@mapNotNull null
-        DailyDigestHistoryEntry(
-            date = parts[0],
-            selected = parts[1],
-            correct = parts[2],
-            wasCorrect = parts[3] == "1",
-        )
-    }
-    val shape = RoundedCornerShape(16.dp)
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .border(1.dp, p.border.copy(alpha = 0.24f), shape),
-        shape = shape,
-        colors = CardDefaults.cardColors(containerColor = p.surface),
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Text("Daily Digest History", color = p.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold)
-            Spacer(Modifier.height(8.dp))
-            if (history.isEmpty()) {
-                Text("No previous answer history yet.", color = p.textSecondary, fontSize = 12.sp)
-            } else {
-                history.forEach { item ->
-                    Text(
-                        text = "${item.date}: ${if (item.wasCorrect) "Correct" else "Wrong"} • Your answer: ${item.selected} • Correct: ${item.correct}",
-                        color = if (item.wasCorrect) p.success else p.textSecondary,
-                        fontSize = 12.sp,
-                        lineHeight = 17.sp,
-                        modifier = Modifier.padding(vertical = 2.dp),
-                    )
-                }
+    Scaffold(
+        containerColor = Color(0xFFF4F5F9),
+        contentWindowInsets = WindowInsets(0),
+        bottomBar = {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFF4F5F9))
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Button(
+                    onClick = onReAttempt,
+                    modifier = Modifier.weight(1f).height(50.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = DailyBlue),
+                    shape = DailyCardRadius,
+                ) { Text("Re Attempt", color = Color.White, fontSize = 15.sp) }
+                Button(
+                    onClick = onSolution,
+                    modifier = Modifier.weight(1f).height(50.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF14B97A)),
+                    shape = DailyCardRadius,
+                ) { Text("Solution", color = Color.White, fontSize = 15.sp) }
             }
-        }
-    }
-}
-
-@Composable
-private fun DailyDigestHeroCard(
-    headline: String,
-    subline: String,
-) {
-    val p = mockTestPalette()
-    val shape = RoundedCornerShape(18.dp)
-    val heroBrush = Brush.horizontalGradient(
-        listOf(
-            p.systemBlue.copy(alpha = 0.16f),
-            p.accent.copy(alpha = 0.14f),
-            p.surfaceElevated,
-        ),
-    )
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .border(1.dp, p.border.copy(alpha = 0.2f), shape),
-        shape = shape,
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-    ) {
+        },
+    ) { padding ->
         Column(
-            modifier = Modifier
-                .background(heroBrush)
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-        ) {
-            Text(
-                text = headline,
-                color = p.textPrimary,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.ExtraBold,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = subline,
-                color = p.textSecondary,
-                fontSize = 13.sp,
-                lineHeight = 18.sp,
-            )
-        }
-    }
-}
-
-@Composable
-private fun DigestStreakCard(
-    streak: Int,
-    title: String,
-    hint: String,
-    borderColor: Color,
-    iconTint: Color,
-    gradientEnd: Color,
-) {
-    val p = mockTestPalette()
-    val shape = RoundedCornerShape(18.dp)
-    val warm = Brush.linearGradient(
-        colors = listOf(
-            p.surfaceElevated,
-            gradientEnd,
-        ),
-    )
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .border(1.dp, borderColor, shape),
-        shape = shape,
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-    ) {
-        Box(
-            modifier = Modifier
-                .background(warm)
-                .padding(16.dp),
+            modifier = modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 12.dp)
+                .verticalScroll(rememberScrollState()),
         ) {
             Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.LocalFireDepartment,
-                    contentDescription = null,
-                    tint = iconTint,
-                    modifier = Modifier.size(40.dp),
-                )
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = title,
-                        color = p.textSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "$streak day(s)",
-                        color = p.textPrimary,
-                        fontSize = 28.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = hint,
-                        color = p.textSecondary,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
-                    )
+                IconButton(onClick = { onClose(); onBack() }) {
+                    Icon(Icons.Rounded.Close, contentDescription = "Close", tint = Color(0xFF555555))
+                }
+                Spacer(Modifier.weight(1f))
+                Box(
+                    modifier = Modifier.size(28.dp).clip(CircleShape).background(Color(0xFF1DBF73)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("WA", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                }
+                IconButton(onClick = { }) {
+                    Icon(Icons.Rounded.Share, contentDescription = "Share", tint = Color(0xFF555555))
                 }
             }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = DailyPanelRadius,
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFDDF7FA)),
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(modifier = Modifier.size(56.dp).clip(CircleShape).background(Color(0xFFEAF0F2)), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.Person, contentDescription = null, tint = Color(0xFF8397A3), modifier = Modifier.size(32.dp))
+                    }
+                    Text("Gamming Club", fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = Color(0xFF2B2B2B))
+                    Text("20260423", color = Color(0xFF4E4E4E), fontSize = 14.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ScoreBox(title = "Score", value = "0.00", subtitle = "Out of 5.00", valueColor = Color(0xFF10B981), modifier = Modifier.weight(1f))
+                        ScoreBox(title = "Rank", value = "115", subtitle = "Out of 125", valueColor = Color(0xFF2563EB), modifier = Modifier.weight(1f))
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text("Time Taken : 00 min, 24 sec", color = Color(0xFF454545), fontSize = 14.sp)
+                }
+            }
+
+            Button(
+                onClick = onLeaderboard,
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(50.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = DailyBlue),
+                shape = DailyCardRadius,
+            ) {
+                Icon(Icons.Rounded.Leaderboard, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("LEADERBOARD", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
+
+            AnalysisCard()
+            DonutCard(
+                title = "Brief Analysis",
+                centerText = "Brief",
+                values = listOf(60f to Color(0xFFF5A623), 40f to Color(0xFFEB5757)),
+                sideStats = "Correct - 0      Wrong - 2      Skipped - 3",
+            )
+            DonutCard(
+                title = "Accuracy & Score",
+                centerText = "Accuracy\n0 %",
+                values = listOf(100f to Color(0xFFEB5757)),
+                sideStats = "0 %                               0 %",
+            )
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
 
 @Composable
-private fun DigestQuestionCard(
-    item: DigestQuestionDto,
-    chosenOption: Int,
-    onChoose: (Int) -> Unit,
-    sectionTitle: String,
-    tapHint: String,
-    correctFeedback: String,
-    wrongPrefix: String,
-    accent: Color,
-    borderColor: Color,
+private fun ScoreBox(
+    title: String,
+    value: String,
+    subtitle: String,
+    valueColor: Color,
+    modifier: Modifier = Modifier,
 ) {
-    val p = mockTestPalette()
-    val shape = RoundedCornerShape(18.dp)
-    val revealed = chosenOption >= 0
-    val quizTint = Brush.horizontalGradient(
-        colors = listOf(
-            accent.copy(alpha = 0.14f),
-            p.systemBlue.copy(alpha = 0.1f),
-        ),
-    )
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .border(1.dp, borderColor, shape),
-        shape = shape,
-        colors = CardDefaults.cardColors(containerColor = p.surface),
+        modifier = modifier,
+        shape = DailyPanelRadius,
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF9FBFC)),
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(quizTint)
-                .padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Outlined.Quiz,
-                    contentDescription = null,
-                    tint = accent,
-                    modifier = Modifier.size(22.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = sectionTitle,
-                    color = accent,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
+            Text(title, color = Color(0xFF666666), fontSize = 14.sp)
+            Text(value, color = valueColor, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            Text(subtitle, color = Color(0xFF474747), fontSize = 13.sp)
+        }
+    }
+}
+
+@Composable
+private fun AnalysisCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+        shape = DailyPanelRadius,
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("Question Analysis", color = Color(0xFF2E2E2E), fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+            Spacer(Modifier.height(8.dp))
+            Text("Correct - 00      Wrong - 02      Skipped - 03", color = Color(0xFF6C6C6C), fontSize = 12.sp)
             Spacer(Modifier.height(10.dp))
-            Text(
-                text = item.prompt ?: "",
-                color = p.textPrimary,
-                fontSize = 16.sp,
-                lineHeight = 24.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.height(14.dp))
-            val opts = ((item.options ?: emptyList()) + List(4) { "" }).take(4)
-            opts.forEachIndexed { index, label ->
-                DigestOptionRow(
-                    label = label,
-                    index = index,
-                    correctIndex = item.correctIndex.coerceIn(0, 3),
-                    chosenOption = chosenOption,
-                    revealed = revealed,
-                    accent = accent,
-                    onClick = {
-                        if (!revealed) onChoose(index)
-                    },
-                )
-                Spacer(Modifier.height(8.dp))
-            }
-            if (revealed) {
-                val ok = chosenOption == item.correctIndex.coerceIn(0, 3)
-                val correctText = opts.getOrElse(item.correctIndex.coerceIn(0, 3)) { "" }
-                val feedbackShape = RoundedCornerShape(12.dp)
-                val feedbackBg = if (ok) p.success.copy(alpha = 0.14f) else p.error.copy(alpha = 0.14f)
-                val feedbackBorder = if (ok) p.success.copy(alpha = 0.5f) else p.error.copy(alpha = 0.55f)
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(feedbackShape)
-                        .border(1.dp, feedbackBorder, feedbackShape),
-                    color = feedbackBg,
-                    shape = feedbackShape,
-                ) {
-                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                        Text(
-                            text = if (ok) "🎉 Correct answer!" else "😞 Oh wrong answer...",
-                            color = if (ok) p.success else p.error,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = if (ok) {
-                                "$correctFeedback  Locked for today."
-                            } else {
-                                "$wrongPrefix $correctText"
-                            },
-                            color = p.textPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            lineHeight = 18.sp,
-                        )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                listOf(
+                    "1" to Color(0xFFFDE7EA),
+                    "2" to Color(0xFFFDE7EA),
+                    "3" to Color(0xFFE7EBEF),
+                    "4" to Color(0xFFE7EBEF),
+                    "5" to Color(0xFFE7EBEF),
+                ).forEach { (n, bg) ->
+                    Box(
+                        modifier = Modifier.size(42.dp).clip(RoundedCornerShape(4.dp)).background(bg),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(n, color = Color(0xFF4A4A4A), fontSize = 16.sp)
                     }
                 }
-            } else {
-                Text(
-                    text = "$tapHint Once selected, answer locks for today.",
-                    color = p.textSecondary,
-                    fontSize = 12.sp,
-                )
             }
         }
     }
 }
 
 @Composable
-private fun DigestOptionRow(
-    label: String,
-    index: Int,
-    correctIndex: Int,
-    chosenOption: Int,
-    revealed: Boolean,
-    accent: Color,
-    onClick: () -> Unit,
+private fun DonutCard(
+    title: String,
+    centerText: String,
+    values: List<Pair<Float, Color>>,
+    sideStats: String,
 ) {
-    val p = mockTestPalette()
-    val shape = RoundedCornerShape(12.dp)
-    val bg = when {
-        !revealed -> p.surfaceElevated.copy(alpha = 0.95f)
-        index == correctIndex -> p.success.copy(alpha = 0.22f)
-        index == chosenOption && index != correctIndex -> p.error.copy(alpha = 0.2f)
-        else -> p.surfaceElevated.copy(alpha = 0.5f)
-    }
-    val borderC = when {
-        !revealed -> p.border.copy(alpha = 0.22f)
-        index == correctIndex -> p.success.copy(alpha = 0.65f)
-        index == chosenOption && index != correctIndex -> p.error.copy(alpha = 0.65f)
-        else -> p.border.copy(alpha = 0.12f)
-    }
-    val interaction = remember { MutableInteractionSource() }
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .border(1.dp, borderC, shape)
-            .clickable(
-                interactionSource = interaction,
-                indication = ripple(color = accent.copy(alpha = 0.25f)),
-                enabled = !revealed,
-                onClick = onClick,
-            ),
-        color = bg,
-        shape = shape,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = ('A' + index).toString(),
-                color = accent,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.width(22.dp),
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = label,
-                color = p.textPrimary,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
-                modifier = Modifier.weight(1f),
-            )
-        }
-    }
-}
-
-@Composable
-private fun DigestFactCard(
-    body: String,
-    sectionTitle: String,
-    accent: Color,
-    borderColor: Color,
-) {
-    val p = mockTestPalette()
-    val shape = RoundedCornerShape(18.dp)
-    val factBrush = Brush.linearGradient(
-        colors = listOf(
-            accent.copy(alpha = 0.12f),
-            p.systemBlue.copy(alpha = 0.06f),
-        ),
-    )
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .border(1.dp, borderColor, shape),
-        shape = shape,
-        colors = CardDefaults.cardColors(containerColor = p.surface),
+        modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+        shape = DailyPanelRadius,
+        colors = CardDefaults.cardColors(containerColor = Color.White),
     ) {
-        Column(
-            modifier = Modifier
-                .background(factBrush)
-                .padding(16.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Rounded.Lightbulb,
-                    contentDescription = null,
-                    tint = accent,
-                    modifier = Modifier.size(22.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = sectionTitle,
-                    color = accent,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                )
+        Column(modifier = Modifier.fillMaxWidth().padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(title, color = Color(0xFF2E2E2E), fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+            Spacer(Modifier.height(8.dp))
+            Text(sideStats, color = Color(0xFF6C6C6C), fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(190.dp)) {
+                androidx.compose.foundation.Canvas(modifier = Modifier.size(170.dp)) {
+                    var start = -90f
+                    values.forEach { (portion, color) ->
+                        val angle = (portion / 100f) * 360f
+                        drawArc(
+                            color = color,
+                            startAngle = start,
+                            sweepAngle = angle,
+                            useCenter = false,
+                            topLeft = Offset(12f, 12f),
+                            size = Size(size.width - 24f, size.height - 24f),
+                            style = Stroke(width = 30f, cap = StrokeCap.Butt),
+                        )
+                        start += angle
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .size(92.dp)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                        .border(1.dp, Color(0xFFD9DDE2), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(centerText, textAlign = TextAlign.Center, color = Color(0xFF4A4A4A), fontSize = 17.sp, lineHeight = 19.sp)
+                }
             }
-            Spacer(Modifier.height(10.dp))
-            Text(
-                text = body,
-                color = p.textPrimary,
-                fontSize = 15.sp,
-                lineHeight = 23.sp,
-            )
         }
     }
 }

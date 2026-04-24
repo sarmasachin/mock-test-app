@@ -50,6 +50,8 @@ function mapTest(row) {
     negativeMarkingText: String(row.negative_marking_text || 'No'),
     testTypeLabel: String(row.test_type_label || ''),
     validUntil: row.valid_until ? toIsoDate(new Date(row.valid_until)) : null,
+    answerKeyReleaseAt: row.answer_key_release_at ? new Date(row.answer_key_release_at).toISOString() : null,
+    resultReleaseAt: row.result_release_at ? new Date(row.result_release_at).toISOString() : null,
     dynamicDateEnabled: row.dynamic_date_enabled === true,
     dateCycleDays: Number(row.date_cycle_days || 0),
   };
@@ -65,7 +67,7 @@ router.get('/', async (req, res) => {
     if (sub && kind && ['mock', 'quiz'].includes(kind)) {
       q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind,
                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
-                  language_mode, exam_mode, negative_marking_text, test_type_label, valid_until,
+                  language_mode, exam_mode, negative_marking_text, test_type_label, valid_until, answer_key_release_at, result_release_at,
                   dynamic_date_enabled, date_cycle_days
            FROM tests
            WHERE is_published = true AND test_kind = $1
@@ -76,7 +78,7 @@ router.get('/', async (req, res) => {
     } else if (sub) {
       q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind,
                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
-                  language_mode, exam_mode, negative_marking_text, test_type_label, valid_until,
+                  language_mode, exam_mode, negative_marking_text, test_type_label, valid_until, answer_key_release_at, result_release_at,
                   dynamic_date_enabled, date_cycle_days
            FROM tests
            WHERE is_published = true AND subcategory ILIKE $1
@@ -86,7 +88,7 @@ router.get('/', async (req, res) => {
     } else if (kind && ['mock', 'quiz'].includes(kind)) {
       q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind,
                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
-                  language_mode, exam_mode, negative_marking_text, test_type_label, valid_until,
+                  language_mode, exam_mode, negative_marking_text, test_type_label, valid_until, answer_key_release_at, result_release_at,
                   dynamic_date_enabled, date_cycle_days
            FROM tests
            WHERE is_published = true AND test_kind = $1
@@ -96,7 +98,7 @@ router.get('/', async (req, res) => {
     } else {
       q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind,
                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
-                  language_mode, exam_mode, negative_marking_text, test_type_label, valid_until,
+                  language_mode, exam_mode, negative_marking_text, test_type_label, valid_until, answer_key_release_at, result_release_at,
                   dynamic_date_enabled, date_cycle_days
            FROM tests
            WHERE is_published = true

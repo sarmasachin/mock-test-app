@@ -34,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,8 +44,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mocktestapp.data.ContentRepository
+import com.example.mocktestapp.data.AppPreferencesRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
+import kotlinx.coroutines.launch
 
 @Composable
 fun ApplyForTestScreenNew(
@@ -73,6 +76,9 @@ fun ApplyForTestScreenNew(
     var slotInfo by remember { mutableStateOf("Morning Slot") }
     var appliedInfo by remember { mutableStateOf("0") }
     var remainingSeatsInfo by remember { mutableStateOf("0 seats left") }
+    var startSeriesLockMs by remember { mutableStateOf(20_000L) }
+    var startSeriesActiveWindowMs by remember { mutableStateOf(30 * 60 * 1000L) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         val remote = ContentRepository.loadSubmitApplicationContent() ?: return@LaunchedEffect
@@ -83,6 +89,11 @@ fun ApplyForTestScreenNew(
         if (remote.bulletItems.isNotEmpty()) {
             bulletItems = remote.bulletItems
         }
+    }
+    LaunchedEffect(Unit) {
+        val home = ContentRepository.loadHomeContent() ?: return@LaunchedEffect
+        startSeriesLockMs = home.startSeriesLockSeconds.coerceAtLeast(0).toLong() * 1000L
+        startSeriesActiveWindowMs = home.startSeriesActiveWindowMinutes.coerceAtLeast(1).toLong() * 60_000L
     }
     LaunchedEffect(title) {
         val test = ContentRepository.loadTestByTitle(title)
@@ -220,6 +231,13 @@ fun ApplyForTestScreenNew(
             confirmButton = {
                 Button(
                     onClick = {
+                        scope.launch {
+                            AppPreferencesRepository.addAppliedTestSeries(
+                                testName = title,
+                                lockMs = startSeriesLockMs,
+                                activeWindowMs = startSeriesActiveWindowMs,
+                            )
+                        }
                         showSuccessDialog = false
                         onSubmit()
                     },

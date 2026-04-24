@@ -15,6 +15,7 @@ const testsCatalogRouter = require('./routes/tests');
 const leaderboardRouter = require('./routes/leaderboard');
 const homeRouter = require('./routes/home');
 const adminRouter = require('./routes/admin');
+const pollsRouter = require('./routes/polls');
 const { pool } = require('./db');
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
@@ -71,6 +72,7 @@ app.use('/v1/digest', digestRouter);
 app.use('/v1/tests', testsCatalogRouter);
 app.use('/v1/leaderboard', leaderboardRouter);
 app.use('/v1/home', homeRouter);
+app.use('/v1/polls', requireAuth, pollsRouter);
 app.use('/v1/admin', requireAuth, requireAdmin, adminRouter);
 
 async function ensureOptionalColumns() {
@@ -78,6 +80,14 @@ async function ensureOptionalColumns() {
     await pool.query(
       `ALTER TABLE tests
        ADD COLUMN IF NOT EXISTS dynamic_fluctuation_on_publish BOOLEAN NOT NULL DEFAULT true`,
+    );
+    await pool.query(
+      `ALTER TABLE tests
+       ADD COLUMN IF NOT EXISTS answer_key_release_at TIMESTAMPTZ`,
+    );
+    await pool.query(
+      `ALTER TABLE tests
+       ADD COLUMN IF NOT EXISTS result_release_at TIMESTAMPTZ`,
     );
   } catch (e) {
     if (e && e.code === '42P01') return;

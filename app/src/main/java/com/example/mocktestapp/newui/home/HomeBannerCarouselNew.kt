@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.layout.ContentScale
@@ -17,6 +18,10 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.Alignment
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
@@ -47,6 +52,12 @@ private fun bannerBrushForPageInScope(page: Int, width: Float, height: Float): B
 
 private const val AutoScrollMs = 4000L
 
+data class HomeCarouselSlide(
+    val imageUrl: String,
+    val title: String? = null,
+    val articleId: String? = null,
+)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HomeBannerCarouselNew(
@@ -54,10 +65,16 @@ fun HomeBannerCarouselNew(
     /** Number of pager pages; each uses a built-in gradient (cycles every 3 styles). */
     slideCount: Int = 3,
     imageUrls: List<String> = emptyList(),
+    slides: List<HomeCarouselSlide> = emptyList(),
+    onSlideClick: (HomeCarouselSlide) -> Unit = {},
 ) {
     val context = LocalContext.current
-    val remoteUrls = imageUrls.filter { it.isNotBlank() }
-    val totalSlides = if (remoteUrls.isNotEmpty()) remoteUrls.size else slideCount
+    val remoteSlides = if (slides.isNotEmpty()) {
+        slides.filter { it.imageUrl.isNotBlank() }
+    } else {
+        imageUrls.filter { it.isNotBlank() }.map { HomeCarouselSlide(imageUrl = it) }
+    }
+    val totalSlides = if (remoteSlides.isNotEmpty()) remoteSlides.size else slideCount
     if (totalSlides <= 0) return
 
     val pagerState = rememberPagerState(pageCount = { totalSlides }, initialPage = 0)
@@ -80,19 +97,43 @@ fun HomeBannerCarouselNew(
         pageSpacing = 12.dp,
         beyondViewportPageCount = 1,
     ) { page ->
-        if (remoteUrls.isNotEmpty()) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(remoteUrls[page])
-                    .crossfade(true)
-                    .build(),
-                contentDescription = "Home banner",
-                contentScale = ContentScale.Crop,
+        if (remoteSlides.isNotEmpty()) {
+            val slide = remoteSlides[page]
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(168.dp)
-                    .clip(RoundedCornerShape(16.dp)),
-            )
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { onSlideClick(slide) },
+            ) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(slide.imageUrl)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = "Home banner",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(168.dp)
+                        .clip(RoundedCornerShape(16.dp)),
+                )
+                if (!slide.title.isNullOrBlank()) {
+                    Text(
+                        text = slide.title,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth()
+                            .drawBehind {
+                                drawRect(Color.Black.copy(alpha = 0.4f))
+                            },
+                    )
+                }
+            }
         } else {
             Box(
                 modifier = Modifier

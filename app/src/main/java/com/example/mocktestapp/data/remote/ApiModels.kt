@@ -140,6 +140,8 @@ data class CatalogTestDto(
     @SerializedName("negativeMarkingText") val negativeMarkingText: String? = null,
     @SerializedName("testTypeLabel") val testTypeLabel: String? = null,
     @SerializedName("validUntil") val validUntil: String? = null,
+    @SerializedName("answerKeyReleaseAt") val answerKeyReleaseAt: String? = null,
+    @SerializedName("resultReleaseAt") val resultReleaseAt: String? = null,
     @SerializedName("dynamicDateEnabled") val dynamicDateEnabled: Boolean? = null,
     @SerializedName("dateCycleDays") val dateCycleDays: Int? = null,
 )
@@ -184,12 +186,23 @@ data class HomeBannerDto(
     val enabled: Boolean = true,
 )
 
+data class HomeNewsSlideDto(
+    val id: String,
+    @SerializedName("articleId") val articleId: String,
+    val headline: String? = null,
+    @SerializedName("imageUrl") val imageUrl: String,
+    val enabled: Boolean = true,
+)
+
 data class HomeContentDto(
     @SerializedName("welcomeText") val welcomeText: String? = null,
     @SerializedName("quickActionsTitle") val quickActionsTitle: String? = null,
     val sections: List<HomeContentSectionDto> = emptyList(),
     @SerializedName("quickActionSections") val quickActionSections: List<HomeQuickActionSectionDto> = emptyList(),
     val banners: List<HomeBannerDto> = emptyList(),
+    @SerializedName("newsSlides") val newsSlides: List<HomeNewsSlideDto> = emptyList(),
+    @SerializedName("startSeriesLockSeconds") val startSeriesLockSeconds: Int? = null,
+    @SerializedName("startSeriesActiveWindowMinutes") val startSeriesActiveWindowMinutes: Int? = null,
 )
 
 data class SubmitApplicationContentDto(
@@ -245,4 +258,68 @@ data class HomeContentResponse(
     @SerializedName("instructionContent") val instructionContent: InstructionContentDto? = null,
     @SerializedName("profileMenuItems") val profileMenuItems: List<ProfileMenuItemDto> = emptyList(),
     @SerializedName("examCategories") val examCategories: ExamCategoriesDto? = null,
+    @SerializedName("pollSettings") val pollSettings: PollSettingsDto? = null,
+    @SerializedName("pushNotificationSettings") val pushNotificationSettings: PushNotificationSettingsDto? = null,
+)
+
+data class PollItemDto(
+    val id: String,
+    val question: String,
+    val options: List<String> = emptyList(),
+    @SerializedName("allowMultiple") val allowMultiple: Boolean = false,
+    val enabled: Boolean = true,
+)
+
+data class PollSettingsDto(
+    val items: List<PollItemDto> = emptyList(),
+)
+
+data class PushNotificationItemDto(
+    val id: String,
+    val title: String? = null,
+    val message: String? = null,
+    val enabled: Boolean = true,
+    val status: String? = null,
+    @SerializedName("createdAt") val createdAt: String? = null,
+)
+
+data class PushNotificationSettingsDto(
+    val items: List<PushNotificationItemDto> = emptyList(),
+)
+
+data class LeaderboardItemDto(
+    val rank: Int,
+    @SerializedName("userId") val userId: String,
+    val name: String,
+    val city: String? = null,
+    val state: String? = null,
+    val score: Int,
+    @SerializedName("totalCorrect") val totalCorrect: Int = 0,
+    @SerializedName("totalQuestions") val totalQuestions: Int = 0,
+)
+
+data class LeaderboardResponse(
+    val items: List<LeaderboardItemDto> = emptyList(),
+)
+
+data class LeaderboardFilterTestDto(
+    val id: String,
+    val title: String,
+)
+
+data class LeaderboardFiltersResponse(
+    val tests: List<LeaderboardFilterTestDto> = emptyList(),
+    val states: List<String> = emptyList(),
+    val cities: List<String> = emptyList(),
+)
+
+data class PollVoteRequest(
+    @SerializedName("optionIndexes") val optionIndexes: List<Int>,
+)
+
+data class PollVoteResponse(
+    val ok: Boolean,
+    @SerializedName("pollId") val pollId: String,
+    @SerializedName("optionIndexes") val optionIndexes: List<Int> = emptyList(),
+    val counts: List<Int> = emptyList(),
 )

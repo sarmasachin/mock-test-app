@@ -10,10 +10,18 @@ router.get('/content', async (_req, res) => {
     const { rows } = await pool.query(
       `SELECT setting_key, setting_value
        FROM app_settings
-       WHERE setting_key IN ('homeContent', 'submitApplicationContent', 'instructionContent', 'profileMenuItems', 'examCategories')`,
+       WHERE setting_key IN ('homeContent', 'submitApplicationContent', 'instructionContent', 'profileMenuItems', 'examCategories', 'pollSettings', 'pushNotificationSettings')`,
     );
     if (!rows.length) {
-      return res.json({ content: null, submitApplicationContent: null, instructionContent: null, profileMenuItems: [], examCategories: { items: [] } });
+      return res.json({
+        content: null,
+        submitApplicationContent: null,
+        instructionContent: null,
+        profileMenuItems: [],
+        examCategories: { items: [] },
+        pollSettings: { items: [] },
+        pushNotificationSettings: { items: [] },
+      });
     }
     const map = {};
     for (const row of rows) map[row.setting_key] = row.setting_value;
@@ -22,6 +30,8 @@ router.get('/content', async (_req, res) => {
     let parsedInstruction = null;
     let parsedProfileMenuItems = [];
     let parsedExamCategories = { items: [] };
+    let parsedPollSettings = { items: [] };
+    let parsedPushNotificationSettings = { items: [] };
     try {
       parsedHome = JSON.parse(String(map.homeContent || '{}'));
     } catch (_e) {
@@ -49,16 +59,38 @@ router.get('/content', async (_req, res) => {
     } catch (_e) {
       parsedExamCategories = { items: [] };
     }
+    try {
+      const parsed = JSON.parse(String(map.pollSettings || '{}'));
+      parsedPollSettings = parsed && typeof parsed === 'object' ? parsed : { items: [] };
+    } catch (_e) {
+      parsedPollSettings = { items: [] };
+    }
+    try {
+      const parsed = JSON.parse(String(map.pushNotificationSettings || '{}'));
+      parsedPushNotificationSettings = parsed && typeof parsed === 'object' ? parsed : { items: [] };
+    } catch (_e) {
+      parsedPushNotificationSettings = { items: [] };
+    }
     return res.json({
       content: parsedHome,
       submitApplicationContent: parsedSubmit,
       instructionContent: parsedInstruction,
       profileMenuItems: parsedProfileMenuItems,
       examCategories: parsedExamCategories,
+      pollSettings: parsedPollSettings,
+      pushNotificationSettings: parsedPushNotificationSettings,
     });
   } catch (e) {
     if (e && e.code === '42P01') {
-      return res.json({ content: null, submitApplicationContent: null, instructionContent: null, profileMenuItems: [], examCategories: { items: [] } });
+      return res.json({
+        content: null,
+        submitApplicationContent: null,
+        instructionContent: null,
+        profileMenuItems: [],
+        examCategories: { items: [] },
+        pollSettings: { items: [] },
+        pushNotificationSettings: { items: [] },
+      });
     }
     console.error(e);
     return res.status(500).json({ error: 'Failed to load home content' });

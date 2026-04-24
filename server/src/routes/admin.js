@@ -40,6 +40,7 @@ const SETTINGS_KEYS = [
   'homeContent',
   'pollSettings',
   'pushNotificationSettings',
+  'dailyQuizSettings',
   'submitApplicationContent',
   'instructionContent',
   'examCategories',
@@ -78,6 +79,8 @@ function normalizeHomeContent(value) {
   const rawSections = Array.isArray(safe.sections) ? safe.sections : [];
   const rawQuickActionSections = Array.isArray(safe.quickActionSections) ? safe.quickActionSections : [];
   const rawBanners = Array.isArray(safe.banners) ? safe.banners : [];
+  const startSeriesLockSeconds = Math.max(0, Math.min(86_400, Number(safe.startSeriesLockSeconds || 20)));
+  const startSeriesActiveWindowMinutes = Math.max(1, Math.min(10_080, Number(safe.startSeriesActiveWindowMinutes || 30)));
   const sections = rawSections.map((section, index) => {
     const s = section || {};
     const title = String(s.title || '').trim().slice(0, 80);
@@ -124,6 +127,19 @@ function normalizeHomeContent(value) {
       };
     })
     .filter((x) => x.imageUrl);
+  const rawNewsSlides = Array.isArray(safe.newsSlides) ? safe.newsSlides : [];
+  const newsSlides = rawNewsSlides
+    .map((slide, index) => {
+      const x = slide || {};
+      return {
+        id: String(x.id || `news-slide-${index + 1}`).trim().slice(0, 60),
+        articleId: String(x.articleId || '').trim().slice(0, 120),
+        headline: String(x.headline || '').trim().slice(0, 220),
+        imageUrl: String(x.imageUrl || '').trim().slice(0, 800),
+        enabled: x.enabled !== false,
+      };
+    })
+    .filter((x) => x.articleId && x.imageUrl);
   return {
     value: {
       welcomeText,
@@ -131,6 +147,9 @@ function normalizeHomeContent(value) {
       sections,
       quickActionSections,
       banners,
+      newsSlides,
+      startSeriesLockSeconds,
+      startSeriesActiveWindowMinutes,
     },
   };
 }
@@ -221,6 +240,17 @@ function normalizePushNotificationSettings(value) {
   return {
     value: {
       items,
+    },
+  };
+}
+
+function normalizeDailyQuizSettings(value) {
+  const safe = value || {};
+  return {
+    value: {
+      releaseHour: Math.max(0, Math.min(23, Number(safe.releaseHour ?? 10))),
+      releaseMinute: Math.max(0, Math.min(59, Number(safe.releaseMinute ?? 0))),
+      timezoneOffsetMinutes: Math.max(-720, Math.min(840, Number(safe.timezoneOffsetMinutes ?? 330))),
     },
   };
 }
@@ -601,6 +631,21 @@ async function getSettingsMap() {
         return {};
       }
     })(),
+    dailyQuizSettings: (() => {
+      try {
+        const parsed = JSON.parse(String(map.dailyQuizSettings || '{}'));
+        if (!parsed || typeof parsed !== 'object') {
+          return { releaseHour: 10, releaseMinute: 0, timezoneOffsetMinutes: 330 };
+        }
+        return {
+          releaseHour: Math.max(0, Math.min(23, Number(parsed.releaseHour ?? 10))),
+          releaseMinute: Math.max(0, Math.min(59, Number(parsed.releaseMinute ?? 0))),
+          timezoneOffsetMinutes: Math.max(-720, Math.min(840, Number(parsed.timezoneOffsetMinutes ?? 330))),
+        };
+      } catch (_e) {
+        return { releaseHour: 10, releaseMinute: 0, timezoneOffsetMinutes: 330 };
+      }
+    })(),
     submitApplicationContent: (() => {
       try {
         const parsed = JSON.parse(String(map.submitApplicationContent || '{}'));
@@ -812,6 +857,8 @@ router.patch('/settings', async (req, res) => {
     body.pollSettings === undefined ? null : normalizePollSettings(body.pollSettings);
   const normalizedPushNotificationSettings =
     body.pushNotificationSettings === undefined ? null : normalizePushNotificationSettings(body.pushNotificationSettings);
+  const normalizedDailyQuizSettings =
+    body.dailyQuizSettings === undefined ? null : normalizeDailyQuizSettings(body.dailyQuizSettings);
   const normalizedSubmitApplicationContent =
     body.submitApplicationContent === undefined ? null : normalizeSubmitApplicationContent(body.submitApplicationContent);
   const normalizedInstructionContent =
@@ -842,6 +889,7 @@ router.patch('/settings', async (req, res) => {
     normalizedHomeContent === null &&
     normalizedPollSettings === null &&
     normalizedPushNotificationSettings === null &&
+    normalizedDailyQuizSettings === null &&
     normalizedSubmitApplicationContent === null &&
     normalizedInstructionContent === null &&
     normalizedExamCategories === null &&
@@ -921,6 +969,15 @@ router.patch('/settings', async (req, res) => {
            ON CONFLICT (setting_key)
            DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
           [JSON.stringify(normalizedPushNotificationSettings.value), req.userId],
+        );
+      }
+      if (normalizedDailyQuizSettings !== null) {
+        await client.query(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+           VALUES ('dailyQuizSettings', $1, $2::uuid)
+           ON CONFLICT (setting_key)
+           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [JSON.stringify(normalizedDailyQuizSettings.value), req.userId],
         );
       }
       if (normalizedSubmitApplicationContent !== null) {
@@ -1038,6 +1095,7 @@ router.patch('/settings', async (req, res) => {
       homeContentUpdated: normalizedHomeContent !== null,
       pollSettingsUpdated: normalizedPollSettings !== null,
       pushNotificationSettingsUpdated: normalizedPushNotificationSettings !== null,
+      dailyQuizSettingsUpdated: normalizedDailyQuizSettings !== null,
       submitApplicationContentUpdated: normalizedSubmitApplicationContent !== null,
       instructionContentUpdated: normalizedInstructionContent !== null,
       examCategoriesUpdated: normalizedExamCategories !== null,
@@ -1082,6 +1140,7 @@ router.get('/tests', async (_req, res) => {
       `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
               exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
               language_mode, exam_mode, negative_marking_text, test_type_label, valid_until,
+              answer_key_release_at, result_release_at,
               dynamic_date_enabled, date_cycle_days,
               COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
        FROM tests
@@ -1112,6 +1171,8 @@ router.post('/tests', async (req, res) => {
   const testTypeLabel = String(body.testTypeLabel || 'Full Mock').trim().slice(0, 40);
   const examDate = String(body.examDate || '').trim();
   const validUntil = String(body.validUntil || '').trim();
+  const answerKeyReleaseAt = String(body.answerKeyReleaseAt || '').trim();
+  const resultReleaseAt = String(body.resultReleaseAt || '').trim();
   const dynamicDateEnabled = body.dynamicDateEnabled === true;
   const dateCycleDays = Math.max(0, Number(body.dateCycleDays || 0));
   if (!title || !slug || !['mock', 'quiz'].includes(testKind)) {
@@ -1129,11 +1190,11 @@ router.post('/tests', async (req, res) => {
          slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
          dynamic_fluctuation_on_publish, exam_date, total_marks, slot_label, capacity_total, enrolled_count,
          attempts_allowed, language_mode, exam_mode, negative_marking_text, test_type_label, valid_until,
-         dynamic_date_enabled, date_cycle_days
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::date, $21, $22)
+         answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::date, $21::timestamptz, $22::timestamptz, $23, $24)
        RETURNING id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
                  exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed, language_mode,
-                 exam_mode, negative_marking_text, test_type_label, valid_until, dynamic_date_enabled, date_cycle_days,
+                 exam_mode, negative_marking_text, test_type_label, valid_until, answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days,
                  COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish`,
       [
         slug,
@@ -1156,6 +1217,8 @@ router.post('/tests', async (req, res) => {
         negativeMarkingText,
         testTypeLabel,
         validUntil || null,
+        answerKeyReleaseAt || null,
+        resultReleaseAt || null,
         dynamicDateEnabled,
         dateCycleDays,
       ],
@@ -1199,6 +1262,8 @@ router.patch('/tests/:id', async (req, res) => {
   const testTypeLabel = String(body.testTypeLabel || 'Full Mock').trim().slice(0, 40);
   const examDate = String(body.examDate || '').trim();
   const validUntil = String(body.validUntil || '').trim();
+  const answerKeyReleaseAt = String(body.answerKeyReleaseAt || '').trim();
+  const resultReleaseAt = String(body.resultReleaseAt || '').trim();
   const dynamicDateEnabled = body.dynamicDateEnabled === true;
   const dateCycleDays = Math.max(0, Number(body.dateCycleDays || 0));
   const isPublished = body.isPublished !== false;
@@ -1232,11 +1297,11 @@ router.patch('/tests/:id', async (req, res) => {
            question_count = $6, test_kind = $7, is_published = $8, dynamic_fluctuation_on_publish = $9,
            exam_date = $10::date, total_marks = $11, slot_label = $12, capacity_total = $13, enrolled_count = $14,
            attempts_allowed = $15, language_mode = $16, exam_mode = $17, negative_marking_text = $18,
-           test_type_label = $19, valid_until = $20::date, dynamic_date_enabled = $21, date_cycle_days = $22
-       WHERE id = $23::uuid
+           test_type_label = $19, valid_until = $20::date, answer_key_release_at = $21::timestamptz, result_release_at = $22::timestamptz, dynamic_date_enabled = $23, date_cycle_days = $24
+       WHERE id = $25::uuid
        RETURNING id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
                  exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed, language_mode,
-                 exam_mode, negative_marking_text, test_type_label, valid_until, dynamic_date_enabled, date_cycle_days,
+                 exam_mode, negative_marking_text, test_type_label, valid_until, answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days,
                  COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish`,
       [
         slug,
@@ -1259,6 +1324,8 @@ router.patch('/tests/:id', async (req, res) => {
         negativeMarkingText,
         testTypeLabel,
         validUntil || null,
+        answerKeyReleaseAt || null,
+        resultReleaseAt || null,
         dynamicDateEnabled,
         dateCycleDays,
         id,

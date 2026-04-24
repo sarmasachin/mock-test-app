@@ -57,7 +57,7 @@ fun NewsScreenNew(
     }
     FeedBrowseScreenNew(
         title = "News",
-        subtitle = "Hero carousel + full feed below",
+        subtitle = "",
         listSectionTitle = "",
         listSectionSubtitle = "",
         feedIcon = Icons.Rounded.Newspaper,

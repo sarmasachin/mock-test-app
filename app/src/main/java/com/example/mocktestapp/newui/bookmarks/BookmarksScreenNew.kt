@@ -2,6 +2,7 @@ package com.example.mocktestapp.newui.bookmarks
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,18 +15,21 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,8 +48,10 @@ fun BookmarksScreenNew(
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
-
-    val items = dummyBookmarks()
+    val tabs = remember {
+        listOf("Calculator", "Image Compress", "PDF Tools", "Unit Converter")
+    }
+    var selectedTab by remember { mutableStateOf(tabs.first()) }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -60,39 +66,15 @@ fun BookmarksScreenNew(
         ) {
             TopBar(onBack = onBack, title = "Tool")
             Spacer(Modifier.height(14.dp))
-
-            if (items.isEmpty()) {
-                EmptyState()
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    itemsIndexed(items) { _, item ->
-                        BookmarkCard(
-                            title = item.title,
-                            topic = item.topic,
-                            meta = item.meta,
-                        )
-                    }
-                }
-            }
+            ToolTabRow(
+                tabs = tabs,
+                selected = selectedTab,
+                onSelect = { selectedTab = it },
+            )
+            Spacer(Modifier.height(14.dp))
+            ComingSoonCard(toolName = selectedTab)
         }
     }
-}
-
-private data class BookmarkItem(
-    val title: String,
-    val topic: String,
-    val meta: String,
-)
-
-private fun dummyBookmarks(): List<BookmarkItem> {
-    return listOf(
-        BookmarkItem(title = "Arithmetic Sprint", topic = "Math", meta = "10 Q • 12 min"),
-        BookmarkItem(title = "Series Practice", topic = "Reasoning", meta = "10 Q • 12 min"),
-        BookmarkItem(title = "Grammar Boost", topic = "English", meta = "10 Q • 12 min"),
-    )
 }
 
 @Composable
@@ -123,64 +105,34 @@ private fun TopBar(
 }
 
 @Composable
-private fun BookmarkCard(
-    title: String,
-    topic: String,
-    meta: String,
+private fun ToolTabRow(
+    tabs: List<String>,
+    selected: String,
+    onSelect: (String) -> Unit,
 ) {
     val p = mockTestPalette()
-    val shape = RoundedCornerShape(20.dp)
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = shape,
-        colors = CardDefaults.cardColors(containerColor = p.surface),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            p.border.copy(alpha = 0.18f),
-        ),
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        items(tabs) { tab ->
+            val isSelected = tab == selected
+            val shape = RoundedCornerShape(14.dp)
             Box(
                 modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(p.surfaceElevated)
-                    .border(1.dp, p.border.copy(alpha = 0.12f), RoundedCornerShape(16.dp)),
+                    .height(40.dp)
+                    .wrapContentWidth()
+                    .clip(shape)
+                    .background(if (isSelected) p.systemBlue else p.surface)
+                    .border(1.dp, p.border.copy(alpha = 0.2f), shape)
+                    .clickable { onSelect(tab) }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "★",
-                    color = p.accent,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 16.sp,
-                )
-            }
-
-            Spacer(Modifier.width(14.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    color = p.textPrimary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = topic,
-                    color = p.textSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = meta,
-                    color = p.textSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    text = tab,
+                    color = if (isSelected) Color.White else p.textPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
                 )
             }
         }
@@ -188,23 +140,33 @@ private fun BookmarkCard(
 }
 
 @Composable
-private fun EmptyState() {
+private fun ComingSoonCard(toolName: String) {
     val p = mockTestPalette()
     val shape = RoundedCornerShape(22.dp)
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .height(180.dp)
             .clip(shape)
             .background(p.surface)
             .border(1.dp, p.border.copy(alpha = 0.16f), shape)
             .padding(18.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = "No documents yet.",
-            color = p.textSecondary,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = toolName,
+                color = p.textPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Coming Soon",
+                color = p.textSecondary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
     }
 }

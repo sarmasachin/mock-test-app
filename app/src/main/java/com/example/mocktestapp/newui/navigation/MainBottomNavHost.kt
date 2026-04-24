@@ -42,8 +42,8 @@ import com.example.mocktestapp.newui.achievements.AchievementsScreenNew
 import com.example.mocktestapp.newui.apply.ApplyForTestScreenNew
 import com.example.mocktestapp.newui.bookmarks.BookmarksScreenNew
 import com.example.mocktestapp.newui.category.CategoryRouteNew
-import com.example.mocktestapp.newui.category.SubcategoryDetailScreenNew
 import com.example.mocktestapp.newui.digest.DailyDigestScreenNew
+import com.example.mocktestapp.newui.digest.DailyDigestContentScreenNew
 import com.example.mocktestapp.newui.history.HistoryScreenNew
 import com.example.mocktestapp.newui.history.ResultsHistoryScreenNew
 import com.example.mocktestapp.newui.home.HomeRouteNew
@@ -52,7 +52,8 @@ import com.example.mocktestapp.newui.instructions.InstructionsScreenNew
 import com.example.mocktestapp.newui.leaderboard.LeaderboardScreenNew
 import com.example.mocktestapp.newui.legal.PrivacyPolicyScreenNew
 import com.example.mocktestapp.newui.legal.TermsOfServiceScreenNew
-import com.example.mocktestapp.newui.menu.DrawerMenuFeatureScreenNew
+import com.example.mocktestapp.newui.menu.NotificationsScreenNew
+import com.example.mocktestapp.newui.menu.PollScreenNew
 import com.example.mocktestapp.newui.news.NewsDetailRouteNew
 import com.example.mocktestapp.newui.news.NewsScreenNew
 import com.example.mocktestapp.newui.profile.ProfileRouteNew
@@ -215,17 +216,20 @@ fun MainBottomNavHost(
                     onOpenHistory = { mainNavController.navigate(RoutesNew.HISTORY) },
                     onOpenActivity = { mainNavController.navigate(RoutesNew.RESULTS_HISTORY) },
                     onOpenCategory = { cat ->
-                        mainNavController.navigate("${RoutesNew.CATEGORY}/$cat")
+                        mainNavController.navigate("${RoutesNew.APPLY}/$cat")
                     },
                     onSeeAllCategories = {
                         mainNavController.navigateMainTab(MainTabRoutes.Tests)
                     },
-                    onStartTest = {
-                        mainNavController.navigate("${RoutesNew.START_TEST_PREVIEW}/bsc nursing moc test")
+                    onStartTest = { testName ->
+                        val safeName = testName.ifBlank { "bsc nursing moc test" }
+                        mainNavController.navigate("${RoutesNew.START_TEST_PREVIEW}/$safeName")
                     },
                     onLeaderboard = { mainNavController.navigate(RoutesNew.LEADERBOARD) },
                     onResults = {
-                        mainNavController.navigate(RoutesNew.RESULTS_HISTORY)
+                        mainNavController.navigate(
+                            "${RoutesNew.RESULT}/Latest Test?answered=0&correct=0&wrong=0",
+                        )
                     },
                     onOpenPendingResult = { testName, answered, correct, wrong ->
                         val safeName = testName.ifBlank { "Test" }
@@ -237,6 +241,9 @@ fun MainBottomNavHost(
                     onOpenJobAlert = { mainNavController.navigate(RoutesNew.JOB_ALERT) },
                     onOpenExamAlert = { mainNavController.navigate(RoutesNew.EXAM_ALERT) },
                     onOpenNews = { mainNavController.navigateMainTab(MainTabRoutes.News) },
+                    onOpenNewsArticle = { articleId ->
+                        mainNavController.navigate("${RoutesNew.NEWS_DETAIL}/$articleId")
+                    },
                     onOpenProgressReport = { mainNavController.navigate(RoutesNew.PROGRESS_REPORT) },
                     onOpenDaily = { mainNavController.navigate(RoutesNew.DAILY) },
                     onOpenMenuQuiz = { mainNavController.navigate(RoutesNew.MENU_QUIZ) },
@@ -282,23 +289,8 @@ fun MainBottomNavHost(
                     category = name.ifBlank { "Category" },
                     onBack = { mainNavController.popBackOrHome() },
                     onOpenSubcategory = { sub ->
-                        mainNavController.navigate("${RoutesNew.SUBCATEGORY}/$sub")
+                        mainNavController.navigate("${RoutesNew.APPLY}/$sub")
                     },
-                )
-            }
-
-            composable(
-                route = "${RoutesNew.SUBCATEGORY}/{name}",
-                arguments = listOf(navArgument("name") { type = NavType.StringType }),
-            ) { entry ->
-                val name = entry.arguments?.getString("name").orEmpty()
-                SubcategoryDetailScreenNew(
-                    title = name.ifBlank { "Topic" },
-                    onBack = { mainNavController.popBackOrHome() },
-                    onApplyForTest = {
-                        mainNavController.navigate("${RoutesNew.APPLY}/${name.ifBlank { "Test" }}")
-                    },
-                    onViewTests = { mainNavController.navigate("${RoutesNew.TESTS}/$name") },
                 )
             }
 
@@ -348,8 +340,7 @@ fun MainBottomNavHost(
                 QuizScreenNew(
                     testName = name.ifBlank { "bsc nursing moc test" },
                     onBack = { mainNavController.popBackOrHome() },
-                    onSubmit = { answered, correct, wrong ->
-                        val publishAt = System.currentTimeMillis() + 2 * 60 * 1000L
+                    onSubmit = { answered, correct, wrong, publishAt ->
                         AppPreferencesRepository.markPendingResultSubmitted(
                             testName = name.ifBlank { "Test" },
                             publishAtMillis = publishAt,
@@ -532,7 +523,7 @@ fun MainBottomNavHost(
             }
 
             composable(RoutesNew.DAILY) {
-                DailyDigestScreenNew(
+                DailyDigestContentScreenNew(
                     onBack = { mainNavController.popBackOrHome() },
                 )
             }
@@ -556,37 +547,17 @@ fun MainBottomNavHost(
             }
 
             composable(RoutesNew.MENU_QUIZ) {
-                DrawerMenuFeatureScreenNew(
-                    title = "Quiz",
-                    description = "Quick practice and topic-wise quizzes. Use the button below to open the existing quiz flow (demo test).",
+                DailyDigestScreenNew(
                     onBack = { mainNavController.popBackOrHome() },
-                    primaryButtonLabel = "Start practice quiz",
-                    onPrimaryButtonClick = {
-                        mainNavController.navigate("${RoutesNew.INSTRUCTIONS}/Daily practice quiz") {
-                            launchSingleTop = true
-                        }
-                    },
                 )
             }
 
             composable(RoutesNew.POLL) {
-                DrawerMenuFeatureScreenNew(
-                    title = "Poll",
-                    description = "Vote in the latest student poll and see upcoming poll topics.",
-                    onBack = { mainNavController.popBackOrHome() },
-                    primaryButtonLabel = "Coming soon",
-                    onPrimaryButtonClick = { },
-                )
+                PollScreenNew(onBack = { mainNavController.popBackOrHome() })
             }
 
             composable(RoutesNew.NOTIFICATIONS) {
-                DrawerMenuFeatureScreenNew(
-                    title = "Notifications",
-                    description = "Latest app notifications will appear here.",
-                    onBack = { mainNavController.popBackOrHome() },
-                    primaryButtonLabel = "Coming soon",
-                    onPrimaryButtonClick = { },
-                )
+                NotificationsScreenNew(onBack = { mainNavController.popBackOrHome() })
             }
 
             composable(RoutesNew.SEE_ALL_CATEGORIES) {

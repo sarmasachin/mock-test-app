@@ -56,6 +56,8 @@ data class TestCardNew(
     val negativeMarkingText: String? = null,
     val testTypeLabel: String? = null,
     val validUntil: String? = null,
+    val answerKeyReleaseAt: String? = null,
+    val resultReleaseAt: String? = null,
 )
 
 @Composable

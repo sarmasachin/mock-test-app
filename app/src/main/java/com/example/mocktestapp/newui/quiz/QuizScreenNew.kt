@@ -64,13 +64,14 @@ import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.delay
+import java.time.Instant
 
 @Composable
 fun QuizScreenNew(
     modifier: Modifier = Modifier,
     testName: String,
     onBack: () -> Unit,
-    onSubmit: (Int, Int, Int) -> Unit,
+    onSubmit: (Int, Int, Int, Long) -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -82,6 +83,7 @@ fun QuizScreenNew(
     var submitDialogBrand by remember { mutableStateOf("Mockers") }
     var submitDialogTitle by remember { mutableStateOf("Are you sure want to submit test") }
     var submitDialogSubtitle by remember { mutableStateOf("After submitting test you won't be able to re-attempt") }
+    var resultReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(Unit) {
         val instruction = ContentRepository.loadInstructionContent()
@@ -94,6 +96,8 @@ fun QuizScreenNew(
             ?.takeIf { it == "free" || it == "sequential" }
             ?: "sequential"
         questionNavigationMode = mode
+        val testCard = ContentRepository.loadTestByTitle(testName)
+        resultReleaseAtMs = parseIsoMillis(testCard?.resultReleaseAt)
     }
 
     var remainingSeconds by remember { mutableIntStateOf(12 * 60) }
@@ -105,7 +109,7 @@ fun QuizScreenNew(
         val correct = answers.count { (q, ans) -> ans == (q % 4) }
         val answered = answers.size
         val wrong = (answered - correct).coerceAtLeast(0)
-        onSubmit(answered, correct, wrong)
+        onSubmit(answered, correct, wrong, resultReleaseAtMs ?: (System.currentTimeMillis() + 2 * 60 * 1000L))
     }
 
     val answeredCount = answers.size
@@ -280,7 +284,7 @@ fun QuizScreenNew(
                 val correct = answers.count { (q, ans) -> ans == (q % 4) }
                 val answered = answers.size
                 val wrong = (answered - correct).coerceAtLeast(0)
-                onSubmit(answered, correct, wrong)
+                onSubmit(answered, correct, wrong, resultReleaseAtMs ?: (System.currentTimeMillis() + 2 * 60 * 1000L))
             },
         )
     }
@@ -1006,4 +1010,13 @@ private fun formatTime(totalSeconds: Int): String {
     val m = (totalSeconds / 60).coerceAtLeast(0)
     val s = (totalSeconds % 60).coerceAtLeast(0)
     return "%d:%02d".format(m, s)
+}
+
+private fun parseIsoMillis(iso: String?): Long? {
+    if (iso.isNullOrBlank()) return null
+    return try {
+        Instant.parse(iso).toEpochMilli()
+    } catch (_: Exception) {
+        null
+    }
 }

@@ -23,6 +23,8 @@ import com.example.mocktestapp.newui.auth.isValidMobile
 import java.time.LocalDate
 import java.util.Locale
 import kotlin.random.Random
+import org.json.JSONArray
+import org.json.JSONObject
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "mocktest_prefs")
 
@@ -63,6 +65,10 @@ object AppPreferencesRepository {
     private val keyPendingResultAnswered = intPreferencesKey("pending_result_answered")
     private val keyPendingResultCorrect = intPreferencesKey("pending_result_correct")
     private val keyPendingResultWrong = intPreferencesKey("pending_result_wrong")
+    private val keyAppliedTestSeries = stringPreferencesKey("applied_test_series")
+
+    private const val DefaultStartSeriesLockMs = 20_000L
+    private const val DefaultStartSeriesActiveWindowMs = 30 * 60 * 1000L
 
     data class EditableProfileState(
         val displayName: String,
@@ -106,6 +112,12 @@ object AppPreferencesRepository {
         val wrong: Int,
         val sessionHiddenAtMillis: Long,
         val viewed: Boolean,
+    )
+
+    data class AppliedTestSeriesEntry(
+        val testName: String,
+        val unlockAtMillis: Long,
+        val expiresAtMillis: Long,
     )
 
     val drawerUserProfile: Flow<DrawerUserProfile>
@@ -400,6 +412,11 @@ object AppPreferencesRepository {
             }
         } ?: flowOf(null)
 
+    val appliedTestSeries: Flow<List<AppliedTestSeriesEntry>>
+        get() = storeOrNull()?.data?.map { prefs ->
+            parseAppliedTestSeries(prefs[keyAppliedTestSeries]).filter { it.testName.isNotBlank() }
+        } ?: flowOf(emptyList())
+
     fun rememberTestOpened(testName: String) {
         if (!::appContext.isInitialized) return
         scope.launch {
@@ -437,6 +454,35 @@ object AppPreferencesRepository {
                     prefs[keyPendingResultViewed] = 0
                 }
             }.onFailure { Log.e(TAG, "markPendingResultSubmitted failed", it) }
+        }
+    }
+
+    fun addAppliedTestSeries(
+        testName: String,
+        lockMs: Long = DefaultStartSeriesLockMs,
+        activeWindowMs: Long = DefaultStartSeriesActiveWindowMs,
+    ) {
+        if (!::appContext.isInitialized) return
+        val safeName = testName.trim().ifBlank { "Test" }
+        val now = System.currentTimeMillis()
+        val safeLockMs = lockMs.coerceAtLeast(0L)
+        val safeActiveWindowMs = activeWindowMs.coerceAtLeast(60_000L)
+        scope.launch {
+            runCatching {
+                store().edit { prefs ->
+                    val existing = parseAppliedTestSeries(prefs[keyAppliedTestSeries])
+                        .filter { it.expiresAtMillis > now }
+                    val nextUnlockBase = existing.maxOfOrNull { it.expiresAtMillis } ?: now
+                    val unlockAt = maxOf(now + safeLockMs, nextUnlockBase)
+                    val expiresAt = unlockAt + safeActiveWindowMs
+                    val updated = existing + AppliedTestSeriesEntry(
+                        testName = safeName,
+                        unlockAtMillis = unlockAt,
+                        expiresAtMillis = expiresAt,
+                    )
+                    prefs[keyAppliedTestSeries] = encodeAppliedTestSeries(updated)
+                }
+            }.onFailure { Log.e(TAG, "addAppliedTestSeries failed", it) }
         }
     }
 
@@ -519,6 +565,44 @@ object AppPreferencesRepository {
         return runCatching { store().edit { it.clear() } }
             .onFailure { Log.e(TAG, "clearAllLocalPreferences failed", it) }
             .isSuccess
+    }
+
+    private fun parseAppliedTestSeries(raw: String?): List<AppliedTestSeriesEntry> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val name = obj.optString("testName", "").trim()
+                    val unlockAt = obj.optLong("unlockAtMillis", 0L)
+                    val expiresAt = obj.optLong("expiresAtMillis", 0L)
+                    if (name.isNotBlank() && unlockAt > 0L && expiresAt > unlockAt) {
+                        add(
+                            AppliedTestSeriesEntry(
+                                testName = name,
+                                unlockAtMillis = unlockAt,
+                                expiresAtMillis = expiresAt,
+                            ),
+                        )
+                    }
+                }
+            }
+        }.getOrElse { emptyList() }
+    }
+
+    private fun encodeAppliedTestSeries(items: List<AppliedTestSeriesEntry>): String {
+        val arr = JSONArray()
+        items.forEach { item ->
+            arr.put(
+                JSONObject().apply {
+                    put("testName", item.testName)
+                    put("unlockAtMillis", item.unlockAtMillis)
+                    put("expiresAtMillis", item.expiresAtMillis)
+                },
+            )
+        }
+        return arr.toString()
     }
 
     /** Clears sign-in profile fields; keeps streak, digest, and cached feed URLs. */

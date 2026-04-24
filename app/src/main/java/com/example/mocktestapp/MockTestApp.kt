@@ -13,6 +13,7 @@ import com.google.firebase.FirebaseApp
 class MockTestApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        appLaunchTimeMillis = System.currentTimeMillis()
         AppPreferencesRepository.init(this)
         AuthRepository.init(this)
         RetrofitProvider.init(this)
@@ -27,5 +28,7 @@ class MockTestApp : Application() {
 
     companion object {
         private const val TAG = "MockTestApp"
+        var appLaunchTimeMillis: Long = 0L
+            private set
     }
 }
