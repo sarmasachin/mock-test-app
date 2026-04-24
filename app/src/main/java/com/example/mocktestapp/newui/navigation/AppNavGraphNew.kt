@@ -59,8 +59,6 @@ internal object RoutesNew {
     const val NOTIFICATIONS = "notifications"
 }
 
-private const val DEV_AUTH_BYPASS = false
-
 @Composable
 fun AppNavGraphNew() {
     val navController = rememberNavController()
@@ -102,15 +100,6 @@ fun AppNavGraphNew() {
                 CircularProgressIndicator()
             }
             LaunchedEffect(Unit) {
-                if (DEV_AUTH_BYPASS) {
-                    Log.w("AppNav", "DEV_AUTH_BYPASS: opening home without login (debug only).")
-                    AuthRepository.prepareGuestPreviewSession()
-                    navController.navigate(RoutesNew.HOME) {
-                        popUpTo(RoutesNew.BOOTSTRAP) { inclusive = true }
-                        launchSingleTop = true
-                    }
-                    return@LaunchedEffect
-                }
                 when (AuthRepository.restoreSession()) {
                     RestoreSessionStatus.Ready -> {
                         navController.navigate(RoutesNew.HOME) {
