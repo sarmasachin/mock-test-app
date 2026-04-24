@@ -625,24 +625,44 @@ button:active {
 }
 
 .all-tests-create {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
+  display: grid;
+  gap: 12px;
   padding: 12px;
   border-radius: 14px;
   background: #f4f7fb;
   margin-top: 2px;
 }
 
-.all-tests-create input,
-.all-tests-create select {
-  min-width: 160px;
-  flex: 1 1 160px;
+.all-tests-section {
+  background: #ffffff;
+  border: 1px solid #dbe4ef;
+  border-radius: 12px;
+  padding: 10px;
 }
 
-.all-tests-create button[type='submit'] {
+.all-tests-section h4 {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  color: #334155;
+  letter-spacing: 0.02em;
+}
+
+.all-tests-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.all-tests-actions {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(140px, auto));
+  align-items: center;
+  gap: 8px;
+}
+
+.all-tests-actions button[type='submit'] {
   min-width: 160px;
-  white-space: nowrap;
+  justify-self: end;
 }
 
 .all-tests-tools {
@@ -712,29 +732,29 @@ button:active {
 }
 
 @media (max-width: 1240px) {
-  .all-tests-create {
-    flex-wrap: wrap;
+  .all-tests-grid {
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
   }
 
-  .all-tests-create button[type='submit'] {
-    margin-left: auto;
+  .all-tests-actions {
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+  }
+
+  .all-tests-actions button[type='submit'] {
+    justify-self: stretch;
   }
 }
 
 @media (max-width: 760px) {
-  .all-tests-create,
   .all-tests-tools {
     flex-wrap: wrap;
   }
 
-  .all-tests-create input,
-  .all-tests-create select,
-  .all-tests-create button[type='submit'],
+  .all-tests-grid,
+  .all-tests-actions,
   .all-tests-tools input,
   .all-tests-tools button {
-    width: 100%;
-    max-width: none;
-    flex: 1 1 100%;
+    grid-template-columns: 1fr;
   }
 
   .pagination-wrap {

@@ -41,8 +41,21 @@ import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 
 data class TestCardNew(
+    val slug: String = "",
     val title: String,
     val meta: String,
+    val examDate: String? = null,
+    val durationLabel: String? = null,
+    val questionsMarks: String? = null,
+    val slotLabel: String? = null,
+    val enrolledLabel: String? = null,
+    val remainingSeatsLabel: String? = null,
+    val attemptsAllowed: String? = null,
+    val languageMode: String? = null,
+    val examMode: String? = null,
+    val negativeMarkingText: String? = null,
+    val testTypeLabel: String? = null,
+    val validUntil: String? = null,
 )
 
 @Composable
@@ -99,10 +112,10 @@ fun TestsScreenNew(
             Column {
                 tests.forEach { t ->
                     TestRow(
-                        title = t.title,
-                        meta = t.meta,
+                        test = t,
                         onOpen = { onOpenTest(t.title) },
                     )
+                    Spacer(Modifier.height(12.dp))
                 }
             }
         }
@@ -111,12 +124,12 @@ fun TestsScreenNew(
 
 @Composable
 private fun TestRow(
-    title: String,
-    meta: String,
+    test: TestCardNew,
     onOpen: () -> Unit,
 ) {
     val p = mockTestPalette()
     val shape = RoundedCornerShape(18.dp)
+    var expanded by remember(test.title) { mutableStateOf(false) }
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = shape,
@@ -131,17 +144,63 @@ private fun TestRow(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = title,
+                    text = test.title,
                     color = p.textPrimary,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.ExtraBold,
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = meta,
+                    text = test.meta,
                     color = p.textSecondary,
                     fontSize = 12.sp,
                 )
+                Spacer(Modifier.height(10.dp))
+                val primaryRows = listOfNotNull(
+                    test.examDate?.let { "Exam Date: $it" },
+                    test.durationLabel?.let { "Duration: $it" },
+                    test.questionsMarks?.let { "Questions/Marks: $it" },
+                    test.enrolledLabel?.let { "Enrolled: $it" },
+                    test.remainingSeatsLabel?.let { "Seats Left: $it" },
+                )
+                primaryRows.forEach { line ->
+                    Text(
+                        text = line,
+                        color = p.textSecondary,
+                        fontSize = 11.sp,
+                    )
+                }
+                val extraRows = listOfNotNull(
+                    test.slotLabel?.takeIf { it.isNotBlank() }?.let { "Slot: $it" },
+                    test.attemptsAllowed?.let { "Attempts: $it" },
+                    test.languageMode?.let { "Language: $it" },
+                    test.examMode?.let { "Mode: $it" },
+                    test.negativeMarkingText?.let { "Negative: $it" },
+                    test.testTypeLabel?.let { "Type: $it" },
+                    test.validUntil?.let { "Valid Till: $it" },
+                )
+                if (expanded) {
+                    extraRows.forEach { line ->
+                        Text(
+                            text = line,
+                            color = p.textSecondary,
+                            fontSize = 11.sp,
+                        )
+                    }
+                }
+                if (extraRows.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = if (expanded) "Less details" else "View details",
+                        color = p.accent,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { expanded = !expanded }
+                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                    )
+                }
             }
 
             val pill = RoundedCornerShape(999.dp)
@@ -155,7 +214,7 @@ private fun TestRow(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "Open",
+                    text = "Start Test Series",
                     color = Color.White,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,

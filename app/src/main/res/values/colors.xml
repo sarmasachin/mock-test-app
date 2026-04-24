@@ -3,4 +3,5 @@
     <!-- Must match Compose light palette materialBackground (MockTestPaletteLight) so the system
          window never flashes black between destinations. -->
     <color name="app_window_background">#FFF8FAFC</color>
+    <color name="launcher_icon_blue">#0B4CC9</color>
 </resources>

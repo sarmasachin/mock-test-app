@@ -41,8 +41,29 @@ type ExamCategoryItem = {
   level1: string;
   level2: string;
   level3: string;
+  iconKey: string;
   enabled: boolean;
 };
+type ExamCategoryIconOption = {
+  id: string;
+  value: string;
+  label: string;
+};
+
+const DEFAULT_EXAM_CATEGORY_ICON_OPTIONS: ExamCategoryIconOption[] = [
+  { id: 'default', value: '', label: 'Default (star)' },
+  { id: 'math', value: 'math', label: 'Math' },
+  { id: 'reasoning', value: 'reasoning', label: 'Reasoning' },
+  { id: 'english', value: 'english', label: 'English' },
+  { id: 'gk', value: 'gk', label: 'GK / General' },
+  { id: 'science', value: 'science', label: 'Science' },
+  { id: 'computer', value: 'computer', label: 'Computer / Tech' },
+  { id: 'history', value: 'history', label: 'History' },
+  { id: 'law', value: 'law', label: 'Law / Legal' },
+  { id: 'book', value: 'book', label: 'Book / Study' },
+  { id: 'school', value: 'school', label: 'School / Exam' },
+  { id: 'exam', value: 'exam', label: 'Exam' },
+];
 
 type ApiClient = {
   get: (url: string, config?: any) => Promise<any>;
@@ -297,19 +318,44 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
 export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<ExamCategoryItem[]>([]);
+  const [iconOptions, setIconOptions] = useState<ExamCategoryIconOption[]>(DEFAULT_EXAM_CATEGORY_ICON_OPTIONS);
+  const [newIconValue, setNewIconValue] = useState('');
+  const [newIconLabel, setNewIconLabel] = useState('');
   const [newLevel1, setNewLevel1] = useState('');
   const [newLevel2, setNewLevel2] = useState('');
   const [newLevel3, setNewLevel3] = useState('');
+  const [newIconKey, setNewIconKey] = useState('');
   const [newEnabled, setNewEnabled] = useState(true);
   const [page, setPage] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [showIconManager, setShowIconManager] = useState(false);
   const [error, setError] = useState('');
   async function load() {
     try {
       setError('');
       const res = await apiClient.get('/admin/settings');
       const s = res.data?.settings?.examCategories;
-      const mapped = Array.isArray(s?.items) ? s.items.map((x: any, idx: number) => ({ id: String(x.id || `exam-cat-${idx + 1}`), level1: String(x.level1 || ''), level2: String(x.level2 || ''), level3: String(x.level3 || ''), enabled: x.enabled !== false })) : [];
+      const iconSetting = res.data?.settings?.examCategoryIconOptions;
+      const mappedIcons = Array.isArray(iconSetting?.items)
+        ? iconSetting.items
+            .map((x: any, idx: number) => ({
+              id: String(x.id || `exam-icon-${idx + 1}`),
+              value: String(x.value || '').trim().toLowerCase(),
+              label: String(x.label || '').trim(),
+            }))
+            .filter((x: ExamCategoryIconOption) => x.value || x.label)
+        : [];
+      setIconOptions(mappedIcons.length ? mappedIcons : DEFAULT_EXAM_CATEGORY_ICON_OPTIONS);
+      const mapped = Array.isArray(s?.items)
+        ? s.items.map((x: any, idx: number) => ({
+            id: String(x.id || `exam-cat-${idx + 1}`),
+            level1: String(x.level1 || ''),
+            level2: String(x.level2 || ''),
+            level3: String(x.level3 || ''),
+            iconKey: String(x.iconKey || ''),
+            enabled: x.enabled !== false,
+          }))
+        : [];
       setItems(mapped);
       setPage(1);
     } catch (err: any) {
@@ -320,7 +366,11 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
     try {
       setError('');
       setSaving(true);
-      const res = await apiClient.patch('/admin/settings', { examCategories: { items: nextItems } });
+      const payload = {
+        examCategories: { items: nextItems },
+        examCategoryIconOptions: { items: iconOptions },
+      };
+      const res = await apiClient.patch('/admin/settings', payload);
       setItems(res.data?.settings?.examCategories?.items || nextItems);
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Failed to save exam categories');
@@ -328,20 +378,65 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
       setSaving(false);
     }
   }
+
+  async function saveIconOptions(nextOptions: ExamCategoryIconOption[]) {
+    try {
+      setError('');
+      setSaving(true);
+      const res = await apiClient.patch('/admin/settings', { examCategoryIconOptions: { items: nextOptions } });
+      const fromServer = Array.isArray(res.data?.settings?.examCategoryIconOptions?.items)
+        ? res.data.settings.examCategoryIconOptions.items
+        : nextOptions;
+      setIconOptions(
+        fromServer
+          .map((x: any, idx: number) => ({
+            id: String(x.id || `exam-icon-${idx + 1}`),
+            value: String(x.value || '').trim().toLowerCase(),
+            label: String(x.label || '').trim(),
+          }))
+          .filter((x: ExamCategoryIconOption) => x.value || x.label),
+      );
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to save icon options');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function addIconOption(e: FormEvent) {
+    e.preventDefault();
+    const value = newIconValue.trim().toLowerCase();
+    const label = newIconLabel.trim();
+    if (!value || !label) {
+      setError('Icon value and label are required');
+      return;
+    }
+    if (iconOptions.some((x) => x.value === value)) {
+      setError('This icon value already exists');
+      return;
+    }
+    const next = [...iconOptions, { id: `exam-icon-${Date.now()}`, value, label }];
+    setIconOptions(next);
+    setNewIconValue('');
+    setNewIconLabel('');
+    saveIconOptions(next);
+  }
   function addItem(e: FormEvent) {
     e.preventDefault();
     const level1 = newLevel1.trim();
     const level2 = newLevel2.trim();
     const level3 = newLevel3.trim();
+    const iconKey = newIconKey.trim();
     if (!level1 || !level2 || !level3) {
       setError('All hierarchy levels are required');
       return;
     }
-    const next = [{ id: `exam-cat-${Date.now()}`, level1, level2, level3, enabled: newEnabled }, ...items];
+    const next = [{ id: `exam-cat-${Date.now()}`, level1, level2, level3, iconKey, enabled: newEnabled }, ...items];
     saveAll(next);
     setNewLevel1('');
     setNewLevel2('');
     setNewLevel3('');
+    setNewIconKey('');
     setNewEnabled(true);
     setPage(1);
   }
@@ -355,16 +450,87 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
         <input value={newLevel1} onChange={(e) => setNewLevel1(e.target.value)} placeholder="Level 1 (e.g. State Exams)" />
         <input value={newLevel2} onChange={(e) => setNewLevel2(e.target.value)} placeholder="Level 2 (e.g. MP Govt)" />
         <input value={newLevel3} onChange={(e) => setNewLevel3(e.target.value)} placeholder="Level 3 (e.g. Patwari)" />
+        <select value={newIconKey} onChange={(e) => setNewIconKey(e.target.value)}>
+          {iconOptions.map((opt) => (
+            <option key={opt.id} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
         <label className="check-wrap"><input type="checkbox" checked={newEnabled} onChange={(e) => setNewEnabled(e.target.checked)} />enabled</label>
         <button type="submit">Add Hierarchy</button>
       </form>
       <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button><button type="button" onClick={() => saveAll(items)} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button></div>
       {error && <p className="error">{error}</p>}
       <div className="list table">
-        <div className="row row-head" style={{ gridTemplateColumns: '1fr 1fr 1fr 120px 90px 90px' }}><span>Level 1</span><span>Level 2</span><span>Level 3</span><span>Enabled</span><span>Update</span><span>Delete</span></div>
-        {visibleItems.map((item) => <div key={item.id} className="row" style={{ gridTemplateColumns: '1fr 1fr 1fr 120px 90px 90px' }}><input value={item.level1} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, level1: e.target.value } : x)))} /><input value={item.level2} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, level2: e.target.value } : x)))} /><input value={item.level3} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, level3: e.target.value } : x)))} /><label className="check-wrap"><input type="checkbox" checked={item.enabled} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, enabled: e.target.checked } : x)))} />{item.enabled ? 'on' : 'off'}</label><button type="button" onClick={() => saveAll(items)}>Save</button><button type="button" className="danger" onClick={() => { const next = items.filter((x) => x.id !== item.id); setItems(next); saveAll(next); }}>Delete</button></div>)}
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr 120px 90px 90px' }}><span>Level 1</span><span>Level 2</span><span>Level 3</span><span>Icon Key</span><span>Enabled</span><span>Update</span><span>Delete</span></div>
+        {visibleItems.map((item) => (
+          <div key={item.id} className="row" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr 120px 90px 90px' }}>
+            <input value={item.level1} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, level1: e.target.value } : x)))} />
+            <input value={item.level2} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, level2: e.target.value } : x)))} />
+            <input value={item.level3} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, level3: e.target.value } : x)))} />
+            <select value={item.iconKey} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, iconKey: e.target.value } : x)))}>
+              {iconOptions.map((opt) => (
+                <option key={opt.id} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <label className="check-wrap"><input type="checkbox" checked={item.enabled} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, enabled: e.target.checked } : x)))} />{item.enabled ? 'on' : 'off'}</label>
+            <button type="button" onClick={() => saveAll(items)}>Save</button>
+            <button type="button" className="danger" onClick={() => { const next = items.filter((x) => x.id !== item.id); setItems(next); saveAll(next); }}>Delete</button>
+          </div>
+        ))}
       </div>
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
+      <div className="inline-form" style={{ justifyContent: 'flex-end', marginTop: 14 }}>
+        <button
+          type="button"
+          title="Manage icon values"
+          aria-label="Manage icon values"
+          onClick={() => setShowIconManager((v) => !v)}
+          style={{
+            width: 38,
+            height: 38,
+            borderRadius: 999,
+            fontSize: '1.2rem',
+            fontWeight: 700,
+            lineHeight: 1,
+            padding: 0,
+          }}
+        >
+          +
+        </button>
+      </div>
+      {showIconManager && (
+        <>
+          <form onSubmit={addIconOption} className="inline-form" style={{ marginTop: 14 }}>
+            <input value={newIconValue} onChange={(e) => setNewIconValue(e.target.value)} placeholder="New icon key (e.g. railways)" />
+            <input value={newIconLabel} onChange={(e) => setNewIconLabel(e.target.value)} placeholder="Dropdown label (e.g. Railways)" />
+            <button type="submit">Add Icon Option</button>
+          </form>
+          <div className="list table">
+            <div className="row row-head" style={{ gridTemplateColumns: '1fr 1fr 120px' }}><span>Icon Value</span><span>Label</span><span>Delete</span></div>
+            {iconOptions.map((opt) => (
+              <div key={opt.id} className="row" style={{ gridTemplateColumns: '1fr 1fr 120px' }}>
+                <span>{opt.value || '(default)'}</span>
+                <span>{opt.label}</span>
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={() => {
+                    const next = iconOptions.filter((x) => x.id !== opt.id);
+                    setIconOptions(next);
+                    saveIconOptions(next.length ? next : DEFAULT_EXAM_CATEGORY_ICON_OPTIONS);
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </section>
   );
 }

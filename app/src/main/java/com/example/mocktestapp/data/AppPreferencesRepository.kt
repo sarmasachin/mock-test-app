@@ -56,6 +56,13 @@ object AppPreferencesRepository {
     private val keyProfilePassword = stringPreferencesKey("profile_password")
     /** Eight-digit numeric id (10000000–99999999), 0 = not assigned yet. */
     private val keyProfileUserCode = intPreferencesKey("profile_user_code")
+    private val keyPendingResultTestName = stringPreferencesKey("pending_result_test_name")
+    private val keyPendingResultPublishAt = longPreferencesKey("pending_result_publish_at")
+    private val keyPendingResultSessionHiddenAt = longPreferencesKey("pending_result_session_hidden_at")
+    private val keyPendingResultViewed = intPreferencesKey("pending_result_viewed")
+    private val keyPendingResultAnswered = intPreferencesKey("pending_result_answered")
+    private val keyPendingResultCorrect = intPreferencesKey("pending_result_correct")
+    private val keyPendingResultWrong = intPreferencesKey("pending_result_wrong")
 
     data class EditableProfileState(
         val displayName: String,
@@ -89,6 +96,16 @@ object AppPreferencesRepository {
         val emailLine: String,
         /** Formatted eight digits from server or local, or null until assigned. */
         val userIdFormatted: String?,
+    )
+
+    data class PendingResultState(
+        val testName: String,
+        val publishAtMillis: Long,
+        val answered: Int,
+        val correct: Int,
+        val wrong: Int,
+        val sessionHiddenAtMillis: Long,
+        val viewed: Boolean,
     )
 
     val drawerUserProfile: Flow<DrawerUserProfile>
@@ -364,6 +381,25 @@ object AppPreferencesRepository {
     val notificationsEnabled: Flow<Boolean>
         get() = storeOrNull()?.data?.map { (it[keyProfileNotificationsEnabled] ?: 1) == 1 } ?: flowOf(true)
 
+    val pendingResultState: Flow<PendingResultState?>
+        get() = storeOrNull()?.data?.map { prefs ->
+            val name = prefs[keyPendingResultTestName].orEmpty().trim()
+            val publishAt = prefs[keyPendingResultPublishAt] ?: 0L
+            if (name.isBlank() || publishAt <= 0L) {
+                null
+            } else {
+                PendingResultState(
+                    testName = name,
+                    publishAtMillis = publishAt,
+                    answered = (prefs[keyPendingResultAnswered] ?: 0).coerceAtLeast(0),
+                    correct = (prefs[keyPendingResultCorrect] ?: 0).coerceAtLeast(0),
+                    wrong = (prefs[keyPendingResultWrong] ?: 0).coerceAtLeast(0),
+                    sessionHiddenAtMillis = prefs[keyPendingResultSessionHiddenAt] ?: 0L,
+                    viewed = (prefs[keyPendingResultViewed] ?: 0) == 1,
+                )
+            }
+        } ?: flowOf(null)
+
     fun rememberTestOpened(testName: String) {
         if (!::appContext.isInitialized) return
         scope.launch {
@@ -373,6 +409,62 @@ object AppPreferencesRepository {
                     prefs[keyLastTestTime] = System.currentTimeMillis()
                 }
             }.onFailure { Log.e(TAG, "rememberTestOpened failed", it) }
+        }
+    }
+
+    fun markPendingResultSubmitted(
+        testName: String,
+        publishAtMillis: Long,
+        answered: Int,
+        correct: Int,
+        wrong: Int,
+    ) {
+        if (!::appContext.isInitialized) return
+        val safeName = testName.trim().ifBlank { "Test" }
+        val safePublish = publishAtMillis.takeIf { it > 0L } ?: (System.currentTimeMillis() + 2 * 60 * 1000L)
+        val safeAnswered = answered.coerceAtLeast(0)
+        val safeCorrect = correct.coerceAtLeast(0)
+        val safeWrong = wrong.coerceAtLeast(0)
+        scope.launch {
+            runCatching {
+                store().edit { prefs ->
+                    prefs[keyPendingResultTestName] = safeName
+                    prefs[keyPendingResultPublishAt] = safePublish
+                    prefs[keyPendingResultAnswered] = safeAnswered
+                    prefs[keyPendingResultCorrect] = safeCorrect
+                    prefs[keyPendingResultWrong] = safeWrong
+                    prefs[keyPendingResultSessionHiddenAt] = 0L
+                    prefs[keyPendingResultViewed] = 0
+                }
+            }.onFailure { Log.e(TAG, "markPendingResultSubmitted failed", it) }
+        }
+    }
+
+    fun hidePendingResultCardForSession() {
+        if (!::appContext.isInitialized) return
+        scope.launch {
+            runCatching {
+                store().edit { prefs ->
+                    prefs[keyPendingResultSessionHiddenAt] = System.currentTimeMillis()
+                }
+            }.onFailure { Log.e(TAG, "hidePendingResultCardForSession failed", it) }
+        }
+    }
+
+    fun markPendingResultViewedAndClear() {
+        if (!::appContext.isInitialized) return
+        scope.launch {
+            runCatching {
+                store().edit { prefs ->
+                    prefs[keyPendingResultViewed] = 1
+                    prefs[keyPendingResultTestName] = ""
+                    prefs[keyPendingResultPublishAt] = 0L
+                    prefs[keyPendingResultAnswered] = 0
+                    prefs[keyPendingResultCorrect] = 0
+                    prefs[keyPendingResultWrong] = 0
+                    prefs[keyPendingResultSessionHiddenAt] = 0L
+                }
+            }.onFailure { Log.e(TAG, "markPendingResultViewedAndClear failed", it) }
         }
     }
 

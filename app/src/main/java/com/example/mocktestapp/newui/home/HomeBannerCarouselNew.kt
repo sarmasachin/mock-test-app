@@ -10,12 +10,16 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import android.util.Log
 import kotlinx.coroutines.delay
@@ -49,15 +53,19 @@ fun HomeBannerCarouselNew(
     modifier: Modifier = Modifier,
     /** Number of pager pages; each uses a built-in gradient (cycles every 3 styles). */
     slideCount: Int = 3,
+    imageUrls: List<String> = emptyList(),
 ) {
-    if (slideCount <= 0) return
+    val context = LocalContext.current
+    val remoteUrls = imageUrls.filter { it.isNotBlank() }
+    val totalSlides = if (remoteUrls.isNotEmpty()) remoteUrls.size else slideCount
+    if (totalSlides <= 0) return
 
-    val pagerState = rememberPagerState(pageCount = { slideCount }, initialPage = 0)
+    val pagerState = rememberPagerState(pageCount = { totalSlides }, initialPage = 0)
 
-    LaunchedEffect(slideCount) {
+    LaunchedEffect(totalSlides) {
         while (isActive) {
             delay(AutoScrollMs)
-            val next = (pagerState.currentPage + 1) % slideCount
+            val next = (pagerState.currentPage + 1) % totalSlides
             runCatching { pagerState.animateScrollToPage(next) }
                 .onFailure { Log.w("HomeBanner", "Auto-scroll failed", it) }
         }
@@ -72,20 +80,35 @@ fun HomeBannerCarouselNew(
         pageSpacing = 12.dp,
         beyondViewportPageCount = 1,
     ) { page ->
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(168.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .drawBehind {
-                    drawRect(
-                        brush = bannerBrushForPageInScope(
-                            page,
-                            size.width,
-                            size.height,
-                        ),
-                    )
-                },
-        ) {}
+        if (remoteUrls.isNotEmpty()) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(remoteUrls[page])
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "Home banner",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(168.dp)
+                    .clip(RoundedCornerShape(16.dp)),
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(168.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .drawBehind {
+                        drawRect(
+                            brush = bannerBrushForPageInScope(
+                                page,
+                                size.width,
+                                size.height,
+                            ),
+                        )
+                    },
+            ) {}
+        }
     }
 }

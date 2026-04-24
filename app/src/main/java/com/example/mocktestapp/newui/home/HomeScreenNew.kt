@@ -60,10 +60,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.Bookmark
+import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.PieChart
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Quiz
 import androidx.compose.material.icons.outlined.School
@@ -71,6 +74,8 @@ import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Today
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.WorkOutline
 import androidx.compose.material.icons.rounded.Menu
 import kotlin.math.roundToInt
@@ -81,6 +86,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.example.mocktestapp.BuildConfig
 import com.example.mocktestapp.data.AppPreferencesRepository
+import com.example.mocktestapp.data.ContentRepository
+import com.example.mocktestapp.data.TestHistoryRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 import android.content.ActivityNotFoundException
@@ -97,6 +104,15 @@ private data class HomeCategorySection(
     val title: String,
     val items: List<String>,
 )
+private data class HomeQuickActionItem(
+    val title: String,
+    val actionKey: String,
+    val iconKey: String? = null,
+)
+private data class HomeQuickActionSection(
+    val title: String,
+    val items: List<HomeQuickActionItem>,
+)
 
 @Composable
 fun HomeScreenNew(
@@ -110,6 +126,7 @@ fun HomeScreenNew(
     onStartTest: () -> Unit,
     onLeaderboard: () -> Unit,
     onResults: () -> Unit,
+    onOpenPendingResult: (String, Int, Int, Int) -> Unit,
     onBookmarks: () -> Unit,
     onOpenJobAlert: () -> Unit,
     onOpenExamAlert: () -> Unit,
@@ -123,37 +140,145 @@ fun HomeScreenNew(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val context = LocalContext.current
+    val attempts by TestHistoryRepository.observeAttempts().collectAsState(initial = emptyList())
+    val attemptsCount = attempts.size.toString()
+    val bestScoreText = remember(attempts) {
+        attempts
+            .maxWithOrNull(
+                compareBy<com.example.mocktestapp.data.local.TestAttemptEntity> {
+                    it.correct.toFloat() / it.total.coerceAtLeast(1).toFloat()
+                }.thenBy { it.correct }
+                    .thenBy { it.completedAtMillis },
+            )
+            ?.let { "${it.correct}/${it.total.coerceAtLeast(1)}" }
+            ?: "--"
+    }
+    val lastScoreText = remember(attempts) {
+        attempts
+            .maxByOrNull { it.completedAtMillis }
+            ?.let { latest ->
+                "${latest.correct}/${latest.total.coerceAtLeast(1)}"
+            }
+            ?: "--"
+    }
 
     val scope = rememberCoroutineScope()
     val drawerState = androidx.compose.material3.rememberDrawerState(DrawerValue.Closed)
 
-    val categorySections = remember {
+    var categorySections by remember {
+        mutableStateOf(
         listOf(
             HomeCategorySection(
                 title = "Category",
                 items = listOf("Math", "Reasoning", "English", "GK", "Science", "Computer", "Hindi"),
             ),
+        ),
         )
     }
+    var homeWelcomeText by remember { mutableStateOf("Welcome Rahul") }
+    var homeQuickActionsTitle by remember { mutableStateOf("Quick actions") }
+    var quickActionSections by remember {
+        mutableStateOf(
+            listOf(
+                HomeQuickActionSection(
+                    title = "Quick actions",
+                    items = listOf(
+                        HomeQuickActionItem(title = "Start test", actionKey = "startTest"),
+                        HomeQuickActionItem(title = "Leaderboard", actionKey = "leaderboard"),
+                        HomeQuickActionItem(title = "Results", actionKey = "results"),
+                        HomeQuickActionItem(title = "Tool", actionKey = "bookmarks"),
+                    ),
+                ),
+            ),
+        )
+    }
+    var bannerUrls by remember { mutableStateOf<List<String>>(emptyList()) }
+    var postSubmitCardTitle by remember { mutableStateOf("Result Pending") }
+    var postSubmitCardReadyTitle by remember { mutableStateOf("Result Ready") }
+    var postSubmitCardDateLabel by remember { mutableStateOf("Result date/time") }
+    var postSubmitCardPendingMessage by remember { mutableStateOf("Result will be available in") }
+    var postSubmitCardReadyMessage by remember { mutableStateOf("Result is now available.") }
+    var postSubmitCardButtonLabel by remember { mutableStateOf("Show Result") }
+    var postSubmitCardLines by remember { mutableStateOf<List<String>>(emptyList()) }
     val homeScroll = rememberScrollState()
     val visitPrefs = remember(context) {
         context.getSharedPreferences("home_last_visit", Context.MODE_PRIVATE)
     }
     var lastVisitMillis by remember { mutableStateOf(0L) }
     var showLastVisit by remember { mutableStateOf(false) }
+    val pendingResult by AppPreferencesRepository.pendingResultState.collectAsState(initial = null)
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    var hiddenSessionAt by remember { mutableStateOf(0L) }
 
     LaunchedEffect(Unit) {
         val now = System.currentTimeMillis()
         val ts = visitPrefs.getLong("last_home_visit_ts", 0L)
+        val seenForTs = visitPrefs.getLong("last_home_visit_seen_for_ts", -1L)
         lastVisitMillis = ts
-        if (ts <= 0L) {
+        if (ts <= 0L || seenForTs == ts) {
             showLastVisit = false
         } else {
             showLastVisit = true
             delay(30_000L)
             showLastVisit = false
         }
-        visitPrefs.edit().putLong("last_home_visit_ts", now).apply()
+        visitPrefs.edit()
+            .putLong("last_home_visit_seen_for_ts", ts)
+            .putLong("last_home_visit_ts", now)
+            .apply()
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(1000L)
+        }
+    }
+    LaunchedEffect(pendingResult?.publishAtMillis) {
+        hiddenSessionAt = 0L
+    }
+    LaunchedEffect(Unit) {
+        val remote = ContentRepository.loadHomeContent() ?: return@LaunchedEffect
+        if (!remote.welcomeText.isNullOrBlank()) {
+            homeWelcomeText = remote.welcomeText
+        }
+        if (!remote.quickActionsTitle.isNullOrBlank()) {
+            homeQuickActionsTitle = remote.quickActionsTitle
+        }
+        if (remote.sections.isNotEmpty()) {
+            categorySections = remote.sections.map {
+                HomeCategorySection(
+                    title = it.title,
+                    items = it.items,
+                )
+            }
+        }
+        if (remote.quickActionSections.isNotEmpty()) {
+            quickActionSections = remote.quickActionSections.map { section ->
+                HomeQuickActionSection(
+                    title = section.title,
+                    items = section.items.map { item ->
+                        HomeQuickActionItem(
+                            title = item.title,
+                            actionKey = item.actionKey,
+                            iconKey = item.iconKey?.takeIf { it.isNotBlank() },
+                        )
+                    },
+                )
+            }
+        }
+        bannerUrls = remote.banners
+    }
+    LaunchedEffect(Unit) {
+        val instruction = ContentRepository.loadInstructionContent() ?: return@LaunchedEffect
+        postSubmitCardTitle = instruction.postSubmitCardTitle?.ifBlank { postSubmitCardTitle } ?: postSubmitCardTitle
+        postSubmitCardReadyTitle = instruction.postSubmitCardReadyTitle?.ifBlank { postSubmitCardReadyTitle } ?: postSubmitCardReadyTitle
+        postSubmitCardDateLabel = instruction.postSubmitCardDateLabel?.ifBlank { postSubmitCardDateLabel } ?: postSubmitCardDateLabel
+        postSubmitCardPendingMessage = instruction.postSubmitCardPendingMessage?.ifBlank { postSubmitCardPendingMessage } ?: postSubmitCardPendingMessage
+        postSubmitCardReadyMessage = instruction.postSubmitCardReadyMessage?.ifBlank { postSubmitCardReadyMessage } ?: postSubmitCardReadyMessage
+        postSubmitCardButtonLabel = instruction.postSubmitCardButtonLabel?.ifBlank { postSubmitCardButtonLabel } ?: postSubmitCardButtonLabel
+        if (instruction.postSubmitCardLines.isNotEmpty()) {
+            postSubmitCardLines = instruction.postSubmitCardLines
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -206,7 +331,7 @@ fun HomeScreenNew(
                         .padding(padding),
                 ) {
                 TopRow(
-                    name = "Rahul",
+                    welcomeText = homeWelcomeText,
                     onOpenDrawer = { scope.launch { drawerState.open() } },
                     onOpenPoll = onOpenPoll,
                     onOpenNotifications = onOpenNotifications,
@@ -221,10 +346,47 @@ fun HomeScreenNew(
                     Spacer(Modifier.height(12.dp))
                     HomeBannerCarouselNew(
                         modifier = Modifier.padding(horizontal = 14.dp),
+                        imageUrls = bannerUrls,
                     )
 
                     Spacer(Modifier.height(14.dp))
-                    StatsRow()
+                    StatsRow(
+                        attempts = attemptsCount,
+                        bestScore = bestScoreText,
+                        lastScore = lastScoreText,
+                    )
+                    pendingResult?.let { pending ->
+                        val isReady = nowMs >= pending.publishAtMillis
+                        val canShow = hiddenSessionAt == 0L || isReady
+                        if (canShow) {
+                            Spacer(Modifier.height(10.dp))
+                            PendingResultCard(
+                                testName = pending.testName,
+                                publishAtMillis = pending.publishAtMillis,
+                                nowMillis = nowMs,
+                                pendingTitle = postSubmitCardTitle,
+                                readyTitle = postSubmitCardReadyTitle,
+                                dateLabel = postSubmitCardDateLabel,
+                                pendingMessage = postSubmitCardPendingMessage,
+                                readyMessage = postSubmitCardReadyMessage,
+                                buttonLabel = postSubmitCardButtonLabel,
+                                extraLines = postSubmitCardLines,
+                                onClose = {
+                                    hiddenSessionAt = nowMs
+                                    AppPreferencesRepository.hidePendingResultCardForSession()
+                                },
+                                onShowResult = {
+                                    AppPreferencesRepository.markPendingResultViewedAndClear()
+                                    onOpenPendingResult(
+                                        pending.testName,
+                                        pending.answered,
+                                        pending.correct,
+                                        pending.wrong,
+                                    )
+                                },
+                            )
+                        }
+                    }
                     if (showLastVisit && lastVisitMillis > 0L) {
                         val formatter = remember { DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a") }
                         val lastVisitText = remember(lastVisitMillis) {
@@ -265,14 +427,27 @@ fun HomeScreenNew(
                     Divider(color = p.systemBlue.copy(alpha = 0.25f))
                     Spacer(Modifier.height(12.dp))
 
-                    SectionTitle(text = "Quick actions")
-                    Spacer(Modifier.height(12.dp))
-                    ActionsGrid(
-                        onStartTest = onStartTest,
-                        onLeaderboard = onLeaderboard,
-                        onResults = onResults,
-                        onBookmarks = onBookmarks,
-                    )
+                    quickActionSections.forEachIndexed { index, section ->
+                        if (index > 0) {
+                            Spacer(Modifier.height(18.dp))
+                            Divider(color = p.systemBlue.copy(alpha = 0.25f))
+                            Spacer(Modifier.height(12.dp))
+                        }
+                        val sectionTitle = section.title.ifBlank { homeQuickActionsTitle }
+                        SectionTitle(text = sectionTitle)
+                        Spacer(Modifier.height(12.dp))
+                        ActionsGrid(
+                            actions = section.items,
+                            onAction = { actionKey ->
+                                when (actionKey) {
+                                    "startTest" -> onStartTest()
+                                    "leaderboard" -> onLeaderboard()
+                                    "results" -> onResults()
+                                    "bookmarks", "tool" -> onBookmarks()
+                                }
+                            },
+                        )
+                    }
 
                     Spacer(Modifier.height(18.dp))
                     Divider(color = p.systemBlue.copy(alpha = 0.25f))
@@ -281,6 +456,131 @@ fun HomeScreenNew(
         }
         }
 
+    }
+}
+
+@Composable
+private fun PendingResultCard(
+    testName: String,
+    publishAtMillis: Long,
+    nowMillis: Long,
+    pendingTitle: String,
+    readyTitle: String,
+    dateLabel: String,
+    pendingMessage: String,
+    readyMessage: String,
+    buttonLabel: String,
+    extraLines: List<String>,
+    onClose: () -> Unit,
+    onShowResult: () -> Unit,
+) {
+    val p = mockTestPalette()
+    val shape = RoundedCornerShape(18.dp)
+    val remainingMs = (publishAtMillis - nowMillis).coerceAtLeast(0L)
+    val isReady = remainingMs <= 0L
+    val hours = (remainingMs / 3_600_000L).toInt()
+    val mins = ((remainingMs % 3_600_000L) / 60_000L).toInt()
+    val secs = ((remainingMs % 60_000L) / 1_000L).toInt()
+    val countdownText = String.format("%02d:%02d:%02d", hours, mins, secs)
+    val releaseText = remember(publishAtMillis) {
+        runCatching {
+            val at = Instant.ofEpochMilli(publishAtMillis).atZone(ZoneId.systemDefault())
+            DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a").format(at)
+        }.getOrDefault("-")
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = shape,
+        colors = CardDefaults.cardColors(containerColor = p.surface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = if (isReady) readyTitle else pendingTitle,
+                    color = p.textPrimary,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 15.sp,
+                )
+                IconButton(onClick = onClose, modifier = Modifier.size(22.dp)) {
+                    Icon(
+                        imageVector = Icons.Outlined.Close,
+                        contentDescription = "Close",
+                        tint = p.textSecondary,
+                    )
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = testName,
+                color = p.textSecondary,
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Outlined.Schedule,
+                    contentDescription = null,
+                    tint = p.accent,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "$dateLabel: $releaseText",
+                    color = p.textSecondary,
+                    fontSize = 12.sp,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            extraLines.forEach { line ->
+                Text(
+                    text = line,
+                    color = p.textSecondary,
+                    fontSize = 12.sp,
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+            if (isReady) {
+                Text(
+                    text = readyMessage,
+                    color = p.textPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(10.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(p.systemBlue)
+                        .clickable(onClick = onShowResult)
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                ) {
+                    Text(
+                        text = buttonLabel,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                    )
+                }
+            } else {
+                Text(
+                    text = pendingMessage,
+                    color = p.textSecondary,
+                    fontSize = 12.sp,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = countdownText,
+                    color = p.textPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+            }
+        }
     }
 }
 
@@ -357,7 +657,7 @@ private fun ShareAppDialog(
 
 @Composable
 private fun TopRow(
-    name: String,
+    welcomeText: String,
     onOpenDrawer: () -> Unit,
     onOpenPoll: () -> Unit,
     onOpenNotifications: () -> Unit,
@@ -384,7 +684,7 @@ private fun TopRow(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = "Welcome $name",
+                text = welcomeText,
                 color = p.textPrimary,
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp,
@@ -415,14 +715,18 @@ private fun TopRow(
 }
 
 @Composable
-private fun StatsRow() {
+private fun StatsRow(
+    attempts: String,
+    bestScore: String,
+    lastScore: String,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        StatCard(title = "Attempts", value = "0", modifier = Modifier.weight(1f))
-        StatCard(title = "Best score", value = "--", modifier = Modifier.weight(1f))
-        StatCard(title = "Last score", value = "--", modifier = Modifier.weight(1f))
+        StatCard(title = "Attempts", value = attempts, modifier = Modifier.weight(1f))
+        StatCard(title = "Best score", value = bestScore, modifier = Modifier.weight(1f))
+        StatCard(title = "Last score", value = lastScore, modifier = Modifier.weight(1f))
     }
 }
 
@@ -583,39 +887,37 @@ private fun SeeAllChip(
 
 @Composable
 private fun ActionsGrid(
-    onStartTest: () -> Unit,
-    onLeaderboard: () -> Unit,
-    onResults: () -> Unit,
-    onBookmarks: () -> Unit,
+    actions: List<HomeQuickActionItem>,
+    onAction: (String) -> Unit,
 ) {
+    val normalized = if (actions.isNotEmpty()) {
+        actions
+    } else {
+        listOf(
+            HomeQuickActionItem(title = "Start test", actionKey = "startTest"),
+            HomeQuickActionItem(title = "Leaderboard", actionKey = "leaderboard"),
+            HomeQuickActionItem(title = "Results", actionKey = "results"),
+            HomeQuickActionItem(title = "Tool", actionKey = "bookmarks"),
+        )
+    }
+    val rows = normalized.chunked(2)
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-            ActionCard(
-                title = "Start test",
-                subtitle = "",
-                onClick = onStartTest,
-                modifier = Modifier.weight(1f),
-            )
-            ActionCard(
-                title = "Leaderboard",
-                subtitle = "",
-                onClick = onLeaderboard,
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-            ActionCard(
-                title = "Results",
-                subtitle = "",
-                onClick = onResults,
-                modifier = Modifier.weight(1f),
-            )
-            ActionCard(
-                title = "Tool",
-                subtitle = "",
-                onClick = onBookmarks,
-                modifier = Modifier.weight(1f),
-            )
+        rows.forEach { rowItems ->
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                rowItems.forEach { item ->
+                    ActionCard(
+                        title = item.title,
+                        subtitle = "",
+                        actionKey = item.actionKey,
+                        iconKey = item.iconKey,
+                        onClick = { onAction(item.actionKey) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                repeat(2 - rowItems.size) {
+                    Spacer(Modifier.weight(1f).height(122.dp))
+                }
+            }
         }
     }
 }
@@ -624,11 +926,14 @@ private fun ActionsGrid(
 private fun ActionCard(
     title: String,
     subtitle: String,
+    actionKey: String,
+    iconKey: String? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val p = mockTestPalette()
     val shape = RoundedCornerShape(18.dp)
+    val icon = remember(actionKey, iconKey) { resolveQuickActionIcon(actionKey, iconKey) }
     // Fixed height (no aspectRatio): Row + weight() + aspectRatio() fights intrinsic height
     // and misaligns the bottom row (Results / Tool) on many screens.
     Card(
@@ -644,19 +949,30 @@ private fun ActionCard(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
             Box(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(p.border.copy(alpha = 0.16f)),
-            )
-            Spacer(Modifier.height(12.dp))
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = p.accent,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(Modifier.height(10.dp))
             Text(
                 text = title,
                 color = p.textPrimary,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
+                textAlign = TextAlign.Center,
             )
             if (subtitle.isNotBlank()) {
                 Spacer(Modifier.height(6.dp))
@@ -664,9 +980,28 @@ private fun ActionCard(
                     text = subtitle,
                     color = p.textSecondary,
                     fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
                 )
             }
         }
+    }
+}
+
+private fun resolveQuickActionIcon(
+    actionKey: String,
+    iconKey: String?,
+): androidx.compose.ui.graphics.vector.ImageVector {
+    return when ((iconKey?.takeIf { it.isNotBlank() } ?: actionKey).lowercase()) {
+        "start", "starttest", "play" -> Icons.Outlined.PlayArrow
+        "leaderboard", "trophy", "rank" -> Icons.Outlined.EmojiEvents
+        "results", "result", "report", "score" -> Icons.Outlined.BarChart
+        "tool", "tools", "bookmark", "bookmarks" -> Icons.Outlined.Bookmark
+        "history" -> Icons.Outlined.History
+        "news", "article" -> Icons.Outlined.Article
+        "daily", "today" -> Icons.Outlined.Today
+        "quiz" -> Icons.Outlined.Quiz
+        "poll" -> Icons.Outlined.PieChart
+        else -> Icons.Outlined.Star
     }
 }
 
@@ -722,145 +1057,150 @@ private fun AppDrawer(
             modifier = Modifier
                 .fillMaxHeight()
                 .width(drawerWidthDp)
-                .verticalScroll(rememberScrollState())
                 .clip(drawerShape)
                 .border(1.dp, border, drawerShape),
         ) {
-            Spacer(Modifier.height(4.dp))
-            DrawerHeader()
-            Spacer(Modifier.height(12.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Spacer(Modifier.height(4.dp))
+                DrawerHeader()
+                Spacer(Modifier.height(12.dp))
 
-        DrawerItem(
-            icon = Icons.Outlined.Person,
-            label = "Profile",
-            onClick = {
-                scope.launch {
-                    drawerState.close()
-                    onOpenProfile()
-                }
-            },
-        )
-        DrawerItem(
-            icon = Icons.Outlined.History,
-            label = "History",
-            onClick = {
-                scope.launch {
-                    drawerState.close()
-                    onOpenHistory()
-                }
-            },
-        )
-        DrawerItem(
-            icon = Icons.Outlined.PieChart,
-            label = "Activity",
-            onClick = {
-                scope.launch {
-                    drawerState.close()
-                    onOpenActivity()
-                }
-            },
-        )
-        DrawerItem(
-            icon = Icons.Outlined.BarChart,
-            label = "Progress report",
-            onClick = {
-                scope.launch {
-                    drawerState.close()
-                    onOpenProgressReport()
-                }
-            },
-        )
-        DrawerItem(
-            icon = Icons.Outlined.WorkOutline,
-            label = "Job alert",
-            onClick = {
-                scope.launch {
-                    drawerState.close()
-                    onOpenJobAlert()
-                }
-            },
-        )
-        DrawerItem(
-            icon = Icons.Outlined.School,
-            label = "Exam alert",
-            onClick = {
-                scope.launch {
-                    drawerState.close()
-                    onOpenExamAlert()
-                }
-            },
-        )
-        DrawerItem(
-            icon = Icons.Outlined.Article,
-            label = "News",
-            onClick = {
-                scope.launch {
-                    drawerState.close()
-                    onOpenNews()
-                }
-            },
-        )
-        DrawerItem(
-            icon = Icons.Outlined.Today,
-            label = "Daily",
-            onClick = {
-                scope.launch {
-                    drawerState.close()
-                    onOpenDaily()
-                }
-            },
-        )
-        DrawerItem(
-            icon = Icons.Outlined.Quiz,
-            label = "Quiz",
-            onClick = {
-                scope.launch {
-                    drawerState.close()
-                    onOpenMenuQuiz()
-                }
-            },
-        )
-        DrawerItem(
-            icon = Icons.Outlined.Share,
-            label = "Share app",
-            onClick = { onShareApp() },
-        )
-        DrawerItem(
-            icon = Icons.Outlined.Star,
-            label = "Rate on Play Store",
-            onClick = {
-                scope.launch {
-                    drawerState.close()
-                    openPlayStoreForRating(context)
-                }
-            },
-        )
+                DrawerItem(
+                    icon = Icons.Outlined.Person,
+                    label = "Profile",
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            onOpenProfile()
+                        }
+                    },
+                )
+                DrawerItem(
+                    icon = Icons.Outlined.History,
+                    label = "History",
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            onOpenHistory()
+                        }
+                    },
+                )
+                DrawerItem(
+                    icon = Icons.Outlined.PieChart,
+                    label = "Activity",
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            onOpenActivity()
+                        }
+                    },
+                )
+                DrawerItem(
+                    icon = Icons.Outlined.BarChart,
+                    label = "Progress report",
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            onOpenProgressReport()
+                        }
+                    },
+                )
+                DrawerItem(
+                    icon = Icons.Outlined.WorkOutline,
+                    label = "Job alert",
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            onOpenJobAlert()
+                        }
+                    },
+                )
+                DrawerItem(
+                    icon = Icons.Outlined.School,
+                    label = "Exam alert",
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            onOpenExamAlert()
+                        }
+                    },
+                )
+                DrawerItem(
+                    icon = Icons.Outlined.Article,
+                    label = "News",
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            onOpenNews()
+                        }
+                    },
+                )
+                DrawerItem(
+                    icon = Icons.Outlined.Today,
+                    label = "Daily",
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            onOpenDaily()
+                        }
+                    },
+                )
+                DrawerItem(
+                    icon = Icons.Outlined.Quiz,
+                    label = "Quiz",
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            onOpenMenuQuiz()
+                        }
+                    },
+                )
+                DrawerItem(
+                    icon = Icons.Outlined.Share,
+                    label = "Share app",
+                    onClick = { onShareApp() },
+                )
+                DrawerItem(
+                    icon = Icons.Outlined.Star,
+                    label = "Rate on Play Store",
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            openPlayStoreForRating(context)
+                        }
+                    },
+                )
 
-        // Avoid Spacer(Modifier.weight(1f)) here: inside ModalDrawerSheet some devices pass
-        // height constraints where weighted spacers can throw during first layout after login.
-        Spacer(Modifier.height(32.dp))
+                // Avoid Spacer(Modifier.weight(1f)) here: inside ModalDrawerSheet some devices pass
+                // height constraints where weighted spacers can throw during first layout after login.
+                Spacer(Modifier.height(32.dp))
 
-        DrawerItem(
-            icon = Icons.Outlined.Logout,
-            label = "Logout",
-            isDanger = true,
-            onClick = {
-                scope.launch {
-                    drawerState.close()
-                    onLogout()
-                }
-            },
-        )
-        Spacer(Modifier.height(10.dp))
-        Text(
-            text = "App version ${BuildConfig.VERSION_NAME}",
-            color = p.textSecondary,
-            fontSize = 12.sp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-        )
-            Spacer(Modifier.height(18.dp))
+                DrawerItem(
+                    icon = Icons.Outlined.Logout,
+                    label = "Logout",
+                    isDanger = true,
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            onLogout()
+                        }
+                    },
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = "App version ${BuildConfig.VERSION_NAME}",
+                    color = p.textSecondary,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                )
+                Spacer(Modifier.height(18.dp))
+            }
         }
     }
 }

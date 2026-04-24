@@ -128,8 +128,121 @@ data class CatalogTestDto(
     @SerializedName("durationMinutes") val durationMinutes: Int,
     @SerializedName("questionCount") val questionCount: Int,
     @SerializedName("testKind") val testKind: String,
+    @SerializedName("examDate") val examDate: String? = null,
+    @SerializedName("totalMarks") val totalMarks: Int? = null,
+    @SerializedName("slotLabel") val slotLabel: String? = null,
+    @SerializedName("capacityTotal") val capacityTotal: Int? = null,
+    @SerializedName("enrolledCount") val enrolledCount: Int? = null,
+    @SerializedName("remainingSeats") val remainingSeats: Int? = null,
+    @SerializedName("attemptsAllowed") val attemptsAllowed: Int? = null,
+    @SerializedName("languageMode") val languageMode: String? = null,
+    @SerializedName("examMode") val examMode: String? = null,
+    @SerializedName("negativeMarkingText") val negativeMarkingText: String? = null,
+    @SerializedName("testTypeLabel") val testTypeLabel: String? = null,
+    @SerializedName("validUntil") val validUntil: String? = null,
+    @SerializedName("dynamicDateEnabled") val dynamicDateEnabled: Boolean? = null,
+    @SerializedName("dateCycleDays") val dateCycleDays: Int? = null,
 )
 
 data class TestsListResponse(
     val items: List<CatalogTestDto>,
+)
+
+data class DailyDigestItemDto(
+    val id: String,
+    @SerializedName("questionPrompt") val questionPrompt: String,
+    val options: List<String>,
+    @SerializedName("correctIndex") val correctIndex: Int,
+    @SerializedName("factText") val factText: String,
+)
+
+data class DailyDigestTodayResponse(
+    val item: DailyDigestItemDto,
+)
+
+data class HomeContentSectionDto(
+    val id: String,
+    val title: String,
+    val items: List<String>,
+)
+
+data class HomeQuickActionItemDto(
+    val title: String,
+    @SerializedName("actionKey") val actionKey: String,
+    @SerializedName("iconKey") val iconKey: String? = null,
+)
+
+data class HomeQuickActionSectionDto(
+    val id: String,
+    val title: String,
+    val items: List<HomeQuickActionItemDto>,
+)
+
+data class HomeBannerDto(
+    val id: String,
+    @SerializedName("imageUrl") val imageUrl: String,
+    val enabled: Boolean = true,
+)
+
+data class HomeContentDto(
+    @SerializedName("welcomeText") val welcomeText: String? = null,
+    @SerializedName("quickActionsTitle") val quickActionsTitle: String? = null,
+    val sections: List<HomeContentSectionDto> = emptyList(),
+    @SerializedName("quickActionSections") val quickActionSections: List<HomeQuickActionSectionDto> = emptyList(),
+    val banners: List<HomeBannerDto> = emptyList(),
+)
+
+data class SubmitApplicationContentDto(
+    val title: String? = null,
+    @SerializedName("benefitsTitle") val benefitsTitle: String? = null,
+    @SerializedName("submitButtonLabel") val submitButtonLabel: String? = null,
+    @SerializedName("successMessage") val successMessage: String? = null,
+    @SerializedName("bulletItems") val bulletItems: List<String> = emptyList(),
+)
+
+data class InstructionContentDto(
+    @SerializedName("pageTitle") val pageTitle: String? = null,
+    @SerializedName("cardTitle") val cardTitle: String? = null,
+    @SerializedName("startButtonLabel") val startButtonLabel: String? = null,
+    @SerializedName("submitDialogBrand") val submitDialogBrand: String? = null,
+    @SerializedName("submitDialogTitle") val submitDialogTitle: String? = null,
+    @SerializedName("submitDialogSubtitle") val submitDialogSubtitle: String? = null,
+    @SerializedName("postSubmitCardTitle") val postSubmitCardTitle: String? = null,
+    @SerializedName("postSubmitCardReadyTitle") val postSubmitCardReadyTitle: String? = null,
+    @SerializedName("postSubmitCardDateLabel") val postSubmitCardDateLabel: String? = null,
+    @SerializedName("postSubmitCardPendingMessage") val postSubmitCardPendingMessage: String? = null,
+    @SerializedName("postSubmitCardReadyMessage") val postSubmitCardReadyMessage: String? = null,
+    @SerializedName("postSubmitCardButtonLabel") val postSubmitCardButtonLabel: String? = null,
+    @SerializedName("postSubmitCardLines") val postSubmitCardLines: List<String> = emptyList(),
+    @SerializedName("questionNavigationMode") val questionNavigationMode: String? = null,
+    val items: List<String> = emptyList(),
+)
+
+data class ProfileMenuItemDto(
+    val id: String,
+    val title: String,
+    val subtitle: String? = null,
+    val path: String,
+    val enabled: Boolean = true,
+)
+
+data class ExamCategoryItemDto(
+    val id: String,
+    @SerializedName("level1") val level1: String,
+    @SerializedName("level2") val level2: String,
+    @SerializedName("level3") val level3: String,
+    @SerializedName("iconKey") val iconKey: String? = null,
+    val enabled: Boolean = true,
+)
+
+data class ExamCategoriesDto(
+    val items: List<ExamCategoryItemDto> = emptyList(),
+)
+
+data class HomeContentResponse(
+    val content: HomeContentDto? = null,
+    @SerializedName("submitApplicationContent") val submitApplicationContent: SubmitApplicationContentDto? = null,
+    @SerializedName("instructionContent") val instructionContent: InstructionContentDto? = null,
+    @SerializedName("profileMenuItems") val profileMenuItems: List<ProfileMenuItemDto> = emptyList(),
+    @SerializedName("examCategories") val examCategories: ExamCategoriesDto? = null,
 )

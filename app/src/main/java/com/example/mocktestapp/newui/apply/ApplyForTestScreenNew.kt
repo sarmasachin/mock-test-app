@@ -2,6 +2,7 @@ package com.example.mocktestapp.newui.apply
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,7 +16,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -25,6 +29,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 
@@ -45,6 +55,41 @@ fun ApplyForTestScreenNew(
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
+    var pageTitle by remember { mutableStateOf("Apply") }
+    var benefitsTitle by remember { mutableStateOf("What you’ll get") }
+    var submitButtonLabel by remember { mutableStateOf("Submit Application") }
+    var successMessage by remember { mutableStateOf("Your application was submitted successfully.") }
+    var bulletItems by remember {
+        mutableStateOf(
+            listOf(
+                "Instant access after approval",
+                "Mock test practice & review",
+                "Score history in your profile",
+            ),
+        )
+    }
+    var showSuccessDialog by remember { mutableStateOf(false) }
+    var revealSubmitSection by remember { mutableStateOf(false) }
+    var slotInfo by remember { mutableStateOf("Morning Slot") }
+    var appliedInfo by remember { mutableStateOf("0") }
+    var remainingSeatsInfo by remember { mutableStateOf("0 seats left") }
+
+    LaunchedEffect(Unit) {
+        val remote = ContentRepository.loadSubmitApplicationContent() ?: return@LaunchedEffect
+        pageTitle = remote.title?.ifBlank { pageTitle } ?: pageTitle
+        benefitsTitle = remote.benefitsTitle?.ifBlank { benefitsTitle } ?: benefitsTitle
+        submitButtonLabel = remote.submitButtonLabel?.ifBlank { submitButtonLabel } ?: submitButtonLabel
+        successMessage = remote.successMessage?.ifBlank { successMessage } ?: successMessage
+        if (remote.bulletItems.isNotEmpty()) {
+            bulletItems = remote.bulletItems
+        }
+    }
+    LaunchedEffect(title) {
+        val test = ContentRepository.loadTestByTitle(title)
+        slotInfo = test?.slotLabel?.ifBlank { "Morning Slot" } ?: "Morning Slot"
+        appliedInfo = test?.enrolledLabel?.ifBlank { "0" } ?: "0"
+        remainingSeatsInfo = test?.remainingSeatsLabel?.ifBlank { "0 seats left" } ?: "0 seats left"
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -57,7 +102,7 @@ fun ApplyForTestScreenNew(
                 .padding(padding)
                 .padding(horizontal = 18.dp, vertical = 14.dp),
         ) {
-            TopBar(title = "Apply", onBack = onBack)
+            TopBar(title = pageTitle, onBack = onBack)
             Spacer(Modifier.height(14.dp))
 
             Card(
@@ -76,38 +121,114 @@ fun ApplyForTestScreenNew(
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 16.sp,
                     )
-                    Spacer(Modifier.height(10.dp))
-
+                    Spacer(Modifier.height(12.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Outlined.Schedule,
+                            contentDescription = null,
+                            tint = p.accent,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Slot: $slotInfo",
+                            color = p.textSecondary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Outlined.Groups,
+                            contentDescription = null,
+                            tint = p.accent,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Applied users: $appliedInfo",
+                            color = p.textSecondary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "What you’ll get",
+                        text = "Remaining seats: $remainingSeatsInfo",
                         color = p.textSecondary,
-                        fontWeight = FontWeight.SemiBold,
                         fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
                     )
                     Spacer(Modifier.height(10.dp))
 
-                    Bullet(text = "Instant access after approval")
-                    Bullet(text = "Mock test practice & review")
-                    Bullet(text = "Score history in your profile")
+                    if (!revealSubmitSection) {
+                        Spacer(Modifier.height(6.dp))
+                        Button(
+                            onClick = { revealSubmitSection = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.systemBlue,
+                                contentColor = Color.White,
+                            ),
+                        ) {
+                            Text(text = "Apply for Test", fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = benefitsTitle,
+                            color = p.textSecondary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                        )
+                        Spacer(Modifier.height(10.dp))
 
-                    Spacer(Modifier.height(16.dp))
+                        bulletItems.forEach { item ->
+                            Bullet(text = item)
+                        }
 
-                    Button(
-                        onClick = onSubmit,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = p.primaryButton,
-                            contentColor = p.onPrimaryButton,
-                        ),
-                    ) {
-                        Text(text = "Submit Application", fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(16.dp))
+
+                        Button(
+                            onClick = { showSuccessDialog = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.primaryButton,
+                                contentColor = p.onPrimaryButton,
+                            ),
+                        ) {
+                            Text(text = submitButtonLabel, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
         }
+    }
+
+    if (showSuccessDialog) {
+        AlertDialog(
+            onDismissRequest = { showSuccessDialog = false },
+            title = { Text(text = "Success") },
+            text = { Text(text = successMessage) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showSuccessDialog = false
+                        onSubmit()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = p.primaryButton),
+                ) {
+                    Text("OK", color = p.onPrimaryButton)
+                }
+            },
+        )
     }
 }
 

@@ -54,6 +54,19 @@ type TestItem = {
   meta_line: string;
   duration_minutes: number;
   question_count: number;
+  exam_date?: string | null;
+  total_marks?: number;
+  slot_label?: string;
+  capacity_total?: number;
+  enrolled_count?: number;
+  attempts_allowed?: number;
+  language_mode?: string;
+  exam_mode?: string;
+  negative_marking_text?: string;
+  test_type_label?: string;
+  valid_until?: string | null;
+  dynamic_date_enabled?: boolean;
+  date_cycle_days?: number;
   test_kind: TestKind;
   is_published: boolean;
   dynamic_fluctuation_on_publish: boolean;
@@ -123,6 +136,7 @@ type HomeContentSection = {
 type HomeQuickActionItem = {
   title: string;
   actionKey: string;
+  iconKey?: string;
 };
 type HomeQuickActionSection = {
   id: string;
@@ -583,6 +597,22 @@ function TestsTab({
   const [items, setItems] = useState<TestItem[]>([]);
   const [title, setTitle] = useState('');
   const [slug, setSlug] = useState('');
+  const [subcategory, setSubcategory] = useState('');
+  const [durationMinutes, setDurationMinutes] = useState('180');
+  const [questionCount, setQuestionCount] = useState('100');
+  const [totalMarks, setTotalMarks] = useState('400');
+  const [examDate, setExamDate] = useState('');
+  const [slotLabel, setSlotLabel] = useState('');
+  const [capacityTotal, setCapacityTotal] = useState('500');
+  const [enrolledCount, setEnrolledCount] = useState('410');
+  const [attemptsAllowed, setAttemptsAllowed] = useState('1');
+  const [languageMode, setLanguageMode] = useState('Bilingual');
+  const [examMode, setExamMode] = useState('Online CBT');
+  const [negativeMarkingText, setNegativeMarkingText] = useState('Yes (-1)');
+  const [testTypeLabel, setTestTypeLabel] = useState('Full Mock');
+  const [validUntil, setValidUntil] = useState('');
+  const [dynamicDateEnabled, setDynamicDateEnabled] = useState(false);
+  const [dateCycleDays, setDateCycleDays] = useState('0');
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState('');
   const [kind, setKind] = useState<TestKind>('mock');
@@ -627,6 +657,19 @@ function TestsTab({
         ? res.data.items.map((x: any) => ({
             ...x,
             dynamic_fluctuation_on_publish: normalizeBoolean(x.dynamic_fluctuation_on_publish, true),
+            exam_date: x.exam_date || '',
+            total_marks: Number(x.total_marks || 0),
+            slot_label: String(x.slot_label || ''),
+            capacity_total: Number(x.capacity_total || 0),
+            enrolled_count: Number(x.enrolled_count || 0),
+            attempts_allowed: Number(x.attempts_allowed || 1),
+            language_mode: String(x.language_mode || 'Bilingual'),
+            exam_mode: String(x.exam_mode || 'Practice'),
+            negative_marking_text: String(x.negative_marking_text || 'No'),
+            test_type_label: String(x.test_type_label || 'Full Mock'),
+            valid_until: x.valid_until || '',
+            dynamic_date_enabled: normalizeBoolean(x.dynamic_date_enabled, false),
+            date_cycle_days: Number(x.date_cycle_days || 0),
           }))
         : [];
       setItems(mapped);
@@ -648,12 +691,44 @@ function TestsTab({
       await apiClient.post('/admin/tests', {
         title: cleanTitle,
         slug: cleanSlug,
+        subcategory: subcategory.trim(),
+        durationMinutes: Number(durationMinutes || '180'),
+        questionCount: Number(questionCount || '100'),
+        totalMarks: Number(totalMarks || '0'),
+        examDate: examDate.trim(),
+        slotLabel: slotLabel.trim(),
+        capacityTotal: Number(capacityTotal || '0'),
+        enrolledCount: Number(enrolledCount || '0'),
+        attemptsAllowed: Number(attemptsAllowed || '1'),
+        languageMode: languageMode.trim() || 'Bilingual',
+        examMode: examMode.trim() || 'Practice',
+        negativeMarkingText: negativeMarkingText.trim() || 'No',
+        testTypeLabel: testTypeLabel.trim() || 'Full Mock',
+        validUntil: validUntil.trim(),
+        dynamicDateEnabled,
+        dateCycleDays: Number(dateCycleDays || '0'),
         testKind: kind,
         isPublished,
         dynamicFluctuationOnPublish,
       });
       setTitle('');
       setSlug('');
+      setSubcategory('');
+      setDurationMinutes('180');
+      setQuestionCount('100');
+      setTotalMarks('400');
+      setExamDate('');
+      setSlotLabel('');
+      setCapacityTotal('500');
+      setEnrolledCount('410');
+      setAttemptsAllowed('1');
+      setLanguageMode('Bilingual');
+      setExamMode('Online CBT');
+      setNegativeMarkingText('Yes (-1)');
+      setTestTypeLabel('Full Mock');
+      setValidUntil('');
+      setDynamicDateEnabled(false);
+      setDateCycleDays('0');
       await load();
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Failed to create test');
@@ -674,6 +749,19 @@ function TestsTab({
         metaLine: current.meta_line,
         durationMinutes: current.duration_minutes,
         questionCount: current.question_count,
+        examDate: current.exam_date || '',
+        totalMarks: current.total_marks || 0,
+        slotLabel: current.slot_label || '',
+        capacityTotal: current.capacity_total || 0,
+        enrolledCount: current.enrolled_count || 0,
+        attemptsAllowed: current.attempts_allowed || 1,
+        languageMode: current.language_mode || 'Bilingual',
+        examMode: current.exam_mode || 'Practice',
+        negativeMarkingText: current.negative_marking_text || 'No',
+        testTypeLabel: current.test_type_label || 'Full Mock',
+        validUntil: current.valid_until || '',
+        dynamicDateEnabled: normalizeBoolean(current.dynamic_date_enabled, false),
+        dateCycleDays: current.date_cycle_days || 0,
         testKind: current.test_kind,
         isPublished: current.is_published,
         dynamicFluctuationOnPublish: normalizeBoolean(current.dynamic_fluctuation_on_publish, true),
@@ -829,26 +917,65 @@ function TestsTab({
       </div>
       {mode === 'allTests' && (
         <>
-          <form onSubmit={createTest} className="inline-form all-tests-create">
-            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Test title" required />
-            <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="test-slug" required />
-            <select value={kind} onChange={(e) => setKind(e.target.value as TestKind)}>
-              <option value="mock">Mock</option>
-              <option value="quiz">Quiz</option>
-            </select>
-            <label className="check-wrap">
-              <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
-              published
-            </label>
-            <label className="check-wrap">
-              <input
-                type="checkbox"
-                checked={dynamicFluctuationOnPublish}
-                onChange={(e) => setDynamicFluctuationOnPublish(e.target.checked)}
-              />
-              dynamic fluctuation
-            </label>
-            <button type="submit">Add Test</button>
+          <form onSubmit={createTest} className="all-tests-create">
+            <div className="all-tests-section">
+              <h4>Basic</h4>
+              <div className="all-tests-grid">
+                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Test title" required />
+                <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="test-slug" required />
+                <input value={subcategory} onChange={(e) => setSubcategory(e.target.value)} placeholder="Subcategory" />
+                <select value={kind} onChange={(e) => setKind(e.target.value as TestKind)}>
+                  <option value="mock">Mock</option>
+                  <option value="quiz">Quiz</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="all-tests-section">
+              <h4>Schedule & Stats</h4>
+              <div className="all-tests-grid">
+                <input type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} />
+                <input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} />
+                <input value={slotLabel} onChange={(e) => setSlotLabel(e.target.value)} placeholder="Slot label (e.g. Morning)" />
+                <input type="number" value={durationMinutes} onChange={(e) => setDurationMinutes(e.target.value)} placeholder="Duration (minutes)" />
+                <input type="number" value={questionCount} onChange={(e) => setQuestionCount(e.target.value)} placeholder="Question count" />
+                <input type="number" value={totalMarks} onChange={(e) => setTotalMarks(e.target.value)} placeholder="Total marks" />
+              </div>
+            </div>
+
+            <div className="all-tests-section">
+              <h4>Capacity & Rules</h4>
+              <div className="all-tests-grid">
+                <input type="number" value={capacityTotal} onChange={(e) => setCapacityTotal(e.target.value)} placeholder="Capacity" />
+                <input type="number" value={enrolledCount} onChange={(e) => setEnrolledCount(e.target.value)} placeholder="Enrolled count" />
+                <input type="number" value={attemptsAllowed} onChange={(e) => setAttemptsAllowed(e.target.value)} placeholder="Attempts allowed" />
+                <input value={languageMode} onChange={(e) => setLanguageMode(e.target.value)} placeholder="Language mode" />
+                <input value={examMode} onChange={(e) => setExamMode(e.target.value)} placeholder="Exam mode" />
+                <input value={negativeMarkingText} onChange={(e) => setNegativeMarkingText(e.target.value)} placeholder="Negative marking" />
+                <input value={testTypeLabel} onChange={(e) => setTestTypeLabel(e.target.value)} placeholder="Test type label" />
+              </div>
+            </div>
+
+            <div className="all-tests-actions">
+              <label className="check-wrap">
+                <input type="checkbox" checked={dynamicDateEnabled} onChange={(e) => setDynamicDateEnabled(e.target.checked)} />
+                dynamic date
+              </label>
+              <input type="number" value={dateCycleDays} onChange={(e) => setDateCycleDays(e.target.value)} placeholder="Date cycle days" />
+              <label className="check-wrap">
+                <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
+                published
+              </label>
+              <label className="check-wrap">
+                <input
+                  type="checkbox"
+                  checked={dynamicFluctuationOnPublish}
+                  onChange={(e) => setDynamicFluctuationOnPublish(e.target.checked)}
+                />
+                dynamic fluctuation
+              </label>
+              <button type="submit">Add Test</button>
+            </div>
           </form>
           <div className="inline-form all-tests-tools">
             <button type="button" className="all-tests-refresh" onClick={load}>
@@ -903,23 +1030,83 @@ function TestsTab({
               <div key={item.id} className="row">
                 {editingId === item.id ? (
                   <>
-                    <input
-                      value={item.title}
-                      onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, title: e.target.value } : x)))}
-                    />
-                    <input
-                      value={item.slug}
-                      onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, slug: e.target.value } : x)))}
-                    />
-                    <select
-                      value={item.test_kind}
-                      onChange={(e) =>
-                        setItems((p) => p.map((x) => (x.id === item.id ? { ...x, test_kind: e.target.value as TestKind } : x)))
-                      }
-                    >
-                      <option value="mock">mock</option>
-                      <option value="quiz">quiz</option>
-                    </select>
+                    <div>
+                      <input
+                        value={item.title}
+                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, title: e.target.value } : x)))}
+                      />
+                      <input
+                        value={item.subcategory || ''}
+                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, subcategory: e.target.value } : x)))}
+                        placeholder="subcategory"
+                      />
+                      <input
+                        type="date"
+                        value={item.exam_date || ''}
+                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, exam_date: e.target.value } : x)))}
+                      />
+                      <input
+                        type="date"
+                        value={item.valid_until || ''}
+                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, valid_until: e.target.value } : x)))}
+                      />
+                    </div>
+                    <div>
+                      <input
+                        value={item.slug}
+                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, slug: e.target.value } : x)))}
+                      />
+                      <input
+                        value={item.slot_label || ''}
+                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, slot_label: e.target.value } : x)))}
+                        placeholder="slot label"
+                      />
+                      <input
+                        value={item.language_mode || ''}
+                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, language_mode: e.target.value } : x)))}
+                        placeholder="language"
+                      />
+                      <input
+                        value={item.exam_mode || ''}
+                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, exam_mode: e.target.value } : x)))}
+                        placeholder="mode"
+                      />
+                    </div>
+                    <div>
+                      <select
+                        value={item.test_kind}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, test_kind: e.target.value as TestKind } : x)))
+                        }
+                      >
+                        <option value="mock">mock</option>
+                        <option value="quiz">quiz</option>
+                      </select>
+                      <input
+                        type="number"
+                        value={item.duration_minutes ?? 0}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, duration_minutes: Number(e.target.value || 0) } : x)))
+                        }
+                        placeholder="duration"
+                      />
+                      <input
+                        type="number"
+                        value={item.question_count ?? 0}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, question_count: Number(e.target.value || 0) } : x)))
+                        }
+                        placeholder="questions"
+                      />
+                      <input
+                        type="number"
+                        value={item.total_marks ?? 0}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, total_marks: Number(e.target.value || 0) } : x)))
+                        }
+                        placeholder="marks"
+                      />
+                    </div>
                     <label className="check-wrap">
                       <input
                         type="checkbox"
@@ -944,6 +1131,64 @@ function TestsTab({
                       />
                       fluctuation
                     </label>
+                    <div>
+                      <input
+                        type="number"
+                        value={item.capacity_total ?? 0}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, capacity_total: Number(e.target.value || 0) } : x)))
+                        }
+                        placeholder="capacity"
+                      />
+                      <input
+                        type="number"
+                        value={item.enrolled_count ?? 0}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, enrolled_count: Number(e.target.value || 0) } : x)))
+                        }
+                        placeholder="enrolled"
+                      />
+                      <input
+                        type="number"
+                        value={item.attempts_allowed ?? 1}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, attempts_allowed: Number(e.target.value || 1) } : x)))
+                        }
+                        placeholder="attempts"
+                      />
+                      <input
+                        value={item.negative_marking_text || ''}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, negative_marking_text: e.target.value } : x)))
+                        }
+                        placeholder="negative marking"
+                      />
+                      <input
+                        value={item.test_type_label || ''}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, test_type_label: e.target.value } : x)))
+                        }
+                        placeholder="test type"
+                      />
+                      <label className="check-wrap">
+                        <input
+                          type="checkbox"
+                          checked={normalizeBoolean(item.dynamic_date_enabled, false)}
+                          onChange={(e) =>
+                            setItems((p) => p.map((x) => (x.id === item.id ? { ...x, dynamic_date_enabled: e.target.checked } : x)))
+                          }
+                        />
+                        dynamic date
+                      </label>
+                      <input
+                        type="number"
+                        value={item.date_cycle_days ?? 0}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, date_cycle_days: Number(e.target.value || 0) } : x)))
+                        }
+                        placeholder="cycle days"
+                      />
+                    </div>
                     <button onClick={() => saveEdit(item.id)}>Save</button>
                     <button className="ghost" onClick={() => setEditingId('')}>
                       Cancel
@@ -951,11 +1196,11 @@ function TestsTab({
                   </>
                 ) : (
                   <>
-                    <span>{item.title}</span>
-                    <span>{item.slug}</span>
-                    <span>{item.test_kind}</span>
-                    <span>{item.is_published ? 'Published' : 'Hidden'}</span>
-                    <span>{item.dynamic_fluctuation_on_publish ? 'On' : 'Off'}</span>
+                    <span>{item.title}<br />{item.subcategory || '-'}</span>
+                    <span>{item.slug}<br />{item.exam_date || '-'}</span>
+                    <span>{item.test_kind}<br />{item.duration_minutes} min · {item.question_count} Q</span>
+                    <span>{item.is_published ? 'Published' : 'Hidden'}<br />{item.enrolled_count || 0}/{item.capacity_total || 0}</span>
+                    <span>{item.dynamic_fluctuation_on_publish ? 'Fluctuation: On' : 'Fluctuation: Off'}<br />{item.dynamic_date_enabled ? `Date: On (${item.date_cycle_days || 0}d)` : 'Date: Off'}</span>
                     <button onClick={() => setEditingId(item.id)}>Edit</button>
                     <div className="inline-form">
                       <button onClick={() => loadQuestions(item)}>Open Builder</button>
@@ -2266,10 +2511,10 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
         id: 'quick-actions-default',
         title: 'Quick actions',
         items: [
-          { title: 'Start test', actionKey: 'startTest' },
-          { title: 'Leaderboard', actionKey: 'leaderboard' },
-          { title: 'Results', actionKey: 'results' },
-          { title: 'Tool', actionKey: 'bookmarks' },
+          { title: 'Start test', actionKey: 'startTest', iconKey: 'play' },
+          { title: 'Leaderboard', actionKey: 'leaderboard', iconKey: 'trophy' },
+          { title: 'Results', actionKey: 'results', iconKey: 'report' },
+          { title: 'Tool', actionKey: 'bookmarks', iconKey: 'bookmark' },
         ],
       },
     ],
@@ -2308,6 +2553,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
                   ? s.items.map((x: any) => ({
                       title: String(x.title || ''),
                       actionKey: String(x.actionKey || ''),
+                      iconKey: String(x.iconKey || ''),
                     }))
                   : [],
               }))
@@ -2359,14 +2605,16 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
       .map((x) => x.trim())
       .filter(Boolean)
       .map((pair) => {
-        const [title, actionKey] = pair.split(':').map((v) => v.trim());
-        return { title: title || '', actionKey: actionKey || '' };
+        const [title, actionKey, iconKey] = pair.split(':').map((v) => v.trim());
+        return { title: title || '', actionKey: actionKey || '', iconKey: iconKey || '' };
       })
       .filter((x) => x.title && x.actionKey);
   }
 
   function formatQuickItems(items: HomeQuickActionItem[]): string {
-    return items.map((x) => `${x.title}:${x.actionKey}`).join(', ');
+    return items
+      .map((x) => (x.iconKey ? `${x.title}:${x.actionKey}:${x.iconKey}` : `${x.title}:${x.actionKey}`))
+      .join(', ');
   }
 
   function addQuickActionSection() {
@@ -2472,7 +2720,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
         <input
           value={newQuickSectionItems}
           onChange={(e) => setNewQuickSectionItems(e.target.value)}
-          placeholder="Quick actions format: Label:key, Label:key"
+          placeholder="Quick actions format: Label:key:icon, Label:key:icon"
         />
         <button type="button" onClick={addQuickActionSection}>
           Add Quick Action Section
@@ -2595,7 +2843,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
       <div className="list table">
         <div className="row row-head" style={{ gridTemplateColumns: '1fr 2fr 90px 90px' }}>
           <span>Quick Action Section</span>
-          <span>Items (title:key)</span>
+          <span>Items (title:key:icon)</span>
           <span>Update</span>
           <span>Delete</span>
         </div>

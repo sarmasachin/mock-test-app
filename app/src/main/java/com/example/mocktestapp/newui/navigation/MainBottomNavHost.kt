@@ -33,6 +33,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.mocktestapp.data.AppPreferencesRepository
 import com.example.mocktestapp.newui.alerts.ExamAlertFeedImageSeedPrefix
 import com.example.mocktestapp.newui.alerts.ExamAlertScreenNew
 import com.example.mocktestapp.newui.alerts.JobAlertFeedImageSeedPrefix
@@ -61,6 +62,7 @@ import com.example.mocktestapp.newui.result.AnswerKeyScreenNew
 import com.example.mocktestapp.newui.result.ResultScreenNew
 import com.example.mocktestapp.newui.result.ReviewScreenNew
 import com.example.mocktestapp.newui.result.ReviewSolutionScreenNew
+import com.example.mocktestapp.newui.tests.StartTestPreviewScreenNew
 import com.example.mocktestapp.newui.tests.TestsScreenNew
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 
@@ -219,11 +221,17 @@ fun MainBottomNavHost(
                         mainNavController.navigateMainTab(MainTabRoutes.Tests)
                     },
                     onStartTest = {
-                        mainNavController.navigate("${RoutesNew.INSTRUCTIONS}/bsc nursing moc test")
+                        mainNavController.navigate("${RoutesNew.START_TEST_PREVIEW}/bsc nursing moc test")
                     },
                     onLeaderboard = { mainNavController.navigate(RoutesNew.LEADERBOARD) },
                     onResults = {
                         mainNavController.navigate(RoutesNew.RESULTS_HISTORY)
+                    },
+                    onOpenPendingResult = { testName, answered, correct, wrong ->
+                        val safeName = testName.ifBlank { "Test" }
+                        mainNavController.navigate(
+                            "${RoutesNew.RESULT}/$safeName?answered=$answered&correct=$correct&wrong=$wrong",
+                        )
                     },
                     onBookmarks = { mainNavController.navigate(RoutesNew.BOOKMARKS) },
                     onOpenJobAlert = { mainNavController.navigate(RoutesNew.JOB_ALERT) },
@@ -242,7 +250,7 @@ fun MainBottomNavHost(
                     showAppBarBack = false,
                     onBack = { mainNavController.goToHomeTab() },
                     onOpenCategory = { cat ->
-                        mainNavController.navigate("${RoutesNew.CATEGORY}/$cat")
+                        mainNavController.navigate("${RoutesNew.APPLY}/$cat")
                     },
                 )
             }
@@ -309,6 +317,18 @@ fun MainBottomNavHost(
             }
 
             composable(
+                route = "${RoutesNew.START_TEST_PREVIEW}/{name}",
+                arguments = listOf(navArgument("name") { type = NavType.StringType }),
+            ) { entry ->
+                val name = entry.arguments?.getString("name").orEmpty()
+                StartTestPreviewScreenNew(
+                    testName = name.ifBlank { "bsc nursing moc test" },
+                    onBack = { mainNavController.popBackOrHome() },
+                    onStartTest = { mainNavController.navigate("${RoutesNew.QUIZ}/$name") },
+                )
+            }
+
+            composable(
                 route = "${RoutesNew.INSTRUCTIONS}/{name}",
                 arguments = listOf(navArgument("name") { type = NavType.StringType }),
             ) { entry ->
@@ -329,9 +349,15 @@ fun MainBottomNavHost(
                     testName = name.ifBlank { "bsc nursing moc test" },
                     onBack = { mainNavController.popBackOrHome() },
                     onSubmit = { answered, correct, wrong ->
-                        mainNavController.navigate(
-                            "${RoutesNew.RESULT}/$name?answered=$answered&correct=$correct&wrong=$wrong",
+                        val publishAt = System.currentTimeMillis() + 2 * 60 * 1000L
+                        AppPreferencesRepository.markPendingResultSubmitted(
+                            testName = name.ifBlank { "Test" },
+                            publishAtMillis = publishAt,
+                            answered = answered,
+                            correct = correct,
+                            wrong = wrong,
                         )
+                        mainNavController.goToHomeTab()
                     },
                 )
             }
@@ -567,7 +593,7 @@ fun MainBottomNavHost(
                 SeeAllCategoriesScreenNew(
                     onBack = { mainNavController.popBackOrHome() },
                     onOpenCategory = { cat ->
-                        mainNavController.navigate("${RoutesNew.CATEGORY}/$cat")
+                        mainNavController.navigate("${RoutesNew.APPLY}/$cat")
                     },
                 )
             }

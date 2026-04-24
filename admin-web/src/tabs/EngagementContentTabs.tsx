@@ -40,6 +40,17 @@ type InstructionContent = {
   pageTitle: string;
   cardTitle: string;
   startButtonLabel: string;
+  submitDialogBrand: string;
+  submitDialogTitle: string;
+  submitDialogSubtitle: string;
+  postSubmitCardTitle: string;
+  postSubmitCardReadyTitle: string;
+  postSubmitCardDateLabel: string;
+  postSubmitCardPendingMessage: string;
+  postSubmitCardReadyMessage: string;
+  postSubmitCardButtonLabel: string;
+  postSubmitCardLines: string[];
+  questionNavigationMode: 'sequential' | 'free';
   items: string[];
 };
 
@@ -225,8 +236,26 @@ export function SubmitApplicationContentTabImpl({ apiClient }: { apiClient: ApiC
 
 export function InstructionContentTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const ITEMS_PER_PAGE = 20;
-  const [settings, setSettings] = useState<InstructionContent>({ pageTitle: 'Instructions', cardTitle: 'Please read carefully', startButtonLabel: 'Start Test', items: ['Total questions: 10', 'Duration: 12 minutes', 'Each question has one correct answer', 'You can review before submitting'] });
+  const [openModule, setOpenModule] = useState<'instructions' | 'submitPopup' | 'postSubmitCard' | 'navigation' | 'instructionLines' | null>(null);
+  const [settings, setSettings] = useState<InstructionContent>({
+    pageTitle: 'Instructions',
+    cardTitle: 'Please read carefully',
+    startButtonLabel: 'Start Test',
+    submitDialogBrand: 'Mockers',
+    submitDialogTitle: 'Are you sure want to submit test',
+    submitDialogSubtitle: "After submitting test you won't be able to re-attempt",
+    postSubmitCardTitle: 'Result Pending',
+    postSubmitCardReadyTitle: 'Result Ready',
+    postSubmitCardDateLabel: 'Result date/time',
+    postSubmitCardPendingMessage: 'Result will be available in',
+    postSubmitCardReadyMessage: 'Result is now available.',
+    postSubmitCardButtonLabel: 'Show Result',
+    postSubmitCardLines: [],
+    questionNavigationMode: 'sequential',
+    items: ['Total questions: 10', 'Duration: 12 minutes', 'Each question has one correct answer', 'You can review before submitting'],
+  });
   const [newLine, setNewLine] = useState('');
+  const [newPostSubmitLine, setNewPostSubmitLine] = useState('');
   const [page, setPage] = useState(1);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -235,7 +264,23 @@ export function InstructionContentTabImpl({ apiClient }: { apiClient: ApiClient 
       setError('');
       const res = await apiClient.get('/admin/settings');
       const s = res.data?.settings?.instructionContent || {};
-      setSettings({ pageTitle: String(s.pageTitle || 'Instructions'), cardTitle: String(s.cardTitle || 'Please read carefully'), startButtonLabel: String(s.startButtonLabel || 'Start Test'), items: Array.isArray(s.items) ? s.items.map((x: any) => String(x)).filter(Boolean) : [] });
+      setSettings({
+        pageTitle: String(s.pageTitle || 'Instructions'),
+        cardTitle: String(s.cardTitle || 'Please read carefully'),
+        startButtonLabel: String(s.startButtonLabel || 'Start Test'),
+        submitDialogBrand: String(s.submitDialogBrand || 'Mockers'),
+        submitDialogTitle: String(s.submitDialogTitle || 'Are you sure want to submit test'),
+        submitDialogSubtitle: String(s.submitDialogSubtitle || "After submitting test you won't be able to re-attempt"),
+        postSubmitCardTitle: String(s.postSubmitCardTitle || 'Result Pending'),
+        postSubmitCardReadyTitle: String(s.postSubmitCardReadyTitle || 'Result Ready'),
+        postSubmitCardDateLabel: String(s.postSubmitCardDateLabel || 'Result date/time'),
+        postSubmitCardPendingMessage: String(s.postSubmitCardPendingMessage || 'Result will be available in'),
+        postSubmitCardReadyMessage: String(s.postSubmitCardReadyMessage || 'Result is now available.'),
+        postSubmitCardButtonLabel: String(s.postSubmitCardButtonLabel || 'Show Result'),
+        postSubmitCardLines: Array.isArray(s.postSubmitCardLines) ? s.postSubmitCardLines.map((x: any) => String(x)).filter(Boolean) : [],
+        questionNavigationMode: String(s.questionNavigationMode || 'sequential') === 'free' ? 'free' : 'sequential',
+        items: Array.isArray(s.items) ? s.items.map((x: any) => String(x)).filter(Boolean) : [],
+      });
       setPage(1);
     } catch (err: any) { setError(err?.response?.data?.error || 'Failed to load instruction content'); }
   }
@@ -247,23 +292,128 @@ export function InstructionContentTabImpl({ apiClient }: { apiClient: ApiClient 
     } catch (err: any) { setError(err?.response?.data?.error || 'Failed to save instruction content'); } finally { setSaving(false); }
   }
   function addLine() { const text = newLine.trim(); if (!text) return; setSettings((p) => ({ ...p, items: [...p.items, text] })); setNewLine(''); }
+  function addPostSubmitLine() { const text = newPostSubmitLine.trim(); if (!text) return; setSettings((p) => ({ ...p, postSubmitCardLines: [...p.postSubmitCardLines, text] })); setNewPostSubmitLine(''); }
   const totalPages = Math.max(1, Math.ceil(settings.items.length / ITEMS_PER_PAGE));
   const safePage = Math.min(page, totalPages);
   const visibleItems = useMemo(() => settings.items.slice((safePage - 1) * ITEMS_PER_PAGE, (safePage - 1) * ITEMS_PER_PAGE + ITEMS_PER_PAGE), [settings.items, safePage]);
+  const postSubmitTotalPages = Math.max(1, Math.ceil(settings.postSubmitCardLines.length / ITEMS_PER_PAGE));
+  const postSubmitSafePage = Math.min(page, postSubmitTotalPages);
+  const visiblePostSubmitItems = useMemo(
+    () => settings.postSubmitCardLines.slice((postSubmitSafePage - 1) * ITEMS_PER_PAGE, (postSubmitSafePage - 1) * ITEMS_PER_PAGE + ITEMS_PER_PAGE),
+    [settings.postSubmitCardLines, postSubmitSafePage],
+  );
+  const sectionToggleStyle: React.CSSProperties = {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    fontSize: 26,
+    fontWeight: 800,
+    lineHeight: '36px',
+    padding: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  };
   return (
     <section className="panel-card">
       <div className="panel-head"><h3>Instruction Content</h3></div>
-      <div className="settings-form">
-        <input value={settings.pageTitle} onChange={(e) => setSettings((p) => ({ ...p, pageTitle: e.target.value }))} placeholder="Page title" />
-        <input value={settings.cardTitle} onChange={(e) => setSettings((p) => ({ ...p, cardTitle: e.target.value }))} placeholder="Card title" />
-        <input value={settings.startButtonLabel} onChange={(e) => setSettings((p) => ({ ...p, startButtonLabel: e.target.value }))} placeholder="Start button label" />
-      </div>
-      <div className="inline-form"><input value={newLine} onChange={(e) => setNewLine(e.target.value)} placeholder="Add instruction line" /><button type="button" onClick={addLine}>Add Line</button></div>
       <div className="list table">
-        <div className="row row-head" style={{ gridTemplateColumns: '2fr 90px 90px' }}><span>Instruction Text</span><span>Update</span><span>Delete</span></div>
-        {visibleItems.map((item, idx) => { const absoluteIndex = (safePage - 1) * ITEMS_PER_PAGE + idx; return <div key={`${absoluteIndex}-${item}`} className="row" style={{ gridTemplateColumns: '2fr 90px 90px' }}><input value={item} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x, i) => (i === absoluteIndex ? e.target.value : x)) }))} /><button type="button" onClick={save}>Save</button><button type="button" className="danger" onClick={() => setSettings((p) => ({ ...p, items: p.items.filter((_, i) => i !== absoluteIndex) }))}>Delete</button></div>; })}
+        <div className="row" style={{ gridTemplateColumns: '1fr 48px' }}>
+          <span><strong>Instructions Screen Text</strong></span>
+          <button type="button" style={sectionToggleStyle} onClick={() => setOpenModule((p) => (p === 'instructions' ? null : 'instructions'))}>
+            {openModule === 'instructions' ? '-' : '+'}
+          </button>
+        </div>
       </div>
-      <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
+      {openModule === 'instructions' && (
+        <div className="settings-form">
+          <input value={settings.pageTitle} onChange={(e) => setSettings((p) => ({ ...p, pageTitle: e.target.value }))} placeholder="Instructions page title" />
+          <input value={settings.cardTitle} onChange={(e) => setSettings((p) => ({ ...p, cardTitle: e.target.value }))} placeholder="Instructions card heading" />
+          <input value={settings.startButtonLabel} onChange={(e) => setSettings((p) => ({ ...p, startButtonLabel: e.target.value }))} placeholder="Instructions start button label" />
+        </div>
+      )}
+
+      <div className="list table">
+        <div className="row" style={{ gridTemplateColumns: '1fr 48px' }}>
+          <span><strong>Submit Popup Text (Quiz Submit Dialog)</strong></span>
+          <button type="button" style={sectionToggleStyle} onClick={() => setOpenModule((p) => (p === 'submitPopup' ? null : 'submitPopup'))}>
+            {openModule === 'submitPopup' ? '-' : '+'}
+          </button>
+        </div>
+      </div>
+      {openModule === 'submitPopup' && (
+        <div className="settings-form">
+          <input value={settings.submitDialogBrand} onChange={(e) => setSettings((p) => ({ ...p, submitDialogBrand: e.target.value }))} placeholder="Popup brand text (e.g. Mockers)" />
+          <input value={settings.submitDialogTitle} onChange={(e) => setSettings((p) => ({ ...p, submitDialogTitle: e.target.value }))} placeholder="Popup main title (Are you sure...)" />
+          <input value={settings.submitDialogSubtitle} onChange={(e) => setSettings((p) => ({ ...p, submitDialogSubtitle: e.target.value }))} placeholder="Popup subtitle (After submitting...)" />
+        </div>
+      )}
+
+      <div className="list table">
+        <div className="row" style={{ gridTemplateColumns: '1fr 48px' }}>
+          <span><strong>Post Submit Home Card Text</strong></span>
+          <button type="button" style={sectionToggleStyle} onClick={() => setOpenModule((p) => (p === 'postSubmitCard' ? null : 'postSubmitCard'))}>
+            {openModule === 'postSubmitCard' ? '-' : '+'}
+          </button>
+        </div>
+      </div>
+      {openModule === 'postSubmitCard' && (
+        <>
+          <div className="settings-form">
+            <input value={settings.postSubmitCardTitle} onChange={(e) => setSettings((p) => ({ ...p, postSubmitCardTitle: e.target.value }))} placeholder="Pending title (e.g. Result Pending)" />
+            <input value={settings.postSubmitCardReadyTitle} onChange={(e) => setSettings((p) => ({ ...p, postSubmitCardReadyTitle: e.target.value }))} placeholder="Ready title (e.g. Result Ready)" />
+            <input value={settings.postSubmitCardDateLabel} onChange={(e) => setSettings((p) => ({ ...p, postSubmitCardDateLabel: e.target.value }))} placeholder="Date label (e.g. Result date/time)" />
+            <input value={settings.postSubmitCardPendingMessage} onChange={(e) => setSettings((p) => ({ ...p, postSubmitCardPendingMessage: e.target.value }))} placeholder="Pending message" />
+            <input value={settings.postSubmitCardReadyMessage} onChange={(e) => setSettings((p) => ({ ...p, postSubmitCardReadyMessage: e.target.value }))} placeholder="Ready message" />
+            <input value={settings.postSubmitCardButtonLabel} onChange={(e) => setSettings((p) => ({ ...p, postSubmitCardButtonLabel: e.target.value }))} placeholder="Result button label" />
+          </div>
+          <div className="inline-form"><input value={newPostSubmitLine} onChange={(e) => setNewPostSubmitLine(e.target.value)} placeholder="Add extra line in home result card" /><button type="button" onClick={addPostSubmitLine}>Add Line</button></div>
+          <div className="list table">
+            <div className="row row-head" style={{ gridTemplateColumns: '2fr 90px 90px' }}><span>Card Line Text</span><span>Update</span><span>Delete</span></div>
+            {visiblePostSubmitItems.map((item, idx) => { const absoluteIndex = (postSubmitSafePage - 1) * ITEMS_PER_PAGE + idx; return <div key={`${absoluteIndex}-${item}`} className="row" style={{ gridTemplateColumns: '2fr 90px 90px' }}><input value={item} onChange={(e) => setSettings((p) => ({ ...p, postSubmitCardLines: p.postSubmitCardLines.map((x, i) => (i === absoluteIndex ? e.target.value : x)) }))} /><button type="button" onClick={save}>Save</button><button type="button" className="danger" onClick={() => setSettings((p) => ({ ...p, postSubmitCardLines: p.postSubmitCardLines.filter((_, i) => i !== absoluteIndex) }))}>Delete</button></div>; })}
+          </div>
+          <div className="pagination-wrap"><span>Page {postSubmitSafePage} of {postSubmitTotalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={postSubmitSafePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(postSubmitTotalPages, p + 1))} disabled={postSubmitSafePage === postSubmitTotalPages}>Next</button></div></div>
+        </>
+      )}
+
+      <div className="list table">
+        <div className="row" style={{ gridTemplateColumns: '1fr 48px' }}>
+          <span><strong>Question Navigation Mode</strong></span>
+          <button type="button" style={sectionToggleStyle} onClick={() => setOpenModule((p) => (p === 'navigation' ? null : 'navigation'))}>
+            {openModule === 'navigation' ? '-' : '+'}
+          </button>
+        </div>
+      </div>
+      {openModule === 'navigation' && (
+        <div className="settings-form">
+          <select
+            value={settings.questionNavigationMode}
+            onChange={(e) => setSettings((p) => ({ ...p, questionNavigationMode: e.target.value as 'sequential' | 'free' }))}
+          >
+            <option value="sequential">One-by-one (lock next questions)</option>
+            <option value="free">Open all questions at once</option>
+          </select>
+        </div>
+      )}
+
+      <div className="list table">
+        <div className="row" style={{ gridTemplateColumns: '1fr 48px' }}>
+          <span><strong>Instruction Lines List</strong></span>
+          <button type="button" style={sectionToggleStyle} onClick={() => setOpenModule((p) => (p === 'instructionLines' ? null : 'instructionLines'))}>
+            {openModule === 'instructionLines' ? '-' : '+'}
+          </button>
+        </div>
+      </div>
+      {openModule === 'instructionLines' && (
+        <>
+          <div className="inline-form"><input value={newLine} onChange={(e) => setNewLine(e.target.value)} placeholder="Add instruction line" /><button type="button" onClick={addLine}>Add Line</button></div>
+          <div className="list table">
+            <div className="row row-head" style={{ gridTemplateColumns: '2fr 90px 90px' }}><span>Instruction Text</span><span>Update</span><span>Delete</span></div>
+            {visibleItems.map((item, idx) => { const absoluteIndex = (safePage - 1) * ITEMS_PER_PAGE + idx; return <div key={`${absoluteIndex}-${item}`} className="row" style={{ gridTemplateColumns: '2fr 90px 90px' }}><input value={item} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x, i) => (i === absoluteIndex ? e.target.value : x)) }))} /><button type="button" onClick={save}>Save</button><button type="button" className="danger" onClick={() => setSettings((p) => ({ ...p, items: p.items.filter((_, i) => i !== absoluteIndex) }))}>Delete</button></div>; })}
+          </div>
+          <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
+        </>
+      )}
       <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button><button type="button" onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button></div>
       {error && <p className="error">{error}</p>}
     </section>

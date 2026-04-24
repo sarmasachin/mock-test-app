@@ -24,8 +24,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -45,6 +47,7 @@ import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 import java.time.LocalDate
 
 @Composable
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 fun LeaderboardScreenNew(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
@@ -56,6 +59,8 @@ fun LeaderboardScreenNew(
     var selectedRange by remember { mutableStateOf(TimeRangeFilter.Weekly) }
     var selectedCity by remember { mutableStateOf("All cities") }
     var selectedState by remember { mutableStateOf("All states") }
+    var showFilterSheet by remember { mutableStateOf(false) }
+    val filterSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val allEntries = remember { demoLeaderboardEntries() }
     val tests = remember(allEntries) { listOf("All tests") + allEntries.map { it.testName }.distinct() }
@@ -77,6 +82,26 @@ fun LeaderboardScreenNew(
             .filter { selectedState == "All states" || it.state == selectedState }
             .sortedByDescending { it.score }
             .toList()
+    }
+
+    if (showFilterSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showFilterSheet = false },
+            sheetState = filterSheetState,
+            containerColor = p.surface,
+        ) {
+            AdvancedFiltersSheet(
+                tests = tests,
+                selectedTest = selectedTest,
+                onSelectTest = { selectedTest = it },
+                cities = cities,
+                selectedCity = selectedCity,
+                onSelectCity = { selectedCity = it },
+                states = states,
+                selectedState = selectedState,
+                onSelectState = { selectedState = it },
+            )
+        }
     }
 
     Scaffold(
@@ -112,19 +137,6 @@ fun LeaderboardScreenNew(
 
             Spacer(Modifier.height(12.dp))
             Text(
-                text = "Test",
-                color = p.textSecondary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.height(6.dp))
-            FilterChipRow(
-                options = tests,
-                selected = selectedTest,
-                onSelect = { selectedTest = it },
-            )
-            Spacer(Modifier.height(10.dp))
-            Text(
                 text = "Time range",
                 color = p.textSecondary,
                 fontSize = 12.sp,
@@ -148,31 +160,22 @@ fun LeaderboardScreenNew(
                     modifier = Modifier.weight(1f),
                 )
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(6.dp))
+            LeaderboardScopeChip(
+                label = "More filters",
+                selected = selectedTest != "All tests" || selectedCity != "All cities" || selectedState != "All states",
+                onClick = { showFilterSheet = true },
+            )
+
+            Spacer(Modifier.height(8.dp))
             Text(
-                text = "City",
+                text = activeFilterSummary(
+                    selectedTest = selectedTest,
+                    selectedCity = selectedCity,
+                    selectedState = selectedState,
+                ),
                 color = p.textSecondary,
                 fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.height(6.dp))
-            FilterChipRow(
-                options = cities,
-                selected = selectedCity,
-                onSelect = { selectedCity = it },
-            )
-            Spacer(Modifier.height(10.dp))
-            Text(
-                text = "State",
-                color = p.textSecondary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.height(6.dp))
-            FilterChipRow(
-                options = states,
-                selected = selectedState,
-                onSelect = { selectedState = it },
             )
             Spacer(Modifier.height(10.dp))
             Text(
@@ -276,6 +279,90 @@ private fun demoLeaderboardEntries(): List<LeaderboardUser> {
             state = states[idx % states.size],
             attemptDate = today.minusDays((idx % 35).toLong()),
         )
+    }
+}
+
+private fun activeFilterSummary(
+    selectedTest: String,
+    selectedCity: String,
+    selectedState: String,
+): String {
+    val activeFilters = buildList {
+        if (selectedTest != "All tests") add(selectedTest)
+        if (selectedCity != "All cities") add(selectedCity)
+        if (selectedState != "All states") add(selectedState)
+    }
+    return if (activeFilters.isEmpty()) {
+        "Filters: All tests, cities and states"
+    } else {
+        "Filters: ${activeFilters.joinToString(" • ")}"
+    }
+}
+
+@Composable
+private fun AdvancedFiltersSheet(
+    tests: List<String>,
+    selectedTest: String,
+    onSelectTest: (String) -> Unit,
+    cities: List<String>,
+    selectedCity: String,
+    onSelectCity: (String) -> Unit,
+    states: List<String>,
+    selectedState: String,
+    onSelectState: (String) -> Unit,
+) {
+    val p = mockTestPalette()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+    ) {
+        Text(
+            text = "More filters",
+            color = p.textPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.ExtraBold,
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = "Test",
+            color = p.textSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(6.dp))
+        FilterChipRow(
+            options = tests,
+            selected = selectedTest,
+            onSelect = onSelectTest,
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "City",
+            color = p.textSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(6.dp))
+        FilterChipRow(
+            options = cities,
+            selected = selectedCity,
+            onSelect = onSelectCity,
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "State",
+            color = p.textSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(6.dp))
+        FilterChipRow(
+            options = states,
+            selected = selectedState,
+            onSelect = onSelectState,
+        )
+        Spacer(Modifier.height(18.dp))
     }
 }
 

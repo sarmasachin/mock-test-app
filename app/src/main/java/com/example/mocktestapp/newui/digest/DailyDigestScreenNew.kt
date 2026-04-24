@@ -42,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -56,6 +57,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mocktestapp.data.AppPreferencesRepository
+import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.data.TestHistoryRepository
 import com.example.mocktestapp.newui.components.AppSnackbarHostNew
 import com.example.mocktestapp.newui.components.rememberAppSnackbarHostStateNew
@@ -172,6 +174,10 @@ fun DailyDigestScreenNew(
             Log.e("DailyDigest", "Streak update failed", e)
         }
     }
+    var remoteDigest by remember { mutableStateOf<ContentRepository.DailyDigestRemote?>(null) }
+    LaunchedEffect(Unit) {
+        remoteDigest = ContentRepository.loadDailyDigestItem()
+    }
 
     val today = LocalDate.now()
     val dayIndex = today.dayOfYear
@@ -180,8 +186,15 @@ fun DailyDigestScreenNew(
     }
     val qs = (cfg.questions ?: DailyDigestConfig.DEFAULT.questions).orEmpty()
     val facts = (cfg.facts ?: DailyDigestConfig.DEFAULT.facts).orEmpty()
-    val qItem = qs[dayIndex % qs.size.coerceAtLeast(1)]
-    val fact = facts[dayIndex % facts.size.coerceAtLeast(1)]
+    val fallbackQuestion = qs[dayIndex % qs.size.coerceAtLeast(1)]
+    val qItem = remoteDigest?.let {
+        DigestQuestionDto(
+            prompt = it.questionPrompt,
+            options = (it.options + List(4) { "" }).take(4),
+            correctIndex = it.correctIndex.coerceIn(0, 3),
+        )
+    } ?: fallbackQuestion
+    val fact = remoteDigest?.factText ?: facts[dayIndex % facts.size.coerceAtLeast(1)]
 
     val digestPrefs = remember(context) {
         context.getSharedPreferences("daily_digest_lock", Context.MODE_PRIVATE)

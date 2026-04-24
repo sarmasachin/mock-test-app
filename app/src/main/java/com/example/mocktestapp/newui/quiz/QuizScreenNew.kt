@@ -24,7 +24,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.activity.compose.BackHandler
@@ -33,6 +37,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
@@ -55,6 +60,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.delay
@@ -72,6 +78,23 @@ fun QuizScreenNew(
     val totalQuestions = 10
     var current by remember { mutableIntStateOf(0) }
     val answers = remember { mutableStateMapOf<Int, Int>() }
+    var questionNavigationMode by remember { mutableStateOf("sequential") }
+    var submitDialogBrand by remember { mutableStateOf("Mockers") }
+    var submitDialogTitle by remember { mutableStateOf("Are you sure want to submit test") }
+    var submitDialogSubtitle by remember { mutableStateOf("After submitting test you won't be able to re-attempt") }
+
+    LaunchedEffect(Unit) {
+        val instruction = ContentRepository.loadInstructionContent()
+        submitDialogBrand = instruction?.submitDialogBrand?.ifBlank { submitDialogBrand } ?: submitDialogBrand
+        submitDialogTitle = instruction?.submitDialogTitle?.ifBlank { submitDialogTitle } ?: submitDialogTitle
+        submitDialogSubtitle = instruction?.submitDialogSubtitle?.ifBlank { submitDialogSubtitle } ?: submitDialogSubtitle
+        val mode = instruction?.questionNavigationMode
+            ?.trim()
+            ?.lowercase()
+            ?.takeIf { it == "free" || it == "sequential" }
+            ?: "sequential"
+        questionNavigationMode = mode
+    }
 
     var remainingSeconds by remember { mutableIntStateOf(12 * 60) }
     LaunchedEffect(Unit) {
@@ -87,8 +110,12 @@ fun QuizScreenNew(
 
     val answeredCount = answers.size
     val unansweredCount = totalQuestions - answeredCount
-    val unlockedUntil = remember(answers.size, totalQuestions) {
-        (0 until totalQuestions).firstOrNull { idx -> answers[idx] == null } ?: (totalQuestions - 1)
+    val unlockedUntil = remember(answers.size, totalQuestions, questionNavigationMode) {
+        if (questionNavigationMode == "free") {
+            totalQuestions - 1
+        } else {
+            (0 until totalQuestions).firstOrNull { idx -> answers[idx] == null } ?: (totalQuestions - 1)
+        }
     }
 
     var overviewOpen by remember { mutableStateOf(false) }
@@ -238,33 +265,173 @@ fun QuizScreenNew(
     }
 
     if (showSubmitConfirm) {
-        AlertDialog(
-            onDismissRequest = { showSubmitConfirm = false },
-            title = { Text("Are you sure to submit exam?") },
-            text = { Text("Once submitted, you cannot change your answers.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showSubmitConfirm = false
-                        val correct = answers.count { (q, ans) -> ans == (q % 4) }
-                        val answered = answers.size
-                        val wrong = (answered - correct).coerceAtLeast(0)
-                        onSubmit(answered, correct, wrong)
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = p.primaryButton),
-                ) {
-                    Text("Submit", color = p.onPrimaryButton)
-                }
+        SubmitTestDialog(
+            brand = submitDialogBrand,
+            title = submitDialogTitle,
+            subtitle = submitDialogSubtitle,
+            remainingSeconds = remainingSeconds,
+            attemptedCount = answeredCount,
+            unattemptedCount = unansweredCount,
+            markedForReviewCount = 0,
+            onClose = { showSubmitConfirm = false },
+            onCancel = { showSubmitConfirm = false },
+            onSubmit = {
+                showSubmitConfirm = false
+                val correct = answers.count { (q, ans) -> ans == (q % 4) }
+                val answered = answers.size
+                val wrong = (answered - correct).coerceAtLeast(0)
+                onSubmit(answered, correct, wrong)
             },
-            dismissButton = {
-                Button(
-                    onClick = { showSubmitConfirm = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = p.surface),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.2f)),
+        )
+    }
+}
+
+@Composable
+private fun SubmitTestDialog(
+    brand: String,
+    title: String,
+    subtitle: String,
+    remainingSeconds: Int,
+    attemptedCount: Int,
+    unattemptedCount: Int,
+    markedForReviewCount: Int,
+    onClose: () -> Unit,
+    onCancel: () -> Unit,
+    onSubmit: () -> Unit,
+) {
+    Dialog(onDismissRequest = onClose) {
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF1451D8))
+                        .padding(horizontal = 18.dp, vertical = 16.dp),
                 ) {
-                    Text("Cancel", color = p.textPrimary)
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = brand,
+                            color = Color.White,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 28.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = title,
+                            color = Color.White,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 20.sp,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = subtitle,
+                            color = Color.White.copy(alpha = 0.75f),
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                        )
+                    }
+                    IconButton(
+                        onClick = onClose,
+                        modifier = Modifier.align(Alignment.TopEnd),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = "Close",
+                            tint = Color.White,
+                        )
+                    }
                 }
-            },
+
+                Column(
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    SubmitStatRow(
+                        icon = Icons.Outlined.Timer,
+                        iconTint = Color(0xFFFA4B4B),
+                        label = "Time Left",
+                        value = "${remainingSeconds / 60} min, ${remainingSeconds % 60} sec",
+                    )
+                    SubmitStatRow(
+                        icon = Icons.Outlined.CheckCircle,
+                        iconTint = Color(0xFF20C86B),
+                        label = "Attempted",
+                        value = attemptedCount.toString(),
+                    )
+                    SubmitStatRow(
+                        icon = Icons.Outlined.Close,
+                        iconTint = Color(0xFFF3BC2F),
+                        label = "Unattempted",
+                        value = unattemptedCount.toString(),
+                    )
+                    SubmitStatRow(
+                        icon = Icons.Outlined.Flag,
+                        iconTint = Color(0xFF4AB9E9),
+                        label = "Marked for review",
+                        value = markedForReviewCount.toString(),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = onCancel,
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8589A8)),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text("Cancel", color = Color.White, fontSize = 16.sp)
+                        }
+                        Button(
+                            onClick = onSubmit,
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF20C86B)),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text("Submit", color = Color.White, fontSize = 16.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubmitStatRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconTint: Color,
+    label: String,
+    value: String,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = iconTint,
+            modifier = Modifier.size(28.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = label,
+            color = Color(0xFF1A2138),
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = value,
+            color = Color(0xFF6C738C),
+            fontWeight = FontWeight.Medium,
+            fontSize = 15.sp,
         )
     }
 }

@@ -21,4 +21,10 @@ interface PublicApiService {
         @Query("subcategory") subcategory: String? = null,
         @Query("limit") limit: Int = 40,
     ): TestsListResponse
+
+    @GET("digest/today")
+    suspend fun getDailyDigestToday(): DailyDigestTodayResponse
+
+    @GET("home/content")
+    suspend fun getHomeContent(): HomeContentResponse
 }

@@ -2,6 +2,7 @@ package com.example.mocktestapp.newui.instructions
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,7 +26,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mocktestapp.data.AppPreferencesRepository
+import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 
@@ -47,17 +52,39 @@ fun InstructionsScreenNew(
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
+    var pageTitle by remember { mutableStateOf("Instructions") }
+    var cardTitle by remember { mutableStateOf("Please read carefully") }
+    var startButtonLabel by remember { mutableStateOf("Start Test") }
     LaunchedEffect(testName) {
         AppPreferencesRepository.rememberTestOpened(testName)
     }
-
-    val info = remember(testName) {
-        listOf(
-            "Total questions: 10",
-            "Duration: 12 minutes",
-            "Each question has one correct answer",
-            "You can review before submitting",
+    var info by remember(testName) {
+        mutableStateOf(
+            listOf(
+                "Total questions: 10",
+                "Duration: 12 minutes",
+                "Each question has one correct answer",
+                "You can review before submitting",
+            ),
         )
+    }
+    var testSnapshot by remember(testName) { mutableStateOf<com.example.mocktestapp.newui.tests.TestCardNew?>(null) }
+    var showMoreDetails by remember(testName) { mutableStateOf(false) }
+    var isSnapshotLoading by remember(testName) { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        val remote = ContentRepository.loadInstructionContent() ?: return@LaunchedEffect
+        pageTitle = remote.pageTitle?.ifBlank { pageTitle } ?: pageTitle
+        cardTitle = remote.cardTitle?.ifBlank { cardTitle } ?: cardTitle
+        startButtonLabel = remote.startButtonLabel?.ifBlank { startButtonLabel } ?: startButtonLabel
+        if (remote.items.isNotEmpty()) {
+            info = remote.items
+        }
+    }
+    LaunchedEffect(testName) {
+        isSnapshotLoading = true
+        testSnapshot = ContentRepository.loadTestByTitle(testName)
+        isSnapshotLoading = false
     }
 
     Scaffold(
@@ -80,7 +107,7 @@ fun InstructionsScreenNew(
                         contentColor = Color.White,
                     ),
                 ) {
-                    Text(text = "Start Test", fontWeight = FontWeight.Bold)
+                    Text(text = startButtonLabel, fontWeight = FontWeight.Bold)
                 }
             }
         },
@@ -104,7 +131,7 @@ fun InstructionsScreenNew(
                 }
                 Spacer(Modifier.size(6.dp))
                 Text(
-                    text = "Instructions",
+                    text = pageTitle,
                     color = p.textPrimary,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.ExtraBold,
@@ -122,6 +149,68 @@ fun InstructionsScreenNew(
 
             Spacer(Modifier.height(14.dp))
 
+            if (isSnapshotLoading) {
+                Text(
+                    text = "Loading latest test details...",
+                    color = p.textSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+
+            testSnapshot?.let { snapshot ->
+                val detailShape = RoundedCornerShape(16.dp)
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(detailShape)
+                        .border(1.dp, p.border.copy(alpha = 0.16f), detailShape),
+                    shape = detailShape,
+                    colors = CardDefaults.cardColors(containerColor = p.surfaceElevated),
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                        val topLines = listOfNotNull(
+                            snapshot.examDate?.let { "Exam Date: $it" },
+                            snapshot.durationLabel?.let { "Duration: $it" },
+                            snapshot.questionsMarks?.let { "Questions/Marks: $it" },
+                            snapshot.enrolledLabel?.let { "Enrolled: $it" },
+                            snapshot.remainingSeatsLabel?.let { "Seats Left: $it" },
+                        )
+                        topLines.forEach { line ->
+                            Text(text = line, color = p.textSecondary, fontSize = 12.sp)
+                        }
+                        val moreLines = listOfNotNull(
+                            snapshot.attemptsAllowed?.let { "Attempts: $it" },
+                            snapshot.languageMode?.let { "Language: $it" },
+                            snapshot.examMode?.let { "Mode: $it" },
+                            snapshot.negativeMarkingText?.let { "Negative: $it" },
+                            snapshot.testTypeLabel?.let { "Type: $it" },
+                            snapshot.validUntil?.let { "Valid Till: $it" },
+                        )
+                        if (showMoreDetails) {
+                            moreLines.forEach { line ->
+                                Text(text = line, color = p.textSecondary, fontSize = 12.sp)
+                            }
+                        }
+                        if (moreLines.isNotEmpty()) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = if (showMoreDetails) "Less details" else "View details",
+                                color = p.accent,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { showMoreDetails = !showMoreDetails }
+                                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+
             val shape = RoundedCornerShape(18.dp)
             Card(
                 modifier = Modifier
@@ -133,17 +222,18 @@ fun InstructionsScreenNew(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Please read carefully",
+                        text = cardTitle,
                         color = p.textSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
                     )
                     Spacer(Modifier.height(10.dp))
-                    info.forEach { line ->
+                    info.forEachIndexed { index, line ->
                         Text(
-                            text = "• $line",
+                            text = "${index + 1}. $line",
                             color = p.textPrimary,
                             fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
                         )
                         Spacer(Modifier.height(8.dp))
                     }

@@ -30,6 +30,7 @@ internal object RoutesNew {
     const val CATEGORY = "category"
     const val SUBCATEGORY = "subcategory"
     const val TESTS = "tests"
+    const val START_TEST_PREVIEW = "start_test_preview"
     const val INSTRUCTIONS = "instructions"
     const val QUIZ = "quiz"
     const val RESULT = "result"

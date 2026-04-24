@@ -24,8 +24,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,8 +36,39 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mocktestapp.data.AppPreferencesRepository
+import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+
+private data class DynamicProfileMenuItem(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val path: String,
+    val enabled: Boolean,
+)
+
+private fun defaultDynamicProfileMenuItems() = listOf(
+    DynamicProfileMenuItem("edit-username", "Username", "{value}", "/edit-username", true),
+    DynamicProfileMenuItem("edit-email", "Email", "{value}", "/edit-email", true),
+    DynamicProfileMenuItem("edit-mobile", "Mobile number", "{value}", "/edit-mobile", true),
+    DynamicProfileMenuItem("edit-gender", "Gender", "{value}", "/edit-gender", true),
+    DynamicProfileMenuItem("edit-password", "Password", "Change password (current + new + confirm)", "/edit-password", true),
+    DynamicProfileMenuItem("verify-email", "Email verification", "Not verified", "/verify-email", true),
+    DynamicProfileMenuItem("verify-phone", "Phone verification", "Not verified", "/verify-phone", true),
+    DynamicProfileMenuItem("notifications", "Notifications", "Notification settings (on/off)", "/notifications", true),
+    DynamicProfileMenuItem("help-support", "Help & support", "Need help? Open support page", "/help-support", true),
+    DynamicProfileMenuItem("feedback", "Feedback", "Share your app feedback", "/feedback", true),
+    DynamicProfileMenuItem("report-issue", "Report issue", "Report a bug or problem", "/report-issue", true),
+    DynamicProfileMenuItem("achievement", "Achievements", "Streaks, badges, full marks", "/achievement", true),
+    DynamicProfileMenuItem("privacy-policy", "Privacy policy", "How data is handled", "/privacy-policy", true),
+    DynamicProfileMenuItem("terms-of-use", "Terms of use", "Conditions of use", "/terms-of-use", true),
+    DynamicProfileMenuItem("export-data", "Export my data", "JSON snapshot via share sheet", "/export-data", true),
+    DynamicProfileMenuItem("logout", "Log out", "Sign out on this device (keeps local practice history)", "/logout", true),
+    DynamicProfileMenuItem("delete-account", "Delete account", "Removes your account on the server and clears this device", "/delete-account", true),
+)
 
 @Composable
 fun ProfileScreenNew(
@@ -68,6 +101,22 @@ fun ProfileScreenNew(
     val profile by AppPreferencesRepository.editableProfile.collectAsState(
         initial = AppPreferencesRepository.EditableProfileState("", "", "", ""),
     )
+    var menuItems by remember { mutableStateOf(defaultDynamicProfileMenuItems()) }
+
+    LaunchedEffect(Unit) {
+        val remote = ContentRepository.loadProfileMenuItems()
+        if (remote.isNotEmpty()) {
+            menuItems = remote.map {
+                DynamicProfileMenuItem(
+                    id = it.id,
+                    title = it.title,
+                    subtitle = it.subtitle,
+                    path = it.path,
+                    enabled = it.enabled,
+                )
+            }
+        }
+    }
 
     Column(
         modifier = modifier
@@ -103,6 +152,7 @@ fun ProfileScreenNew(
         Spacer(Modifier.height(12.dp))
 
         val shape = RoundedCornerShape(18.dp)
+        val visibleItems = menuItems.filter { it.enabled }
 
         SettingsCard(
             shape = shape,
@@ -113,112 +163,44 @@ fun ProfileScreenNew(
                     .fillMaxWidth()
                     .padding(horizontal = 4.dp, vertical = 8.dp),
             ) {
-                Text(
-                    text = "Account details",
-                    color = p.textPrimary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                )
-                ProfileNavRow(
-                    title = "Username",
-                    subtitle = profile.displayName.ifBlank { "Tap to set" },
-                    onClick = onEditUsername,
-                )
-                DividerLine()
-                ProfileNavRow(
-                    title = "Email",
-                    subtitle = profile.email.ifBlank { "Tap to set" },
-                    onClick = onEditEmail,
-                )
-                DividerLine()
-                ProfileNavRow(
-                    title = "Mobile number",
-                    subtitle = profile.mobile.ifBlank { "Tap to set" },
-                    onClick = onEditMobile,
-                )
-                DividerLine()
-                ProfileNavRow(
-                    title = "Gender",
-                    subtitle = profile.gender.ifBlank { "Tap to set" },
-                    onClick = onEditGender,
-                )
-                DividerLine()
-                ProfileNavRow(
-                    title = "Password",
-                    subtitle = "Change password (current + new + confirm)",
-                    onClick = onEditPassword,
-                )
-            }
-        }
-
-        Spacer(Modifier.height(14.dp))
-
-        SettingsCard(
-            shape = shape,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 8.dp),
-            ) {
-                ProfileNavRow(
-                    title = "Email verification",
-                    subtitle = if (emailOk) "Verified (demo)" else "Not verified — tap to simulate send",
-                    onClick = onSendEmailVerification,
-                )
-                DividerLine()
-                ProfileNavRow(
-                    title = "Phone verification",
-                    subtitle = if (phoneOk) "Verified (demo)" else "Not verified — tap to simulate send",
-                    onClick = onSendPhoneVerification,
-                )
-                DividerLine()
-                ProfileNavRow(
-                    title = "Notifications",
-                    subtitle = "Notification settings (on/off)",
-                    onClick = onOpenNotifications,
-                )
-                DividerLine()
-                ProfileNavRow(
-                    title = "Help & support",
-                    subtitle = "Need help? Open support page",
-                    onClick = onOpenHelpSupport,
-                )
-                DividerLine()
-                ProfileNavRow(
-                    title = "Feedback",
-                    subtitle = "Share your app feedback",
-                    onClick = onOpenFeedback,
-                )
-                DividerLine()
-                ProfileNavRow(
-                    title = "Report issue",
-                    subtitle = "Report a bug or problem",
-                    onClick = onOpenReportIssue,
-                )
-                DividerLine()
-                ProfileNavRow(title = "Achievements", subtitle = "Streaks, badges, full marks", onClick = onOpenAchievements)
-                DividerLine()
-                ProfileNavRow(title = "Privacy policy", subtitle = "How data is handled", onClick = onOpenPrivacy)
-                DividerLine()
-                ProfileNavRow(title = "Terms of use", subtitle = "Conditions of use", onClick = onOpenTerms)
-                DividerLine()
-                ProfileNavRow(title = "Export my data", subtitle = "JSON snapshot via share sheet", onClick = onExportData)
-                DividerLine()
-                ProfileNavRow(
-                    title = "Log out",
-                    subtitle = "Sign out on this device (keeps local practice history)",
-                    onClick = onLogout,
-                )
-                DividerLine()
-                ProfileNavRow(
-                    title = "Delete account",
-                    subtitle = "Removes your account on the server and clears this device",
-                    onClick = onDeleteAccount,
-                    danger = true,
-                )
+                visibleItems.forEachIndexed { index, item ->
+                    val resolvedSubtitle = when (item.path) {
+                        "/edit-username" -> item.subtitle.replace("{value}", profile.displayName.ifBlank { "Tap to set" })
+                        "/edit-email" -> item.subtitle.replace("{value}", profile.email.ifBlank { "Tap to set" })
+                        "/edit-mobile" -> item.subtitle.replace("{value}", profile.mobile.ifBlank { "Tap to set" })
+                        "/edit-gender" -> item.subtitle.replace("{value}", profile.gender.ifBlank { "Tap to set" })
+                        "/verify-email" -> if (emailOk) "Verified (demo)" else if (item.subtitle.isBlank()) "Not verified — tap to simulate send" else item.subtitle
+                        "/verify-phone" -> if (phoneOk) "Verified (demo)" else if (item.subtitle.isBlank()) "Not verified — tap to simulate send" else item.subtitle
+                        else -> item.subtitle
+                    }.ifBlank { "Tap to open" }
+                    val onClick = when (item.path) {
+                        "/edit-username" -> onEditUsername
+                        "/edit-email" -> onEditEmail
+                        "/edit-mobile" -> onEditMobile
+                        "/edit-gender" -> onEditGender
+                        "/edit-password" -> onEditPassword
+                        "/verify-email" -> onSendEmailVerification
+                        "/verify-phone" -> onSendPhoneVerification
+                        "/notifications" -> onOpenNotifications
+                        "/help-support" -> onOpenHelpSupport
+                        "/feedback" -> onOpenFeedback
+                        "/report-issue" -> onOpenReportIssue
+                        "/achievement" -> onOpenAchievements
+                        "/privacy-policy" -> onOpenPrivacy
+                        "/terms-of-use" -> onOpenTerms
+                        "/export-data" -> onExportData
+                        "/logout" -> onLogout
+                        "/delete-account" -> onDeleteAccount
+                        else -> ({})
+                    }
+                    ProfileNavRow(
+                        title = item.title,
+                        subtitle = resolvedSubtitle,
+                        onClick = onClick,
+                        danger = item.path == "/delete-account",
+                    )
+                    if (index < visibleItems.lastIndex) DividerLine()
+                }
             }
         }
         Spacer(Modifier.height(24.dp))
