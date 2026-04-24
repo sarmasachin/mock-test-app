@@ -61,6 +61,22 @@ router.post('/register', async (req, res) => {
   const pw = String(password || '');
   const st = String(state || '').trim();
   const dist = String(district || '').trim();
+  try {
+    const registrationSetting = await pool.query(
+      `SELECT setting_value FROM app_settings WHERE setting_key = 'registrationOpen' LIMIT 1`,
+    );
+    if (
+      registrationSetting.rows[0] &&
+      String(registrationSetting.rows[0].setting_value || 'true').toLowerCase() === 'false'
+    ) {
+      return res.status(403).json({ error: 'New registration is temporarily disabled' });
+    }
+  } catch (e) {
+    if (e.code !== '42P01') {
+      console.error(e);
+      return res.status(500).json({ error: 'Registration is temporarily unavailable' });
+    }
+  }
 
   if (!name) return res.status(400).json({ error: 'displayName required' });
   if (!em || !em.includes('@')) return res.status(400).json({ error: 'Valid email required' });
@@ -136,6 +152,7 @@ router.post('/login', async (req, res) => {
     const { rows } = await pool.query(q, params);
     const row = rows[0];
     if (!row) return res.status(401).json({ error: 'Invalid credentials' });
+    if (row.is_banned) return res.status(403).json({ error: row.ban_reason || 'Account is blocked by admin' });
     const ok = await bcrypt.compare(pw, row.password_hash);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
     const tokens = await issueTokens(row.id);
@@ -222,7 +239,9 @@ router.post('/google', async (req, res) => {
       }
       row = userRow;
     }
-
+    if (row.is_banned) {
+      return res.status(403).json({ error: row.ban_reason || 'Account is blocked by admin' });
+    }
     const tokens = await issueTokens(row.id);
     return res.json({
       user: mapUserRow(row),
@@ -414,3 +433,7 @@ router.post('/password-reset/complete', async (req, res) => {
 });
 
 module.exports = router;
+
+
+
+

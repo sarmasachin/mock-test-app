@@ -43,6 +43,7 @@ const SETTINGS_KEYS = [
   'submitApplicationContent',
   'instructionContent',
   'examCategories',
+  'examCategoryIconOptions',
   'notificationScheduling',
   'publishScheduling',
   'feedbackInbox',
@@ -100,6 +101,7 @@ function normalizeHomeContent(value) {
       .map((item) => ({
         title: String((item || {}).title || '').trim().slice(0, 60),
         actionKey: String((item || {}).actionKey || '').trim().slice(0, 50),
+        iconKey: String((item || {}).iconKey || '').trim().slice(0, 40),
       }))
       .filter((x) => x.title && x.actionKey)
       .slice(0, 20);
@@ -250,6 +252,22 @@ function normalizeInstructionContent(value) {
   const pageTitle = String(safe.pageTitle || 'Instructions').trim().slice(0, 80);
   const cardTitle = String(safe.cardTitle || 'Please read carefully').trim().slice(0, 120);
   const startButtonLabel = String(safe.startButtonLabel || 'Start Test').trim().slice(0, 80);
+  const submitDialogBrand = String(safe.submitDialogBrand || 'Mockers').trim().slice(0, 60);
+  const submitDialogTitle = String(safe.submitDialogTitle || 'Are you sure want to submit test').trim().slice(0, 120);
+  const submitDialogSubtitle = String(safe.submitDialogSubtitle || "After submitting test you won't be able to re-attempt").trim().slice(0, 180);
+  const postSubmitCardTitle = String(safe.postSubmitCardTitle || 'Result Pending').trim().slice(0, 80);
+  const postSubmitCardReadyTitle = String(safe.postSubmitCardReadyTitle || 'Result Ready').trim().slice(0, 80);
+  const postSubmitCardDateLabel = String(safe.postSubmitCardDateLabel || 'Result date/time').trim().slice(0, 120);
+  const postSubmitCardPendingMessage = String(safe.postSubmitCardPendingMessage || 'Result will be available in').trim().slice(0, 180);
+  const postSubmitCardReadyMessage = String(safe.postSubmitCardReadyMessage || 'Result is now available.').trim().slice(0, 180);
+  const postSubmitCardButtonLabel = String(safe.postSubmitCardButtonLabel || 'Show Result').trim().slice(0, 80);
+  const postSubmitCardRawLines = Array.isArray(safe.postSubmitCardLines) ? safe.postSubmitCardLines : [];
+  const postSubmitCardLines = postSubmitCardRawLines
+    .map((x) => String(x || '').trim().slice(0, 180))
+    .filter(Boolean)
+    .slice(0, 20);
+  const navigationModeRaw = String(safe.questionNavigationMode || 'sequential').trim().toLowerCase();
+  const questionNavigationMode = navigationModeRaw === 'free' ? 'free' : 'sequential';
   const rawItems = Array.isArray(safe.items) ? safe.items : [];
   const items = rawItems
     .map((x) => String(x || '').trim().slice(0, 180))
@@ -260,6 +278,17 @@ function normalizeInstructionContent(value) {
       pageTitle,
       cardTitle,
       startButtonLabel,
+      submitDialogBrand,
+      submitDialogTitle,
+      submitDialogSubtitle,
+      postSubmitCardTitle,
+      postSubmitCardReadyTitle,
+      postSubmitCardDateLabel,
+      postSubmitCardPendingMessage,
+      postSubmitCardReadyMessage,
+      postSubmitCardButtonLabel,
+      postSubmitCardLines,
+      questionNavigationMode,
       items,
     },
   };
@@ -276,10 +305,27 @@ function normalizeExamCategories(value) {
         level1: String(x.level1 || '').trim().slice(0, 80),
         level2: String(x.level2 || '').trim().slice(0, 80),
         level3: String(x.level3 || '').trim().slice(0, 80),
+        iconKey: String(x.iconKey || '').trim().slice(0, 40),
         enabled: x.enabled !== false,
       };
     })
     .filter((x) => x.level1 && x.level2 && x.level3);
+  return { value: { items } };
+}
+
+function normalizeExamCategoryIconOptions(value) {
+  const safe = value || {};
+  const rawItems = Array.isArray(safe.items) ? safe.items : [];
+  const items = rawItems
+    .map((item, index) => {
+      const x = item || {};
+      return {
+        id: String(x.id || `exam-icon-${index + 1}`).trim().slice(0, 60),
+        value: String(x.value || '').trim().slice(0, 40).toLowerCase(),
+        label: String(x.label || '').trim().slice(0, 80),
+      };
+    })
+    .filter((x) => x.value && x.label);
   return { value: { items } };
 }
 
@@ -579,6 +625,14 @@ async function getSettingsMap() {
         return {};
       }
     })(),
+    examCategoryIconOptions: (() => {
+      try {
+        const parsed = JSON.parse(String(map.examCategoryIconOptions || '{}'));
+        return parsed && typeof parsed === 'object' ? parsed : { items: [] };
+      } catch (_e) {
+        return { items: [] };
+      }
+    })(),
     notificationScheduling: (() => {
       try {
         const parsed = JSON.parse(String(map.notificationScheduling || '{}'));
@@ -764,6 +818,8 @@ router.patch('/settings', async (req, res) => {
     body.instructionContent === undefined ? null : normalizeInstructionContent(body.instructionContent);
   const normalizedExamCategories =
     body.examCategories === undefined ? null : normalizeExamCategories(body.examCategories);
+  const normalizedExamCategoryIconOptions =
+    body.examCategoryIconOptions === undefined ? null : normalizeExamCategoryIconOptions(body.examCategoryIconOptions);
   const normalizedNotificationScheduling =
     body.notificationScheduling === undefined ? null : normalizeNotificationScheduling(body.notificationScheduling);
   const normalizedFeedbackInbox =
@@ -789,6 +845,7 @@ router.patch('/settings', async (req, res) => {
     normalizedSubmitApplicationContent === null &&
     normalizedInstructionContent === null &&
     normalizedExamCategories === null &&
+    normalizedExamCategoryIconOptions === null &&
     normalizedNotificationScheduling === null &&
     normalizedFeedbackInbox === null &&
     normalizedReportIssueInbox === null &&
@@ -893,6 +950,15 @@ router.patch('/settings', async (req, res) => {
           [JSON.stringify(normalizedExamCategories.value), req.userId],
         );
       }
+      if (normalizedExamCategoryIconOptions !== null) {
+        await client.query(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+           VALUES ('examCategoryIconOptions', $1, $2::uuid)
+           ON CONFLICT (setting_key)
+           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [JSON.stringify(normalizedExamCategoryIconOptions.value), req.userId],
+        );
+      }
       if (normalizedNotificationScheduling !== null) {
         await client.query(
           `INSERT INTO app_settings (setting_key, setting_value, updated_by)
@@ -975,6 +1041,7 @@ router.patch('/settings', async (req, res) => {
       submitApplicationContentUpdated: normalizedSubmitApplicationContent !== null,
       instructionContentUpdated: normalizedInstructionContent !== null,
       examCategoriesUpdated: normalizedExamCategories !== null,
+      examCategoryIconOptionsUpdated: normalizedExamCategoryIconOptions !== null,
       notificationSchedulingUpdated: normalizedNotificationScheduling !== null,
       feedbackInboxUpdated: normalizedFeedbackInbox !== null,
       reportIssueInboxUpdated: normalizedReportIssueInbox !== null,
@@ -1013,6 +1080,9 @@ router.get('/tests', async (_req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
+              exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
+              language_mode, exam_mode, negative_marking_text, test_type_label, valid_until,
+              dynamic_date_enabled, date_cycle_days,
               COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
        FROM tests
        ORDER BY created_at DESC`,
@@ -1029,26 +1099,65 @@ router.post('/tests', async (req, res) => {
   const title = String(body.title || '').trim();
   const slug = String(body.slug || '').trim();
   const testKind = String(body.testKind || '').trim().toLowerCase();
+  const durationMinutes = Number(body.durationMinutes || 12);
+  const questionCount = Number(body.questionCount || 10);
+  const totalMarks = Math.max(0, Number(body.totalMarks || 0));
+  const slotLabel = String(body.slotLabel || '').trim().slice(0, 80);
+  const capacityTotal = Math.max(0, Number(body.capacityTotal || 0));
+  const enrolledCount = Math.max(0, Number(body.enrolledCount || 0));
+  const attemptsAllowed = Math.max(1, Number(body.attemptsAllowed || 1));
+  const languageMode = String(body.languageMode || 'Bilingual').trim().slice(0, 40);
+  const examMode = String(body.examMode || 'Practice').trim().slice(0, 40);
+  const negativeMarkingText = String(body.negativeMarkingText || 'No').trim().slice(0, 40);
+  const testTypeLabel = String(body.testTypeLabel || 'Full Mock').trim().slice(0, 40);
+  const examDate = String(body.examDate || '').trim();
+  const validUntil = String(body.validUntil || '').trim();
+  const dynamicDateEnabled = body.dynamicDateEnabled === true;
+  const dateCycleDays = Math.max(0, Number(body.dateCycleDays || 0));
   if (!title || !slug || !['mock', 'quiz'].includes(testKind)) {
     return res.status(400).json({ error: 'title, slug, and valid testKind are required' });
+  }
+  if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+    return res.status(400).json({ error: 'durationMinutes must be positive' });
+  }
+  if (!Number.isFinite(questionCount) || questionCount <= 0) {
+    return res.status(400).json({ error: 'questionCount must be positive' });
   }
   try {
     const { rows } = await pool.query(
       `INSERT INTO tests (
-         slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published, dynamic_fluctuation_on_publish
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
+         dynamic_fluctuation_on_publish, exam_date, total_marks, slot_label, capacity_total, enrolled_count,
+         attempts_allowed, language_mode, exam_mode, negative_marking_text, test_type_label, valid_until,
+         dynamic_date_enabled, date_cycle_days
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::date, $21, $22)
        RETURNING id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
+                 exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed, language_mode,
+                 exam_mode, negative_marking_text, test_type_label, valid_until, dynamic_date_enabled, date_cycle_days,
                  COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish`,
       [
         slug,
         title,
         String(body.subcategory || ''),
         String(body.metaLine || ''),
-        Number(body.durationMinutes || 12),
-        Number(body.questionCount || 10),
+        durationMinutes,
+        questionCount,
         testKind,
         body.isPublished !== false,
         body.dynamicFluctuationOnPublish !== false,
+        examDate || null,
+        totalMarks,
+        slotLabel,
+        capacityTotal,
+        enrolledCount,
+        attemptsAllowed,
+        languageMode,
+        examMode,
+        negativeMarkingText,
+        testTypeLabel,
+        validUntil || null,
+        dynamicDateEnabled,
+        dateCycleDays,
       ],
     );
     if (body.isPublished !== false) {
@@ -1079,6 +1188,19 @@ router.patch('/tests/:id', async (req, res) => {
   const testKind = String(body.testKind || '').trim().toLowerCase();
   const durationMinutes = Number(body.durationMinutes || 12);
   const questionCount = Number(body.questionCount || 10);
+  const totalMarks = Math.max(0, Number(body.totalMarks || 0));
+  const slotLabel = String(body.slotLabel || '').trim().slice(0, 80);
+  const capacityTotal = Math.max(0, Number(body.capacityTotal || 0));
+  const enrolledCount = Math.max(0, Number(body.enrolledCount || 0));
+  const attemptsAllowed = Math.max(1, Number(body.attemptsAllowed || 1));
+  const languageMode = String(body.languageMode || 'Bilingual').trim().slice(0, 40);
+  const examMode = String(body.examMode || 'Practice').trim().slice(0, 40);
+  const negativeMarkingText = String(body.negativeMarkingText || 'No').trim().slice(0, 40);
+  const testTypeLabel = String(body.testTypeLabel || 'Full Mock').trim().slice(0, 40);
+  const examDate = String(body.examDate || '').trim();
+  const validUntil = String(body.validUntil || '').trim();
+  const dynamicDateEnabled = body.dynamicDateEnabled === true;
+  const dateCycleDays = Math.max(0, Number(body.dateCycleDays || 0));
   const isPublished = body.isPublished !== false;
   const hasDynamicFluctuationValue = Object.prototype.hasOwnProperty.call(body, 'dynamicFluctuationOnPublish');
 
@@ -1107,11 +1229,40 @@ router.patch('/tests/:id', async (req, res) => {
     const { rows } = await pool.query(
       `UPDATE tests
        SET slug = $1, title = $2, subcategory = $3, meta_line = $4, duration_minutes = $5,
-           question_count = $6, test_kind = $7, is_published = $8, dynamic_fluctuation_on_publish = $9
-       WHERE id = $10::uuid
+           question_count = $6, test_kind = $7, is_published = $8, dynamic_fluctuation_on_publish = $9,
+           exam_date = $10::date, total_marks = $11, slot_label = $12, capacity_total = $13, enrolled_count = $14,
+           attempts_allowed = $15, language_mode = $16, exam_mode = $17, negative_marking_text = $18,
+           test_type_label = $19, valid_until = $20::date, dynamic_date_enabled = $21, date_cycle_days = $22
+       WHERE id = $23::uuid
        RETURNING id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
+                 exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed, language_mode,
+                 exam_mode, negative_marking_text, test_type_label, valid_until, dynamic_date_enabled, date_cycle_days,
                  COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish`,
-      [slug, title, subcategory, metaLine, durationMinutes, questionCount, testKind, isPublished, dynamicFluctuationOnPublish, id],
+      [
+        slug,
+        title,
+        subcategory,
+        metaLine,
+        durationMinutes,
+        questionCount,
+        testKind,
+        isPublished,
+        dynamicFluctuationOnPublish,
+        examDate || null,
+        totalMarks,
+        slotLabel,
+        capacityTotal,
+        enrolledCount,
+        attemptsAllowed,
+        languageMode,
+        examMode,
+        negativeMarkingText,
+        testTypeLabel,
+        validUntil || null,
+        dynamicDateEnabled,
+        dateCycleDays,
+        id,
+      ],
     );
     if (!rows[0]) return res.status(404).json({ error: 'Test not found' });
     if (!beforeRow.is_published && rows[0].is_published) {

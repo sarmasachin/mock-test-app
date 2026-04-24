@@ -37,11 +37,32 @@ POST /v1/attempts    Authorization: Bearer <access>
 
 GET /v1/news?feedKind=news|job|exam&limit=30&offset=0   (public, no auth)
 GET /v1/news/:articleId                                 (public)
+GET /v1/digest/today                                    (public)
 
 GET /v1/tests?subcategory=...&testKind=mock|quiz&limit=40   (public)
+GET /v1/leaderboard?range=weekly|monthly|all&testCatalogId=<uuid>&state=<text>&city=<text>&limit=100  (public)
+GET /v1/leaderboard/filters   (public)
+GET /v1/admin/summary         (admin auth)
+GET /v1/admin/tests           (admin auth)
+POST /v1/admin/tests          (admin auth)
+GET /v1/admin/tests/:id/questions                 (admin auth)
+POST /v1/admin/tests/:id/questions                (admin auth)
+PATCH /v1/admin/tests/:id/questions/:questionId   (admin auth)
+DELETE /v1/admin/tests/:id/questions/:questionId  (admin auth)
+GET /v1/admin/digest                               (admin auth)
+POST /v1/admin/digest                              (admin auth)
+PATCH /v1/admin/digest/:id                         (admin auth)
+DELETE /v1/admin/digest/:id                        (admin auth)
+GET /v1/admin/articles        (admin auth)
+POST /v1/admin/articles       (admin auth)
 
 GET /health
+
+Admin role note:
+- users.is_admin must be true for /v1/admin/* endpoints.
+- users.is_super_admin is required to change admin/super-admin roles from /v1/admin/users/:id/admin.
 
 Android emulator uses base URL http://10.0.2.2:3000/v1/ (see app build.gradle.kts).
 Physical device: set mocktest.apiBaseUrl in project local.properties, e.g.
   mocktest.apiBaseUrl=http://192.168.1.10:3000/v1/
+

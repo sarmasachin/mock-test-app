@@ -6,6 +6,8 @@ function mapUserRow(row) {
     id: row.id,
     email: row.email,
     displayName: row.display_name,
+    isAdmin: Boolean(row.is_admin),
+    isSuperAdmin: Boolean(row.is_super_admin),
     phone: row.phone,
     sixDigitPublicId: row.six_digit_public_id,
     signupState: row.signup_state || '',
@@ -13,7 +15,11 @@ function mapUserRow(row) {
     emailVerifiedAt: row.email_verified_at,
     phoneVerifiedAt: row.phone_verified_at,
     createdAt: row.created_at,
+    isBanned: Boolean(row.is_banned),
+    banReason: row.ban_reason || '',
+    bannedAt: row.banned_at || null,
   };
 }
 
 module.exports = { mapUserRow };
+

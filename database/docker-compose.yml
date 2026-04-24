@@ -1,7 +1,7 @@
 # Local PostgreSQL for MockTestApp — first run runs all postgres/*.sql in name order
 # Usage (from this folder):
 #   docker compose up -d
-# Connection (dev, no TLS): postgresql://mocktestapp_rw:CHANGE_ME@127.0.0.1:5432/mocktestapp
+# Connection (dev, no TLS): postgresql://mocktestapp_rw:MockDb123@127.0.0.1:5432/mocktestapp
 
 services:
   db:
@@ -9,7 +9,7 @@ services:
     container_name: mocktestapp-postgres
     environment:
       POSTGRES_USER: mocktestapp_rw
-      POSTGRES_PASSWORD: CHANGE_ME
+      POSTGRES_PASSWORD: MockDb123
       POSTGRES_DB: mocktestapp
     ports:
       - "5432:5432"
