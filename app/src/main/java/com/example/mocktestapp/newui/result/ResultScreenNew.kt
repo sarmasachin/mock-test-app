@@ -33,7 +33,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,7 +45,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mocktestapp.data.AppPreferencesRepository
 import com.example.mocktestapp.data.ContentRepository
-import com.example.mocktestapp.data.TestHistoryRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 import java.io.File
@@ -95,22 +93,6 @@ fun ResultScreenNew(
     val isAnswerKeyLocked = (answerKeyReleaseAtMs ?: 0L) > nowMs
     val resultCountdown = formatCountdown((resultReleaseAtMs ?: 0L) - nowMs)
     val answerKeyCountdown = formatCountdown((answerKeyReleaseAtMs ?: 0L) - nowMs)
-
-    // One Room insert per completed result; survives rotation but resets when this result’s inputs change.
-    var historyWritten by rememberSaveable(testName, scoreText, correct, wrong) { mutableStateOf(false) }
-    LaunchedEffect(testName, scoreText, correct, wrong) {
-        if (historyWritten) return@LaunchedEffect
-        val totalQuestions = scoreText.substringAfter("/").trim().toIntOrNull()
-            ?: (correct + wrong).coerceAtLeast(1)
-        val attemptsUserKey = profile.emailLine.ifBlank { profile.userIdFormatted ?: "guest" }
-        TestHistoryRepository.recordAttempt(
-            userKey = attemptsUserKey,
-            testName = testName,
-            correct = correct,
-            total = totalQuestions.coerceAtLeast(1),
-        )
-        historyWritten = true
-    }
 
     Scaffold(
         containerColor = Color.Transparent,

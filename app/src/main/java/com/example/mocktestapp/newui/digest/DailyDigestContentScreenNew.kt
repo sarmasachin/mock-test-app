@@ -54,7 +54,12 @@ fun DailyDigestContentScreenNew(
 
     LaunchedEffect(Unit) {
         runCatching { ContentRepository.loadDailyDigestItem() }
-            .onSuccess { item = it }
+            .onSuccess {
+                item = it
+                if (it == null) {
+                    error = "Daily Digest is not available right now"
+                }
+            }
             .onFailure { error = "Failed to load daily digest" }
     }
 
@@ -93,7 +98,7 @@ fun DailyDigestContentScreenNew(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        text = error ?: "Loading daily digest...",
+                        text = error ?: "Loading Daily Digest...",
                         color = p.textSecondary,
                         modifier = Modifier.padding(16.dp),
                     )

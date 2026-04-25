@@ -33,6 +33,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -68,16 +69,32 @@ fun DailyDigestScreenNew(
     val attemptedDates = remember { mutableStateOf(setOf(today.minusDays(1))) }
     var quizItem by remember { mutableStateOf<ContentRepository.DailyQuizRemote?>(null) }
     var quizError by remember { mutableStateOf(false) }
+    var quizLoading by remember { mutableStateOf(true) }
+    var quizStatusMessage by remember { mutableStateOf<String?>(null) }
+    var quizReloadTick by remember { mutableStateOf(0) }
     var selectedOptionIndex by remember { mutableStateOf<Int?>(null) }
     var submittedOptionIndex by remember { mutableStateOf<Int?>(null) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(quizReloadTick) {
+        quizLoading = true
+        quizError = false
+        quizStatusMessage = "Loading today's quiz..."
         runCatching { ContentRepository.loadDailyQuizItem() }
             .onSuccess {
                 quizItem = it
                 quizError = it == null
+                quizStatusMessage = if (it == null) {
+                    "Today's quiz is not published yet. Please check back later."
+                } else {
+                    null
+                }
+                quizLoading = false
             }
-            .onFailure { quizError = true }
+            .onFailure {
+                quizError = true
+                quizStatusMessage = "Couldn't load quiz right now. Check internet and tap retry."
+                quizLoading = false
+            }
     }
 
     if (!showQuiz && !showResult) {
@@ -87,6 +104,9 @@ fun DailyDigestScreenNew(
             attemptedDates = attemptedDates.value,
             digestItem = null,
             showDigestError = quizError,
+            isQuizLoading = quizLoading,
+            isTakeTestEnabled = !quizLoading && quizItem != null,
+            quizStatusMessage = quizStatusMessage,
             onBack = onBack,
             onSelectDate = { selectedDate = it },
             onTakeTest = {
@@ -98,6 +118,7 @@ fun DailyDigestScreenNew(
                     showQuiz = true
                 }
             },
+            onRetryLoad = { quizReloadTick++ },
         )
     } else if (showQuiz) {
         DailyQuizQuestionScreen(
@@ -299,9 +320,13 @@ private fun DailyQuizDatePickerScreen(
     attemptedDates: Set<LocalDate>,
     digestItem: ContentRepository.DailyDigestRemote?,
     showDigestError: Boolean,
+    isQuizLoading: Boolean,
+    isTakeTestEnabled: Boolean,
+    quizStatusMessage: String?,
     onBack: () -> Unit,
     onSelectDate: (LocalDate) -> Unit,
     onTakeTest: () -> Unit,
+    onRetryLoad: () -> Unit,
 ) {
     val month = YearMonth.from(selectedDate)
     val firstDay = month.atDay(1)
@@ -419,6 +444,7 @@ private fun DailyQuizDatePickerScreen(
 
             Button(
                 onClick = onTakeTest,
+                enabled = isTakeTestEnabled,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -426,7 +452,26 @@ private fun DailyQuizDatePickerScreen(
                 colors = ButtonDefaults.buttonColors(containerColor = DailyBlue),
                 shape = DailyCardRadius,
             ) {
-                Text("TAKE TEST", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 19.sp)
+                Text(
+                    text = when {
+                        isQuizLoading -> "LOADING QUIZ..."
+                        !isTakeTestEnabled -> "QUIZ NOT AVAILABLE"
+                        else -> "TAKE TEST"
+                    },
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 19.sp,
+                )
+            }
+            if (showDigestError) {
+                TextButton(
+                    onClick = onRetryLoad,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                ) {
+                    Text("RETRY", color = DailyBlue, fontWeight = FontWeight.Bold)
+                }
             }
 
             Card(
@@ -448,6 +493,7 @@ private fun DailyQuizDatePickerScreen(
                     Spacer(Modifier.width(10.dp))
                     Text(
                         text = digestItem?.questionPrompt?.takeIf { it.isNotBlank() }?.let { "Question: $it" }
+                            ?: quizStatusMessage
                             ?: if (showDigestError) "Daily quiz unavailable right now" else "Current Affairs Daily Quiz",
                         color = Color(0xFF303030),
                         fontWeight = FontWeight.SemiBold,

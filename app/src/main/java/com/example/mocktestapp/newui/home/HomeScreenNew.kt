@@ -1141,8 +1141,9 @@ private fun AppDrawer(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val p = mockTestPalette()
-    val sheetBg = p.surface
-    val border = p.border.copy(alpha = 0.16f)
+    // Keep drawer distinct from the page background to avoid a "white blank screen" feel.
+    val sheetBg = p.surfaceElevated
+    val border = p.border.copy(alpha = 0.22f)
     val configuration = LocalConfiguration.current
     val drawerWidthDp = (configuration.screenWidthDp * 0.82f).roundToInt().coerceIn(268, 300).dp
     val drawerShape = RoundedCornerShape(topEnd = 20.dp, bottomEnd = 20.dp)
@@ -1238,7 +1239,7 @@ private fun AppDrawer(
                 )
                 DrawerItem(
                     icon = Icons.Outlined.Today,
-                    label = "Daily",
+                    label = "Daily Digest",
                     onClick = {
                         scope.launch {
                             drawerState.close()
@@ -1248,7 +1249,7 @@ private fun AppDrawer(
                 )
                 DrawerItem(
                     icon = Icons.Outlined.Quiz,
-                    label = "Quiz",
+                    label = "Daily Quiz",
                     onClick = {
                         scope.launch {
                             drawerState.close()
@@ -1328,7 +1329,7 @@ private fun DrawerHeader() {
             .padding(horizontal = 12.dp)
             .fillMaxWidth()
             .clip(shape)
-            .background(p.surfaceElevated)
+            .background(p.surface)
             .border(1.dp, p.border.copy(alpha = 0.16f), shape)
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {

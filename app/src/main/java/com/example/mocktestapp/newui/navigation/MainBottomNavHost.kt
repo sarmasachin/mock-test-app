@@ -16,9 +16,12 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -36,6 +39,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.mocktestapp.data.AppPreferencesRepository
 import com.example.mocktestapp.data.AuthRepository
+import com.example.mocktestapp.data.TestHistoryRepository
 import com.example.mocktestapp.newui.alerts.ExamAlertFeedImageSeedPrefix
 import com.example.mocktestapp.newui.alerts.ExamAlertScreenNew
 import com.example.mocktestapp.newui.alerts.JobAlertFeedImageSeedPrefix
@@ -122,6 +126,15 @@ private fun isMainBottomTabSelected(tabRoute: String, current: NavDestination?):
         val detailPattern = "${RoutesNew.NEWS_DETAIL}/{newsId}"
         if (r == detailPattern || r.startsWith("${RoutesNew.NEWS_DETAIL}/")) return true
     }
+    if (tabRoute == MainTabRoutes.Profile) {
+        if (
+            r == RoutesNew.ACHIEVEMENTS ||
+            r == RoutesNew.PRIVACY ||
+            r == RoutesNew.TERMS
+        ) {
+            return true
+        }
+    }
     return false
 }
 
@@ -132,6 +145,14 @@ fun MainBottomNavHost(
     val mainNavController = rememberNavController()
     val p = mockTestPalette()
     val scope = rememberCoroutineScope()
+    val drawerProfile by AppPreferencesRepository.drawerUserProfile.collectAsState(
+        initial = AppPreferencesRepository.DrawerUserProfile(
+            displayName = "",
+            emailLine = "",
+            userIdFormatted = null,
+        ),
+    )
+    var profileReselectSignal by remember { mutableIntStateOf(0) }
 
     val tabs = remember {
         listOf(
@@ -154,7 +175,10 @@ fun MainBottomNavHost(
                         d.route == MainTabRoutes.Tests ||
                         d.route == MainTabRoutes.News ||
                         d.route == MainTabRoutes.Profile
-                } == true
+                } == true ||
+                currentDestination?.route == RoutesNew.ACHIEVEMENTS ||
+                currentDestination?.route == RoutesNew.PRIVACY ||
+                currentDestination?.route == RoutesNew.TERMS
             if (showBottomBar) {
                 NavigationBar(
                     containerColor = p.surface,
@@ -165,7 +189,16 @@ fun MainBottomNavHost(
                         NavigationBarItem(
                             selected = selected,
                             onClick = {
-                                if (tab.route == MainTabRoutes.Home) {
+                                if (tab.route == MainTabRoutes.Profile && selected) {
+                                    val currentRoute = currentDestination?.route.orEmpty()
+                                    if (currentRoute == MainTabRoutes.Profile) {
+                                        // Re-selecting Profile on profile tab resets inner stack to main screen.
+                                        profileReselectSignal++
+                                    } else {
+                                        // Profile-related screens (achievements/privacy/terms) should return to profile tab.
+                                        mainNavController.navigateMainTab(MainTabRoutes.Profile)
+                                    }
+                                } else if (tab.route == MainTabRoutes.Home) {
                                     mainNavController.goToHomeTab()
                                 } else {
                                     mainNavController.navigateMainTab(tab.route)
@@ -284,6 +317,7 @@ fun MainBottomNavHost(
                     appNavController = mainNavController,
                     showAppBarBack = false,
                     onBack = { mainNavController.goToHomeTab() },
+                    reselectSignal = profileReselectSignal,
                 )
             }
 
@@ -348,6 +382,17 @@ fun MainBottomNavHost(
                     testName = name.ifBlank { "bsc nursing moc test" },
                     onBack = { mainNavController.popBackOrHome() },
                     onSubmit = { answered, correct, wrong, publishAt ->
+                        val attemptsUserKey = drawerProfile.emailLine.ifBlank {
+                            drawerProfile.userIdFormatted ?: "guest"
+                        }
+                        scope.launch {
+                            TestHistoryRepository.recordAttempt(
+                                userKey = attemptsUserKey,
+                                testName = name.ifBlank { "Test" },
+                                correct = correct,
+                                total = 10,
+                            )
+                        }
                         AppPreferencesRepository.markPendingResultSubmitted(
                             testName = name.ifBlank { "Test" },
                             publishAtMillis = publishAt,

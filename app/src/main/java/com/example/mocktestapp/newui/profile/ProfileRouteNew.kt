@@ -11,6 +11,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,6 +56,7 @@ fun ProfileRouteNew(
     appNavController: NavController,
     onBack: () -> Unit,
     showAppBarBack: Boolean = true,
+    reselectSignal: Int = 0,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -65,6 +67,11 @@ fun ProfileRouteNew(
 
     BackHandler(enabled = innerNav.previousBackStackEntry != null) {
         innerNav.popBackStack()
+    }
+    LaunchedEffect(reselectSignal) {
+        if (reselectSignal > 0) {
+            innerNav.popBackStack(ProfileInnerRoutes.MAIN, inclusive = false)
+        }
     }
 
     val onEditSuccess: (String) -> Unit = { msg ->
