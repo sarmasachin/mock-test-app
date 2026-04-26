@@ -12,11 +12,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -37,12 +39,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -66,7 +70,7 @@ fun StartTestPreviewScreenNew(
     modifier: Modifier = Modifier,
     testName: String,
     onBack: () -> Unit,
-    onStartTest: () -> Unit,
+    onStartTest: (String) -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -81,11 +85,23 @@ fun StartTestPreviewScreenNew(
         )
     }
     var testSnapshot by remember(testName) { mutableStateOf<TestCardNew?>(null) }
+    val appliedSnapshots = remember { mutableStateMapOf<String, TestCardNew?>() }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val appliedSeries by AppPreferencesRepository.appliedTestSeries.collectAsState(initial = emptyList())
 
     LaunchedEffect(testName) {
         testSnapshot = ContentRepository.loadTestByTitle(testName)
+    }
+    LaunchedEffect(appliedSeries) {
+        val names = appliedSeries.map { it.testName.trim() }.filter { it.isNotBlank() }.distinct()
+        appliedSnapshots.keys.toList().forEach { existing ->
+            if (existing !in names) appliedSnapshots.remove(existing)
+        }
+        names.forEach { name ->
+            if (!appliedSnapshots.containsKey(name)) {
+                appliedSnapshots[name] = ContentRepository.loadTestByTitle(name)
+            }
+        }
     }
     LaunchedEffect(Unit) {
         val remote = ContentRepository.loadInstructionContent()
@@ -96,32 +112,29 @@ fun StartTestPreviewScreenNew(
     LaunchedEffect(Unit) {
         while (true) {
             nowMs = System.currentTimeMillis()
-            delay(30_000L)
+            delay(1_000L)
         }
     }
 
     val test = testSnapshot ?: TestCardNew(
         title = testName,
-        meta = "Mock test overview",
-        examDate = "15 Feb 2026",
-        durationLabel = "3 hrs",
-        questionsMarks = "100 Q / 400 marks",
-        enrolledLabel = "12.5k",
+        meta = "Test details are currently unavailable",
+        examDate = null,
+        durationLabel = null,
+        questionsMarks = null,
+        enrolledLabel = null,
     )
-    val unlockAt = remember(test.examDate) { parseUnlockAtMillis(test.examDate) }
-    val queuedEntry = remember(appliedSeries, testName, nowMs) {
-        appliedSeries.firstOrNull { it.testName.equals(testName, ignoreCase = true) }
-            ?: appliedSeries
-                .filter { it.expiresAtMillis > nowMs }
-                .minByOrNull { it.unlockAtMillis }
+    val activeAppliedEntries = remember(appliedSeries, nowMs) {
+        appliedSeries
+            .filter { it.expiresAtMillis > nowMs }
+            .sortedBy { (it.unlockAtMillis - nowMs).coerceAtLeast(0L) }
     }
-    val queueRemainingMs = queuedEntry?.let { (it.unlockAtMillis - nowMs).coerceAtLeast(0L) } ?: 0L
-    val queueHours = (queueRemainingMs / 3_600_000L).toInt()
-    val queueMins = ((queueRemainingMs % 3_600_000L) / 60_000L).toInt()
-    val queueSecs = ((queueRemainingMs % 60_000L) / 1_000L).toInt()
-    val queueCountdown = String.format("%02d:%02d:%02d", queueHours, queueMins, queueSecs)
-    val fallbackLocked = unlockAt?.let { nowMs < it } ?: false
-    val isLocked = if (queuedEntry != null) queueRemainingMs > 0L else fallbackLocked
+    val hiddenExpiredCount = remember(appliedSeries, activeAppliedEntries) {
+        (appliedSeries.size - activeAppliedEntries.size).coerceAtLeast(0)
+    }
+    val unlockAt = remember(test.examDate) { parseUnlockAtMillis(test.examDate) }
+    val fallbackRemainingMs = unlockAt?.let { (it - nowMs).coerceAtLeast(0L) } ?: 0L
+    val fallbackLocked = fallbackRemainingMs > 0L
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -155,7 +168,157 @@ fun StartTestPreviewScreenNew(
             }
             Spacer(Modifier.height(12.dp))
 
-            PreviewCard(test = test)
+            if (activeAppliedEntries.isNotEmpty()) {
+                Text(
+                    text = "Applied Tests",
+                    color = p.textPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                if (hiddenExpiredCount > 0) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "$hiddenExpiredCount expired test(s) hidden",
+                        color = p.textSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                activeAppliedEntries.forEach { entry ->
+                    val name = entry.testName.trim()
+                    val snapshot = appliedSnapshots[name]
+                    val card = snapshot ?: TestCardNew(
+                        title = name,
+                        meta = "Test details are currently unavailable",
+                        examDate = null,
+                        durationLabel = null,
+                        questionsMarks = null,
+                        enrolledLabel = null,
+                    )
+                    val remainingMs = (entry.unlockAtMillis - nowMs).coerceAtLeast(0L)
+                    val totalLockMs = (entry.expiresAtMillis - entry.unlockAtMillis).coerceAtLeast(1L)
+                    val hours = (remainingMs / 3_600_000L).toInt()
+                    val mins = ((remainingMs % 3_600_000L) / 60_000L).toInt()
+                    val secs = ((remainingMs % 60_000L) / 1_000L).toInt()
+                    val countdown = String.format("%02d:%02d:%02d", hours, mins, secs)
+                    val isLocked = remainingMs > 0L
+                    val progress = if (isLocked) {
+                        1f - (remainingMs.toFloat() / totalLockMs.toFloat()).coerceIn(0f, 1f)
+                    } else {
+                        1f
+                    }
+                    PreviewCard(test = card)
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CountdownProgressRing(
+                            progress = progress,
+                            locked = isLocked,
+                            countdown = countdown,
+                        )
+                        TestStatusChip(
+                            locked = isLocked,
+                            countdown = countdown,
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = if (isLocked) "Starts in $countdown" else "Ready to start",
+                        color = p.textSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { onStartTest(card.title) },
+                        enabled = !isLocked,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        shape = RoundedCornerShape(999.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isLocked) p.border else Color(0xFF10B65A),
+                            contentColor = Color.White,
+                            disabledContainerColor = p.border,
+                            disabledContentColor = Color.White.copy(alpha = 0.9f),
+                        ),
+                    ) {
+                        Icon(
+                            imageVector = if (isLocked) Icons.Outlined.Lock else Icons.Outlined.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.size(8.dp))
+                        Text(
+                            text = if (isLocked) "Start Test (Locked)" else "Start Test",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Spacer(Modifier.height(14.dp))
+                }
+            } else {
+                PreviewCard(test = test)
+                Spacer(Modifier.height(10.dp))
+                if (fallbackLocked) {
+                    val hours = (fallbackRemainingMs / 3_600_000L).toInt()
+                    val mins = ((fallbackRemainingMs % 3_600_000L) / 60_000L).toInt()
+                    val secs = ((fallbackRemainingMs % 60_000L) / 1_000L).toInt()
+                    val countdown = String.format("%02d:%02d:%02d", hours, mins, secs)
+                    Text(
+                        text = "Test locked till scheduled time (${test.examDate ?: "upcoming"})",
+                        color = p.textSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = countdown,
+                        color = p.textPrimary,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                } else {
+                    Text(
+                        text = "No active applied test found. Apply for a test first.",
+                        color = p.textSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { onStartTest(test.title) },
+                    enabled = !fallbackLocked,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .height(52.dp),
+                    shape = RoundedCornerShape(999.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (fallbackLocked) p.border else Color(0xFF10B65A),
+                        contentColor = Color.White,
+                        disabledContainerColor = p.border,
+                        disabledContentColor = Color.White.copy(alpha = 0.9f),
+                    ),
+                ) {
+                    Icon(
+                        imageVector = if (fallbackLocked) Icons.Outlined.Lock else Icons.Outlined.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        text = if (fallbackLocked) "Start Test (Locked)" else "Start Test",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
 
             Spacer(Modifier.height(14.dp))
             Text(
@@ -183,54 +346,6 @@ fun StartTestPreviewScreenNew(
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
-            if (isLocked) {
-                Text(
-                    text = if (queuedEntry != null) {
-                        "Start Test Series locked • starts in $queueCountdown"
-                    } else {
-                        "Test locked till scheduled time (${test.examDate ?: "upcoming"})"
-                    },
-                    color = p.textSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = queueCountdown,
-                    color = p.textPrimary,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                )
-                Spacer(Modifier.height(8.dp))
-            }
-            Button(
-                onClick = onStartTest,
-                enabled = !isLocked,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .height(52.dp),
-                shape = RoundedCornerShape(999.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isLocked) p.border else Color(0xFF10B65A),
-                    contentColor = Color.White,
-                    disabledContainerColor = p.border,
-                    disabledContentColor = Color.White.copy(alpha = 0.9f),
-                ),
-            ) {
-                Icon(
-                    imageVector = if (isLocked) Icons.Outlined.Lock else Icons.Outlined.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.size(8.dp))
-                Text(
-                    text = if (isLocked) "Start Test Series (Locked)" else "Start Test Series",
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
         }
     }
 }
@@ -238,68 +353,76 @@ fun StartTestPreviewScreenNew(
 @Composable
 private fun PreviewCard(test: TestCardNew) {
     val p = mockTestPalette()
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(
-                width = 1.dp,
-                color = p.border.copy(alpha = 0.2f),
-                shape = RoundedCornerShape(18.dp),
-            ),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = p.surface),
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 10.dp)
+                .border(
+                    width = 1.dp,
+                    color = p.border.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(18.dp),
+                ),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = p.surface),
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
                 Text(
                     text = test.title,
                     color = p.textPrimary,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.ExtraBold,
                 )
+                Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "FREE",
-                    color = Color(0xFF17B85A),
+                    text = test.meta.ifBlank { "Details will appear when published by admin." },
+                    color = p.textSecondary,
                     fontSize = 13.sp,
+                )
+                Spacer(Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    MiniStat(
+                        icon = Icons.Outlined.PlayArrow,
+                        label = test.questionsMarks ?: "Questions/marks unavailable",
+                    )
+                    MiniStat(
+                        icon = Icons.Outlined.Timer,
+                        label = test.durationLabel ?: "3 hrs each",
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    MiniStat(
+                        icon = Icons.Outlined.Groups,
+                        label = test.enrolledLabel?.let { "$it enrolled" } ?: "Enrollment data unavailable",
+                    )
+                    MiniStat(
+                        icon = Icons.Outlined.CalendarMonth,
+                        label = test.examDate ?: "Date not published",
+                    )
+                }
+            }
+        }
+        if (test.badgeEnabled) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset(y = 0.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFFDC2626))
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    text = test.badgeText,
+                    color = Color.White,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = test.meta.ifBlank { "Complete mock test series with detailed analysis" },
-                color = p.textSecondary,
-                fontSize = 13.sp,
-            )
-            Spacer(Modifier.height(14.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                MiniStat(
-                    icon = Icons.Outlined.PlayArrow,
-                    label = test.questionsMarks ?: "100 Q / 400 marks",
-                )
-                MiniStat(
-                    icon = Icons.Outlined.Timer,
-                    label = test.durationLabel ?: "3 hrs each",
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                MiniStat(
-                    icon = Icons.Outlined.Groups,
-                    label = test.enrolledLabel?.let { "$it enrolled" } ?: "12.5k enrolled",
-                )
-                MiniStat(
-                    icon = Icons.Outlined.CalendarMonth,
-                    label = test.examDate ?: "15 Feb 2026",
                 )
             }
         }
@@ -322,6 +445,54 @@ private fun MiniStat(icon: ImageVector, label: String) {
             color = p.textSecondary,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
+private fun TestStatusChip(
+    locked: Boolean,
+    countdown: String,
+) {
+    val bg = if (locked) Color(0xFFFEF3C7) else Color(0xFFDCFCE7)
+    val fg = if (locked) Color(0xFF92400E) else Color(0xFF166534)
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(bg)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+    ) {
+        Text(
+            text = if (locked) "Locked • $countdown" else "Ready",
+            color = fg,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
+private fun CountdownProgressRing(
+    progress: Float,
+    locked: Boolean,
+    countdown: String,
+) {
+    val ringColor = if (locked) Color(0xFFF59E0B) else Color(0xFF16A34A)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(
+                progress = { progress.coerceIn(0f, 1f) },
+                modifier = Modifier.size(30.dp),
+                color = ringColor,
+                trackColor = Color(0xFFE5E7EB),
+                strokeWidth = 3.dp,
+            )
+        }
+        Text(
+            text = if (locked) countdown else "00:00:00",
+            color = Color(0xFF475569),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
         )
     }
 }

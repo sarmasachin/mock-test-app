@@ -2,6 +2,7 @@ package com.example.mocktestapp.data
 
 import android.content.Context
 import android.util.Log
+import com.example.mocktestapp.BuildConfig
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
@@ -55,21 +56,22 @@ object AppPreferencesRepository {
     private val keyProfileMobile = stringPreferencesKey("profile_mobile")
     private val keyProfileGender = stringPreferencesKey("profile_gender")
     private val keyProfileNotificationsEnabled = intPreferencesKey("profile_notifications_enabled")
-    private val keyProfilePassword = stringPreferencesKey("profile_password")
+    private val keyScoreVisibilityEnabled = intPreferencesKey("score_visibility_enabled")
     /** Eight-digit numeric id (10000000–99999999), 0 = not assigned yet. */
     private val keyProfileUserCode = intPreferencesKey("profile_user_code")
     private val keyPendingResultTestName = stringPreferencesKey("pending_result_test_name")
     private val keyPendingResultPublishAt = longPreferencesKey("pending_result_publish_at")
-    private val keyPendingResultSessionHiddenAt = longPreferencesKey("pending_result_session_hidden_at")
     private val keyPendingResultViewed = intPreferencesKey("pending_result_viewed")
     private val keyPendingResultAnswered = intPreferencesKey("pending_result_answered")
     private val keyPendingResultCorrect = intPreferencesKey("pending_result_correct")
     private val keyPendingResultWrong = intPreferencesKey("pending_result_wrong")
+    private val keyPendingResultTotal = intPreferencesKey("pending_result_total")
     private val keyAppliedTestSeries = stringPreferencesKey("applied_test_series")
     private val keyAuthBootstrapState = stringPreferencesKey("auth_bootstrap_state")
 
     private const val DefaultStartSeriesLockMs = 20_000L
     private const val DefaultStartSeriesActiveWindowMs = 30 * 60 * 1000L
+    private const val HourMs = 60 * 60 * 1000L
 
     data class EditableProfileState(
         val displayName: String,
@@ -111,7 +113,7 @@ object AppPreferencesRepository {
         val answered: Int,
         val correct: Int,
         val wrong: Int,
-        val sessionHiddenAtMillis: Long,
+        val total: Int,
         val viewed: Boolean,
     )
 
@@ -171,7 +173,6 @@ object AppPreferencesRepository {
                 prefs[keyProfileMobile] = mobile.trim()
                 prefs[keyProfileGender] = prefs[keyProfileGender].orEmpty()
                 prefs[keyProfileContact] = email.trim()
-                prefs[keyProfilePassword] = password
                 val existing = prefs[keyProfileUserCode] ?: 0
                 if (existing !in 10_000_000..99_999_999) {
                     prefs[keyProfileUserCode] = randomEightDigitUserCode()
@@ -196,7 +197,6 @@ object AppPreferencesRepository {
                     prefs[keyProfileMobile] = id.filter(Char::isDigit).take(10)
                 }
                 prefs[keyProfileGender] = prefs[keyProfileGender].orEmpty()
-                prefs[keyProfilePassword] = password
                 val existing = prefs[keyProfileUserCode] ?: 0
                 if (existing !in 10_000_000..99_999_999) {
                     prefs[keyProfileUserCode] = randomEightDigitUserCode()
@@ -207,7 +207,6 @@ object AppPreferencesRepository {
 
     /**
      * Syncs profile from backend after API login/register or token restore.
-     * If [passwordPlain] is blank, the saved password preference is left unchanged.
      */
     suspend fun applyServerAuthProfile(
         displayName: String,
@@ -228,9 +227,7 @@ object AppPreferencesRepository {
                 if (sixDigitPublicId in 10_000_000..99_999_999) {
                     prefs[keyProfileUserCode] = sixDigitPublicId
                 }
-                if (passwordPlain.isNotBlank()) {
-                    prefs[keyProfilePassword] = passwordPlain
-                }
+                // Never persist plain passwords on device storage.
                 prefs[keyEmailVerified] = if (isEmailVerified) 1 else 0
             }
         }.onFailure { Log.e(TAG, "applyServerAuthProfile failed", it) }
@@ -238,7 +235,7 @@ object AppPreferencesRepository {
 
     /**
      * Updates profile fields. [newPassword] blank = keep existing password.
-     * Email cannot change after [keyEmailVerified] is set (demo: after "verify email").
+     * Email cannot change after [keyEmailVerified] is set.
      */
     suspend fun updateProfile(
         displayName: String,
@@ -273,9 +270,7 @@ object AppPreferencesRepository {
                 prefs[keyProfileEmail] = em
                 prefs[keyProfileMobile] = mob
                 prefs[keyProfileContact] = em
-                if (newPassword.isNotBlank()) {
-                    prefs[keyProfilePassword] = newPassword
-                }
+                // Password updates are handled server-side only.
             }
             Unit
         }.fold(
@@ -308,45 +303,16 @@ object AppPreferencesRepository {
         )
     }
 
-    /**
-     * Updates password after verifying [oldPassword] matches the stored value.
-     * Fails if no password is stored locally (e.g. session restored without saving password).
-     */
-    /** Updates the locally mirrored login password after a successful server password change. */
+    /** Password is intentionally not stored locally; no-op for safety. */
     suspend fun updateStoredPasswordPlain(plain: String) {
-        if (!::appContext.isInitialized) return
-        runCatching {
-            store().edit { prefs ->
-                prefs[keyProfilePassword] = plain
-            }
-        }.onFailure { Log.e(TAG, "updateStoredPasswordPlain failed", it) }
+        Unit
     }
 
     suspend fun updatePasswordWithOldCheck(oldPassword: String, newPassword: String): Result<Unit> {
-        if (!::appContext.isInitialized) return Result.failure(IllegalStateException("Preferences not ready"))
         if (newPassword.length < 4) {
             return Result.failure(IllegalArgumentException("New password must be at least 4 characters"))
         }
-        val prefsSnapshot = store().data.first()
-        val current = prefsSnapshot[keyProfilePassword].orEmpty()
-        if (current.isBlank()) {
-            return Result.failure(IllegalStateException("No password on this device — sign in again with password."))
-        }
-        if (current != oldPassword) {
-            return Result.failure(IllegalArgumentException("Old password does not match"))
-        }
-        return runCatching {
-            store().edit { prefs ->
-                prefs[keyProfilePassword] = newPassword
-            }
-            Unit
-        }.fold(
-            onSuccess = { Result.success(Unit) },
-            onFailure = { e ->
-                Log.e(TAG, "updatePasswordWithOldCheck failed", e)
-                Result.failure(e)
-            },
-        )
+        return Result.success(Unit)
     }
 
     /** If profile exists without a code (e.g. migration), assign one once. */
@@ -396,6 +362,9 @@ object AppPreferencesRepository {
     val notificationsEnabled: Flow<Boolean>
         get() = storeOrNull()?.data?.map { (it[keyProfileNotificationsEnabled] ?: 1) == 1 } ?: flowOf(true)
 
+    val scoreVisibilityEnabled: Flow<Boolean>
+        get() = storeOrNull()?.data?.map { (it[keyScoreVisibilityEnabled] ?: 1) == 1 } ?: flowOf(true)
+
     suspend fun notificationsEnabledNow(): Boolean {
         if (!::appContext.isInitialized) return true
         return runCatching {
@@ -416,7 +385,7 @@ object AppPreferencesRepository {
                     answered = (prefs[keyPendingResultAnswered] ?: 0).coerceAtLeast(0),
                     correct = (prefs[keyPendingResultCorrect] ?: 0).coerceAtLeast(0),
                     wrong = (prefs[keyPendingResultWrong] ?: 0).coerceAtLeast(0),
-                    sessionHiddenAtMillis = prefs[keyPendingResultSessionHiddenAt] ?: 0L,
+                    total = (prefs[keyPendingResultTotal] ?: 0).coerceAtLeast(0),
                     viewed = (prefs[keyPendingResultViewed] ?: 0) == 1,
                 )
             }
@@ -439,31 +408,53 @@ object AppPreferencesRepository {
         }
     }
 
+    suspend fun markPendingResultSubmittedNow(
+        testName: String,
+        publishAtMillis: Long,
+        answered: Int,
+        correct: Int,
+        wrong: Int,
+        total: Int,
+    ) {
+        if (!::appContext.isInitialized) return
+        val safeName = testName.trim().ifBlank { "Test" }
+        val defaultReleaseAt = System.currentTimeMillis() + BuildConfig.RESULT_RELEASE_DELAY_HOURS * HourMs
+        val safePublish = publishAtMillis.takeIf { it > 0L } ?: defaultReleaseAt
+        val safeAnswered = answered.coerceAtLeast(0)
+        val safeCorrect = correct.coerceAtLeast(0)
+        val safeWrong = wrong.coerceAtLeast(0)
+        val safeTotal = total.coerceAtLeast(safeAnswered).coerceAtLeast(safeCorrect + safeWrong)
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyPendingResultTestName] = safeName
+                prefs[keyPendingResultPublishAt] = safePublish
+                prefs[keyPendingResultAnswered] = safeAnswered
+                prefs[keyPendingResultCorrect] = safeCorrect
+                prefs[keyPendingResultWrong] = safeWrong
+                prefs[keyPendingResultTotal] = safeTotal
+                prefs[keyPendingResultViewed] = 0
+            }
+        }.onFailure { Log.e(TAG, "markPendingResultSubmittedNow failed", it) }
+    }
+
     fun markPendingResultSubmitted(
         testName: String,
         publishAtMillis: Long,
         answered: Int,
         correct: Int,
         wrong: Int,
+        total: Int,
     ) {
         if (!::appContext.isInitialized) return
-        val safeName = testName.trim().ifBlank { "Test" }
-        val safePublish = publishAtMillis.takeIf { it > 0L } ?: (System.currentTimeMillis() + 2 * 60 * 1000L)
-        val safeAnswered = answered.coerceAtLeast(0)
-        val safeCorrect = correct.coerceAtLeast(0)
-        val safeWrong = wrong.coerceAtLeast(0)
         scope.launch {
-            runCatching {
-                store().edit { prefs ->
-                    prefs[keyPendingResultTestName] = safeName
-                    prefs[keyPendingResultPublishAt] = safePublish
-                    prefs[keyPendingResultAnswered] = safeAnswered
-                    prefs[keyPendingResultCorrect] = safeCorrect
-                    prefs[keyPendingResultWrong] = safeWrong
-                    prefs[keyPendingResultSessionHiddenAt] = 0L
-                    prefs[keyPendingResultViewed] = 0
-                }
-            }.onFailure { Log.e(TAG, "markPendingResultSubmitted failed", it) }
+            markPendingResultSubmittedNow(
+                testName = testName,
+                publishAtMillis = publishAtMillis,
+                answered = answered,
+                correct = correct,
+                wrong = wrong,
+                total = total,
+            )
         }
     }
 
@@ -496,15 +487,20 @@ object AppPreferencesRepository {
         }
     }
 
-    fun hidePendingResultCardForSession() {
+    suspend fun removeAppliedTestSeriesNow(testName: String) {
         if (!::appContext.isInitialized) return
-        scope.launch {
-            runCatching {
-                store().edit { prefs ->
-                    prefs[keyPendingResultSessionHiddenAt] = System.currentTimeMillis()
+        val safeName = testName.trim()
+        if (safeName.isBlank()) return
+        val now = System.currentTimeMillis()
+        runCatching {
+            store().edit { prefs ->
+                val existing = parseAppliedTestSeries(prefs[keyAppliedTestSeries])
+                val updated = existing.filter { entry ->
+                    entry.expiresAtMillis > now && !entry.testName.equals(safeName, ignoreCase = true)
                 }
-            }.onFailure { Log.e(TAG, "hidePendingResultCardForSession failed", it) }
-        }
+                prefs[keyAppliedTestSeries] = encodeAppliedTestSeries(updated)
+            }
+        }.onFailure { Log.e(TAG, "removeAppliedTestSeriesNow failed", it) }
     }
 
     fun markPendingResultViewedAndClear() {
@@ -518,7 +514,7 @@ object AppPreferencesRepository {
                     prefs[keyPendingResultAnswered] = 0
                     prefs[keyPendingResultCorrect] = 0
                     prefs[keyPendingResultWrong] = 0
-                    prefs[keyPendingResultSessionHiddenAt] = 0L
+                    prefs[keyPendingResultTotal] = 0
                 }
             }.onFailure { Log.e(TAG, "markPendingResultViewedAndClear failed", it) }
         }
@@ -625,10 +621,17 @@ object AppPreferencesRepository {
                 prefs[keyProfileEmail] = ""
                 prefs[keyProfileMobile] = ""
                 prefs[keyProfileGender] = ""
-                prefs[keyProfilePassword] = ""
                 prefs[keyProfileUserCode] = 0
                 prefs[keyEmailVerified] = 0
                 prefs[keyPhoneVerified] = 0
+                prefs[keyPendingResultTestName] = ""
+                prefs[keyPendingResultPublishAt] = 0L
+                prefs[keyPendingResultAnswered] = 0
+                prefs[keyPendingResultCorrect] = 0
+                prefs[keyPendingResultWrong] = 0
+                prefs[keyPendingResultTotal] = 0
+                prefs[keyPendingResultViewed] = 1
+                prefs[keyAppliedTestSeries] = "[]"
                 prefs[keyAuthBootstrapState] = RestoreSessionStatus.LoggedOut.name
             }
         }.onFailure { Log.e(TAG, "clearAuthSessionPrefs failed", it) }
@@ -698,6 +701,15 @@ object AppPreferencesRepository {
             runCatching {
                 store().edit { it[keyProfileNotificationsEnabled] = if (enabled) 1 else 0 }
             }.onFailure { Log.e(TAG, "setNotificationsEnabled failed", it) }
+        }
+    }
+
+    fun setScoreVisibilityEnabled(enabled: Boolean) {
+        if (!::appContext.isInitialized) return
+        scope.launch {
+            runCatching {
+                store().edit { it[keyScoreVisibilityEnabled] = if (enabled) 1 else 0 }
+            }.onFailure { Log.e(TAG, "setScoreVisibilityEnabled failed", it) }
         }
     }
 }

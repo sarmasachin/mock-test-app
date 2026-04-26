@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -18,6 +20,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -25,6 +28,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -66,10 +70,22 @@ fun ForgotPasswordScreenNew(
     var otp by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
+    var emailError by remember { mutableStateOf<String?>(null) }
+    var otpError by remember { mutableStateOf<String?>(null) }
+    var newPasswordError by remember { mutableStateOf<String?>(null) }
+    var confirmPasswordError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var resendCooldownSec by remember { mutableIntStateOf(0) }
     var feedback by remember { mutableStateOf<AuthScreenFeedback?>(null) }
     val snackbar = rememberAppSnackbarHostStateNew()
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(resendCooldownSec) {
+        if (resendCooldownSec > 0) {
+            delay(1000L)
+            resendCooldownSec -= 1
+        }
+    }
 
     val fieldColors = TextFieldDefaults.colors(
         focusedContainerColor = p.surfaceElevated,
@@ -93,6 +109,7 @@ fun ForgotPasswordScreenNew(
                 .fillMaxSize()
                 .background(bg)
                 .padding(padding)
+                .statusBarsPadding()
                 .padding(18.dp),
         ) {
             Row(
@@ -136,45 +153,45 @@ fun ForgotPasswordScreenNew(
                         onValueChange = { v ->
                             if (step == 0) {
                                 email = v.trim()
+                                emailError = null
                                 feedback = null
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
+                        isError = emailError != null,
                         readOnly = step > 0,
                         enabled = !busy,
                         label = { Text("Gmail / email") },
                         singleLine = true,
                         colors = fieldColors,
                         supportingText = {
-                            Text(
-                                text = if (step == 0) {
-                                    "We only send a code if this email is registered on your account."
-                                } else {
-                                    "Verified — this address is locked. Tap \"Use a different email\" below to change it."
-                                },
-                                color = p.textSecondary,
-                                fontSize = 12.sp,
-                                lineHeight = 16.sp,
-                            )
+                            if (emailError != null) {
+                                Text(
+                                    text = emailError ?: "",
+                                    color = p.error,
+                                    fontSize = 12.sp,
+                                )
+                            } else {
+                                Text(
+                                    text = if (step == 0) {
+                                        "We only send a code if this email is registered on your account."
+                                    } else {
+                                        "Verified — this address is locked. Tap \"Use a different email\" below to change it."
+                                    },
+                                    color = p.textSecondary,
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp,
+                                )
+                            }
                         },
                     )
-
-                    val successFeedback = feedback?.takeIf { !it.isError }
-                    if (step > 0 && successFeedback != null) {
-                        Spacer(Modifier.height(12.dp))
-                        AuthScreenFeedbackBanner(
-                            palette = p,
-                            feedback = successFeedback,
-                            onDismiss = { feedback = null },
-                        )
-                        Spacer(Modifier.height(14.dp))
-                    }
 
                     if (step == 0) {
                         Spacer(Modifier.height(16.dp))
                         Button(
                             onClick = {
                                 if (!isValidEmail(email)) {
+                                    emailError = "Enter a valid email address."
                                     feedback = AuthScreenFeedback(
                                         isError = true,
                                         title = "Invalid email",
@@ -184,6 +201,7 @@ fun ForgotPasswordScreenNew(
                                 }
                                 scope.launch {
                                     busy = true
+                                    emailError = null
                                     feedback = null
                                     val r = AuthRepository.requestPasswordResetOtp(email)
                                     busy = false
@@ -192,7 +210,11 @@ fun ForgotPasswordScreenNew(
                                             otp = ""
                                             newPassword = ""
                                             confirmPassword = ""
+                                            otpError = null
+                                            newPasswordError = null
+                                            confirmPasswordError = null
                                             step = 1
+                                            resendCooldownSec = 30
                                             feedback = AuthScreenFeedback(
                                                 isError = false,
                                                 title = "Verification successful",
@@ -226,7 +248,21 @@ fun ForgotPasswordScreenNew(
                                 contentColor = p.onPrimaryButton,
                             ),
                         ) {
-                            Text(text = "Send code to email", fontWeight = FontWeight.Bold)
+                            if (busy) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = p.onPrimaryButton,
+                                    )
+                                    Spacer(Modifier.size(8.dp))
+                                    Text(text = "Sending...", fontWeight = FontWeight.Bold)
+                                }
+                            } else {
+                                Text(text = "Send code to email", fontWeight = FontWeight.Bold)
+                            }
                         }
                     } else {
                         Spacer(Modifier.height(14.dp))
@@ -254,72 +290,115 @@ fun ForgotPasswordScreenNew(
                         Spacer(Modifier.height(12.dp))
                         OutlinedTextField(
                             value = otp,
-                            onValueChange = { v -> otp = v.filter(Char::isDigit).take(6) },
+                            onValueChange = { v ->
+                                otp = v.filter(Char::isDigit).take(6)
+                                otpError = null
+                            },
                             modifier = Modifier.fillMaxWidth(),
+                            isError = otpError != null,
                             label = { Text("6-digit OTP") },
                             placeholder = { Text("______", color = p.textSecondary.copy(alpha = 0.45f)) },
                             singleLine = true,
                             enabled = !busy,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             colors = fieldColors,
+                            supportingText = {
+                                if (otpError != null) {
+                                    Text(text = otpError ?: "", color = p.error, fontSize = 12.sp)
+                                }
+                            },
                         )
                         Spacer(Modifier.height(10.dp))
                         OutlinedTextField(
                             value = newPassword,
-                            onValueChange = { newPassword = it },
+                            onValueChange = {
+                                newPassword = it
+                                newPasswordError = null
+                            },
                             modifier = Modifier.fillMaxWidth(),
+                            isError = newPasswordError != null,
                             label = { Text("New password") },
                             singleLine = true,
                             enabled = !busy,
                             visualTransformation = PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             colors = fieldColors,
+                            supportingText = {
+                                if (newPasswordError != null) {
+                                    Text(text = newPasswordError ?: "", color = p.error, fontSize = 12.sp)
+                                } else {
+                                    Text(
+                                        text = "Minimum 6 characters.",
+                                        color = p.textSecondary,
+                                        fontSize = 12.sp,
+                                    )
+                                }
+                            },
                         )
                         Spacer(Modifier.height(10.dp))
                         OutlinedTextField(
                             value = confirmPassword,
-                            onValueChange = { confirmPassword = it },
+                            onValueChange = {
+                                confirmPassword = it
+                                confirmPasswordError = null
+                            },
                             modifier = Modifier.fillMaxWidth(),
+                            isError = confirmPasswordError != null,
                             label = { Text("Confirm new password") },
                             singleLine = true,
                             enabled = !busy,
                             visualTransformation = PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             colors = fieldColors,
+                            supportingText = {
+                                if (confirmPasswordError != null) {
+                                    Text(text = confirmPasswordError ?: "", color = p.error, fontSize = 12.sp)
+                                }
+                            },
                         )
                         Spacer(Modifier.height(14.dp))
                         Button(
                             onClick = {
-                                when {
-                                    otp.length != 6 ->
-                                        scope.launch { snackbar.showError("Enter the 6-digit code") }
-                                    newPassword.length < 4 ->
-                                        scope.launch { snackbar.showError("Password must be at least 4 characters") }
-                                    newPassword != confirmPassword ->
-                                        scope.launch { snackbar.showError("Passwords do not match") }
-                                    else -> scope.launch {
-                                        busy = true
-                                        feedback = null
-                                        val r = AuthRepository.completePasswordReset(
-                                            email = email,
-                                            otp = otp,
-                                            newPassword = newPassword,
+                                otpError = null
+                                newPasswordError = null
+                                confirmPasswordError = null
+
+                                val nextOtpError = if (otp.length != 6) "Enter the 6-digit OTP." else null
+                                val nextNewPasswordError =
+                                    if (newPassword.length < 6) "Password must be at least 6 characters." else null
+                                val nextConfirmPasswordError = when {
+                                    confirmPassword.isBlank() -> "Please confirm your new password."
+                                    newPassword != confirmPassword -> "Passwords do not match."
+                                    else -> null
+                                }
+                                if (nextOtpError != null || nextNewPasswordError != null || nextConfirmPasswordError != null) {
+                                    otpError = nextOtpError
+                                    newPasswordError = nextNewPasswordError
+                                    confirmPasswordError = nextConfirmPasswordError
+                                    return@Button
+                                }
+
+                                scope.launch {
+                                    busy = true
+                                    feedback = null
+                                    val r = AuthRepository.completePasswordReset(
+                                        email = email,
+                                        otp = otp,
+                                        newPassword = newPassword,
+                                    )
+                                    busy = false
+                                    r.onSuccess {
+                                        snackbar.showSuccess(
+                                            "Password updated. Sign in with your new password.",
                                         )
-                                        busy = false
-                                        r.onSuccess {
-                                            snackbar.showSuccess(
-                                                "Password updated. Sign in with your new password.",
-                                            )
-                                            delay(450)
-                                            onBack()
-                                        }
-                                        r.onFailure {
-                                            feedback = AuthScreenFeedback(
-                                                isError = true,
-                                                title = "Could not reset password",
-                                                detail = it.message ?: "Check the code and try again.",
-                                            )
-                                        }
+                                        onBack()
+                                    }
+                                    r.onFailure {
+                                        feedback = AuthScreenFeedback(
+                                            isError = true,
+                                            title = "Could not reset password",
+                                            detail = it.message ?: "Check the code and try again.",
+                                        )
                                     }
                                 }
                             },
@@ -331,7 +410,64 @@ fun ForgotPasswordScreenNew(
                                 contentColor = p.onPrimaryButton,
                             ),
                         ) {
-                            Text(text = "Reset password", fontWeight = FontWeight.Bold)
+                            if (busy) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = p.onPrimaryButton,
+                                    )
+                                    Spacer(Modifier.size(8.dp))
+                                    Text(text = "Updating...", fontWeight = FontWeight.Bold)
+                                }
+                            } else {
+                                Text(text = "Reset password", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        TextButton(
+                            onClick = {
+                                if (busy || resendCooldownSec > 0) return@TextButton
+                                scope.launch {
+                                    busy = true
+                                    feedback = null
+                                    val r = AuthRepository.requestPasswordResetOtp(email)
+                                    busy = false
+                                    r.onSuccess { body ->
+                                        if (body.ok) {
+                                            resendCooldownSec = 30
+                                            snackbar.showSuccess(
+                                                body.message?.takeIf { it.isNotBlank() } ?: "Code resent to your email.",
+                                            )
+                                        } else {
+                                            feedback = AuthScreenFeedback(
+                                                isError = true,
+                                                title = "Could not resend code",
+                                                detail = body.error ?: "Please try again.",
+                                            )
+                                        }
+                                    }
+                                    r.onFailure {
+                                        feedback = AuthScreenFeedback(
+                                            isError = true,
+                                            title = "Could not resend code",
+                                            detail = it.message ?: "Check your connection and try again.",
+                                        )
+                                    }
+                                }
+                            },
+                            enabled = !busy && resendCooldownSec == 0,
+                            modifier = Modifier.padding(top = 4.dp),
+                        ) {
+                            Text(
+                                text = if (resendCooldownSec > 0) {
+                                    "Resend code in ${resendCooldownSec}s"
+                                } else {
+                                    "Resend code"
+                                },
+                                color = if (resendCooldownSec > 0) p.textSecondary else p.accent,
+                            )
                         }
                         TextButton(
                             onClick = {
@@ -340,6 +476,11 @@ fun ForgotPasswordScreenNew(
                                     otp = ""
                                     newPassword = ""
                                     confirmPassword = ""
+                                    otpError = null
+                                    newPasswordError = null
+                                    confirmPasswordError = null
+                                    emailError = null
+                                    resendCooldownSec = 0
                                     feedback = null
                                 }
                             },

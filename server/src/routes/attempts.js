@@ -27,6 +27,19 @@ router.post('/', async (req, res) => {
   }
 
   try {
+    if (!catalog) {
+      const matched = await pool.query(
+        `SELECT id::text AS id
+         FROM tests
+         WHERE lower(trim(title)) = lower(trim($1))
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [name],
+      );
+      if (matched.rows[0]) {
+        catalog = matched.rows[0].id;
+      }
+    }
     const ins = await pool.query(
       `INSERT INTO test_attempts (user_id, test_name, correct, total, completed_at, test_catalog_id)
        VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid)

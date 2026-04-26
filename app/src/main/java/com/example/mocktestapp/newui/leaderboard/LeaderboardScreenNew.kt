@@ -26,15 +26,19 @@ import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,9 +49,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.mocktestapp.data.AppPreferencesRepository
 import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
+import kotlinx.coroutines.launch
 
 @Composable
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -58,21 +64,31 @@ fun LeaderboardScreenNew(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
 
-    var selectedTest by remember { mutableStateOf("All tests") }
     var selectedRange by remember { mutableStateOf(TimeRangeFilter.Weekly) }
     var selectedCity by remember { mutableStateOf("All cities") }
     var selectedState by remember { mutableStateOf("All states") }
+    var searchQuery by remember { mutableStateOf("") }
     var showFilterSheet by remember { mutableStateOf(false) }
     val filterSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    var tests by remember { mutableStateOf<List<ContentRepository.LeaderboardFilterTestRemote>>(emptyList()) }
     var cities by remember { mutableStateOf<List<String>>(emptyList()) }
     var states by remember { mutableStateOf<List<String>>(emptyList()) }
-    var leaderboardRows by remember { mutableStateOf<List<ContentRepository.LeaderboardItemRemote>>(emptyList()) }
+    var leaderboardTestRows by remember { mutableStateOf<List<ContentRepository.LeaderboardTestSummaryRemote>>(emptyList()) }
+    val expandedRows = remember { mutableStateMapOf<String, List<ContentRepository.LeaderboardItemRemote>>() }
+    var expandedTestId by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val profile by AppPreferencesRepository.drawerUserProfile.collectAsState(
+        initial = AppPreferencesRepository.DrawerUserProfile(
+            displayName = "",
+            emailLine = "",
+            userIdFormatted = null,
+        ),
+    )
+    val scoreVisible by AppPreferencesRepository.scoreVisibilityEnabled.collectAsState(initial = true)
+    val currentDisplayNameKey = profile.displayName.trim().lowercase()
 
     LaunchedEffect(Unit) {
         val filters = ContentRepository.loadLeaderboardFilters()
-        tests = filters.tests.distinctBy { it.title.trim().lowercase() }
         cities = filters.cities
             .map { it.trim() }
             .filter { it.isNotEmpty() && it.lowercase() != "other" && it.lowercase() != "not listed" && it.lowercase() != "notlisted" }
@@ -83,10 +99,7 @@ fun LeaderboardScreenNew(
             .distinctBy { it.lowercase() }
     }
 
-    LaunchedEffect(tests, cities, states) {
-        if (selectedTest != "All tests" && tests.none { it.title.equals(selectedTest, ignoreCase = true) }) {
-            selectedTest = "All tests"
-        }
+    LaunchedEffect(cities, states) {
         if (selectedCity != "All cities" && cities.none { it.equals(selectedCity, ignoreCase = true) }) {
             selectedCity = "All cities"
         }
@@ -94,14 +107,25 @@ fun LeaderboardScreenNew(
             selectedState = "All states"
         }
     }
-    LaunchedEffect(selectedRange, selectedTest, selectedCity, selectedState, tests) {
-        val testId = tests.firstOrNull { it.title == selectedTest }?.id
-        leaderboardRows = ContentRepository.loadLeaderboard(
+    LaunchedEffect(selectedRange, selectedCity, selectedState) {
+        leaderboardTestRows = ContentRepository.loadLeaderboardTests(
             range = if (selectedRange == TimeRangeFilter.Weekly) "weekly" else "monthly",
             city = selectedCity.takeUnless { it == "All cities" },
             state = selectedState.takeUnless { it == "All states" },
-            testCatalogId = testId,
         )
+        expandedRows.clear()
+        val first = leaderboardTestRows.firstOrNull()
+        expandedTestId = first?.testId
+        if (first != null) {
+            scope.launch {
+                expandedRows[first.testId] = ContentRepository.loadLeaderboardByTest(
+                    testId = first.testId,
+                    range = if (selectedRange == TimeRangeFilter.Weekly) "weekly" else "monthly",
+                    city = selectedCity.takeUnless { it == "All cities" },
+                    state = selectedState.takeUnless { it == "All states" },
+                )
+            }
+        }
     }
 
     if (showFilterSheet) {
@@ -111,9 +135,6 @@ fun LeaderboardScreenNew(
             containerColor = p.surface,
         ) {
             AdvancedFiltersSheet(
-                tests = listOf("All tests") + tests.map { it.title }.distinctBy { it.lowercase() },
-                selectedTest = selectedTest,
-                onSelectTest = { selectedTest = it },
                 cities = listOf("All cities") + cities.distinctBy { it.lowercase() },
                 selectedCity = selectedCity,
                 onSelectCity = { selectedCity = it },
@@ -156,7 +177,7 @@ fun LeaderboardScreenNew(
                 Spacer(Modifier.weight(1f))
                 LeaderboardScopeChip(
                     label = "More Filters",
-                    selected = selectedTest != "All tests" || selectedCity != "All cities" || selectedState != "All states",
+                    selected = selectedCity != "All cities" || selectedState != "All states",
                     onClick = { showFilterSheet = true },
                     modifier = Modifier.width(132.dp),
                 )
@@ -183,22 +204,60 @@ fun LeaderboardScreenNew(
 
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "Showing ${leaderboardRows.size} users",
+                text = "Showing ${leaderboardTestRows.size} tests",
                 color = p.textSecondary,
                 fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("Search test or user") },
             )
 
             Spacer(Modifier.height(16.dp))
 
+            val queryKey = searchQuery.trim().lowercase()
+            val visibleTests = leaderboardTestRows.filter { testRow ->
+                if (queryKey.isBlank()) return@filter true
+                if (testRow.testTitle.lowercase().contains(queryKey)) return@filter true
+                expandedRows[testRow.testId].orEmpty().any { u ->
+                    u.name.lowercase().contains(queryKey)
+                }
+            }
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                itemsIndexed(leaderboardRows) { index, user ->
-                    LeaderboardRow(
-                        rank = user.rank.takeIf { it > 0 } ?: (index + 1),
-                        name = user.name,
-                        scoreText = "${user.score}/500 • ${user.city.ifBlank { user.state }}",
+                itemsIndexed(visibleTests) { _, testRow ->
+                    val isExpanded = expandedTestId == testRow.testId
+                    LeaderboardTestCard(
+                        testTitle = testRow.testTitle,
+                        participants = testRow.participantsCount,
+                        attempts = testRow.attemptsCount,
+                        expanded = isExpanded,
+                        onToggle = {
+                            if (isExpanded) {
+                                expandedTestId = null
+                            } else {
+                                expandedTestId = testRow.testId
+                                if (!expandedRows.containsKey(testRow.testId)) {
+                                    scope.launch {
+                                        expandedRows[testRow.testId] = ContentRepository.loadLeaderboardByTest(
+                                            testId = testRow.testId,
+                                            range = if (selectedRange == TimeRangeFilter.Weekly) "weekly" else "monthly",
+                                            city = selectedCity.takeUnless { it == "All cities" },
+                                            state = selectedState.takeUnless { it == "All states" },
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                        rows = expandedRows[testRow.testId].orEmpty(),
+                        currentDisplayNameKey = currentDisplayNameKey,
+                        scoreVisible = scoreVisible,
                     )
                 }
             }
@@ -270,9 +329,6 @@ private fun FilterChipRow(
 
 @Composable
 private fun AdvancedFiltersSheet(
-    tests: List<String>,
-    selectedTest: String,
-    onSelectTest: (String) -> Unit,
     cities: List<String>,
     selectedCity: String,
     onSelectCity: (String) -> Unit,
@@ -293,19 +349,6 @@ private fun AdvancedFiltersSheet(
             fontWeight = FontWeight.ExtraBold,
         )
         Spacer(Modifier.height(12.dp))
-        Text(
-            text = "Test",
-            color = p.textSecondary,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(Modifier.height(6.dp))
-        FilterChipRow(
-            options = tests,
-            selected = selectedTest,
-            onSelect = onSelectTest,
-        )
-        Spacer(Modifier.height(10.dp))
         Text(
             text = "City",
             color = p.textSecondary,
@@ -340,11 +383,19 @@ private fun LeaderboardRow(
     rank: Int,
     name: String,
     scoreText: String,
+    isCurrentUser: Boolean,
 ) {
     val p = mockTestPalette()
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isCurrentUser) p.surfaceElevated else Color.Transparent)
+            .border(
+                width = if (isCurrentUser) 1.dp else 0.dp,
+                color = if (isCurrentUser) p.accent.copy(alpha = 0.3f) else Color.Transparent,
+                shape = RoundedCornerShape(10.dp),
+            )
             .padding(horizontal = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -374,10 +425,10 @@ private fun LeaderboardRow(
         Spacer(Modifier.size(12.dp))
 
         Text(
-            text = name,
+            text = if (isCurrentUser) "$name (You)" else name,
             color = p.textPrimary,
             fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = if (isCurrentUser) FontWeight.ExtraBold else FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
         )
 
@@ -387,5 +438,83 @@ private fun LeaderboardRow(
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
         )
+    }
+}
+
+@Composable
+private fun LeaderboardTestCard(
+    testTitle: String,
+    participants: Int,
+    attempts: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    rows: List<ContentRepository.LeaderboardItemRemote>,
+    currentDisplayNameKey: String,
+    scoreVisible: Boolean,
+) {
+    val p = mockTestPalette()
+    val shape = RoundedCornerShape(14.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(p.surface)
+            .border(1.dp, p.border.copy(alpha = 0.16f), shape)
+            .clickable(onClick = onToggle)
+            .padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = if (expanded) "−" else "+",
+                color = p.accent,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 20.sp,
+                modifier = Modifier.width(22.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = testTitle,
+                    color = p.textPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "$participants users • $attempts attempts",
+                    color = p.textSecondary,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+        if (expanded) {
+            Spacer(Modifier.height(10.dp))
+            if (rows.isEmpty()) {
+                Text(
+                    text = "No attempts found for this test in selected filters.",
+                    color = p.textSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    rows.forEachIndexed { idx, user ->
+                        val placeText = user.city.ifBlank { user.state }
+                        LeaderboardRow(
+                            rank = user.rank.takeIf { it > 0 } ?: (idx + 1),
+                            name = user.name,
+                            scoreText = (if (scoreVisible) {
+                                "${user.score} pts • ${user.totalCorrect}/${user.totalQuestions}"
+                            } else {
+                                "-"
+                            }) + (if (placeText.isNotBlank()) " • $placeText" else ""),
+                            isCurrentUser = currentDisplayNameKey.isNotBlank() &&
+                                user.name.trim().lowercase() == currentDisplayNameKey,
+                        )
+                    }
+                }
+            }
+        }
     }
 }

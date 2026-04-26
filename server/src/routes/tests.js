@@ -2,6 +2,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
+const { requireAuth } = require('../middleware/requireAuth');
 
 const router = express.Router();
 
@@ -24,6 +25,35 @@ function resolveExamDate(row) {
   const shifted = new Date(base);
   shifted.setDate(shifted.getDate() + jump);
   return toIsoDate(shifted);
+}
+
+function toStartOfDayMs(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+function isApplicationFromOlderCycle(row, appliedAtIso) {
+  if (!appliedAtIso) return false;
+  const appliedAt = new Date(appliedAtIso);
+  if (Number.isNaN(appliedAt.getTime())) return false;
+  const now = new Date();
+  const nowStartMs = toStartOfDayMs(now);
+  const resolved = resolveExamDate(row);
+  if (resolved) {
+    const cycleExamDate = new Date(`${resolved}T00:00:00`);
+    if (!Number.isNaN(cycleExamDate.getTime())) {
+      const cycleExamMs = toStartOfDayMs(cycleExamDate);
+      if (row.dynamic_date_enabled) {
+        const cycleDays = Math.max(0, Number(row.date_cycle_days || 0));
+        if (cycleDays > 0) {
+          const cycleStartMs = cycleExamMs - (cycleDays * 24 * 60 * 60 * 1000);
+          return appliedAt.getTime() < cycleStartMs;
+        }
+      }
+      return nowStartMs > cycleExamMs && appliedAt.getTime() < cycleExamMs;
+    }
+  }
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  return now.getTime() - appliedAt.getTime() >= oneDayMs;
 }
 
 function mapTest(row) {
@@ -49,6 +79,8 @@ function mapTest(row) {
     examMode: String(row.exam_mode || 'Practice'),
     negativeMarkingText: String(row.negative_marking_text || 'No'),
     testTypeLabel: String(row.test_type_label || ''),
+    badgeEnabled: row.badge_enabled === true,
+    badgeText: String(row.badge_text || 'Live'),
     validUntil: row.valid_until ? toIsoDate(new Date(row.valid_until)) : null,
     answerKeyReleaseAt: row.answer_key_release_at ? new Date(row.answer_key_release_at).toISOString() : null,
     resultReleaseAt: row.result_release_at ? new Date(row.result_release_at).toISOString() : null,
@@ -67,7 +99,7 @@ router.get('/', async (req, res) => {
     if (sub && kind && ['mock', 'quiz'].includes(kind)) {
       q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind,
                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
-                  language_mode, exam_mode, negative_marking_text, test_type_label, valid_until, answer_key_release_at, result_release_at,
+                  language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
                   dynamic_date_enabled, date_cycle_days
            FROM tests
            WHERE is_published = true AND test_kind = $1
@@ -78,7 +110,7 @@ router.get('/', async (req, res) => {
     } else if (sub) {
       q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind,
                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
-                  language_mode, exam_mode, negative_marking_text, test_type_label, valid_until, answer_key_release_at, result_release_at,
+                  language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
                   dynamic_date_enabled, date_cycle_days
            FROM tests
            WHERE is_published = true AND subcategory ILIKE $1
@@ -88,7 +120,7 @@ router.get('/', async (req, res) => {
     } else if (kind && ['mock', 'quiz'].includes(kind)) {
       q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind,
                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
-                  language_mode, exam_mode, negative_marking_text, test_type_label, valid_until, answer_key_release_at, result_release_at,
+                  language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
                   dynamic_date_enabled, date_cycle_days
            FROM tests
            WHERE is_published = true AND test_kind = $1
@@ -98,7 +130,7 @@ router.get('/', async (req, res) => {
     } else {
       q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind,
                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
-                  language_mode, exam_mode, negative_marking_text, test_type_label, valid_until, answer_key_release_at, result_release_at,
+                  language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
                   dynamic_date_enabled, date_cycle_days
            FROM tests
            WHERE is_published = true
@@ -111,6 +143,156 @@ router.get('/', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to list tests' });
+  }
+});
+
+router.get('/:id/questions', async (req, res) => {
+  const id = String(req.params.id || '').trim();
+  if (!id) return res.status(400).json({ error: 'test id required' });
+  try {
+    const testRes = await pool.query(
+      `SELECT id
+       FROM tests
+       WHERE id = $1::uuid AND is_published = true
+       LIMIT 1`,
+      [id],
+    );
+    if (!testRes.rows[0]) return res.status(404).json({ error: 'Test not found' });
+    const { rows } = await pool.query(
+      `SELECT id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation
+       FROM questions
+       WHERE test_id = $1::uuid
+       ORDER BY position ASC, id ASC`,
+      [id],
+    );
+    const items = rows.map((row) => ({
+      id: Number(row.id),
+      position: Number(row.position || 0),
+      questionPrompt: String(row.stem || ''),
+      options: [
+        String(row.choice_a || ''),
+        String(row.choice_b || ''),
+        String(row.choice_c || ''),
+        String(row.choice_d || ''),
+      ].map((x) => x.trim()),
+      correctIndex: Number(row.correct_index || 0),
+      explanation: String(row.explanation || ''),
+    }));
+    return res.json({ items });
+  } catch (e) {
+    if (e.code === '22P02') {
+      return res.status(400).json({ error: 'Invalid test id' });
+    }
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to list questions' });
+  }
+});
+
+router.post('/:id/apply', requireAuth, async (req, res) => {
+  const id = String(req.params.id || '').trim();
+  if (!id) return res.status(400).json({ error: 'test id required' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const testRes = await client.query(
+      `SELECT id, title, capacity_total, enrolled_count, exam_date, dynamic_date_enabled, date_cycle_days
+       FROM tests
+       WHERE id = $1::uuid
+       LIMIT 1
+       FOR UPDATE`,
+      [id],
+    );
+    const test = testRes.rows[0];
+    if (!test) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Test not found' });
+    }
+    const alreadyRes = await client.query(
+      `SELECT applied_at
+       FROM test_applications
+       WHERE user_id = $1::uuid AND test_id = $2::uuid
+       LIMIT 1`,
+      [req.userId, id],
+    );
+    const capacity = Math.max(0, Number(test.capacity_total || 0));
+    const currentEnrolled = Math.max(0, Number(test.enrolled_count || 0));
+    const existing = alreadyRes.rows[0];
+    if (existing && !isApplicationFromOlderCycle(test, existing.applied_at)) {
+      await client.query('COMMIT');
+      const remaining = capacity > 0 ? Math.max(0, capacity - currentEnrolled) : 0;
+      return res.json({
+        ok: true,
+        alreadyApplied: true,
+        message: 'You already applied for this test',
+        testId: String(test.id),
+        testTitle: String(test.title || 'Test'),
+        enrolledCount: currentEnrolled,
+        capacityTotal: capacity,
+        remainingSeats: remaining,
+      });
+    }
+    if (existing) {
+      await client.query(
+        `UPDATE test_applications
+         SET applied_at = now()
+         WHERE user_id = $1::uuid AND test_id = $2::uuid`,
+        [req.userId, id],
+      );
+      await client.query('COMMIT');
+      const remaining = capacity > 0 ? Math.max(0, capacity - currentEnrolled) : 0;
+      return res.status(201).json({
+        ok: true,
+        alreadyApplied: false,
+        message: 'Re-enrolled for new test cycle',
+        testId: String(test.id),
+        testTitle: String(test.title || 'Test'),
+        enrolledCount: currentEnrolled,
+        capacityTotal: capacity,
+        remainingSeats: remaining,
+      });
+    }
+    if (capacity > 0 && currentEnrolled >= capacity) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'No seats left for this test' });
+    }
+    await client.query(
+      `INSERT INTO test_applications (user_id, test_id) VALUES ($1::uuid, $2::uuid)`,
+      [req.userId, id],
+    );
+    const updRes = await client.query(
+      `UPDATE tests
+       SET enrolled_count = enrolled_count + 1, updated_at = now()
+       WHERE id = $1::uuid
+       RETURNING id, title, capacity_total, enrolled_count`,
+      [id],
+    );
+    const updated = updRes.rows[0];
+    await client.query('COMMIT');
+    const updatedCapacity = Math.max(0, Number(updated.capacity_total || 0));
+    const updatedEnrolled = Math.max(0, Number(updated.enrolled_count || 0));
+    const remaining = updatedCapacity > 0 ? Math.max(0, updatedCapacity - updatedEnrolled) : 0;
+    return res.status(201).json({
+      ok: true,
+      alreadyApplied: false,
+      message: 'Application submitted successfully',
+      testId: String(updated.id),
+      testTitle: String(updated.title || 'Test'),
+      enrolledCount: updatedEnrolled,
+      capacityTotal: updatedCapacity,
+      remainingSeats: remaining,
+    });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (e.code === '22P02') {
+      return res.status(400).json({ error: 'Invalid test id' });
+    }
+    if (e.code === '42P01') {
+      return res.status(500).json({ error: 'Apply feature not initialized. Restart server once.' });
+    }
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to apply for test' });
+  } finally {
+    client.release();
   }
 });
 

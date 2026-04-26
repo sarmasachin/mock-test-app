@@ -44,6 +44,27 @@ function parseRange(raw) {
   return null;
 }
 
+function addRangeFilter(filters, range, alias = 'ta') {
+  if (range === 'weekly') {
+    filters.push(`${alias}.completed_at >= now() - interval '7 days'`);
+  } else if (range === 'monthly') {
+    filters.push(`${alias}.completed_at >= now() - interval '30 days'`);
+  }
+}
+
+function buildCommonLocationFilters(filters, params, idxRef, city, state, userAlias = 'u') {
+  if (city) {
+    filters.push(`${userAlias}.signup_district ILIKE $${idxRef.value}`);
+    params.push(city);
+    idxRef.value += 1;
+  }
+  if (state) {
+    filters.push(`${userAlias}.signup_state ILIKE $${idxRef.value}`);
+    params.push(state);
+    idxRef.value += 1;
+  }
+}
+
 router.get('/', async (req, res) => {
   const range = parseRange(req.query.range);
   if (!range) {
@@ -59,11 +80,7 @@ router.get('/', async (req, res) => {
   const params = [];
   let idx = 1;
 
-  if (range === 'weekly') {
-    filters.push(`ta.completed_at >= now() - interval '7 days'`);
-  } else if (range === 'monthly') {
-    filters.push(`ta.completed_at >= now() - interval '30 days'`);
-  }
+  addRangeFilter(filters, range, 'ta');
 
   if (testCatalogId) {
     filters.push(`ta.test_catalog_id = $${idx}::uuid`);
@@ -94,13 +111,13 @@ router.get('/', async (req, res) => {
       max(u.signup_district) AS signup_district,
       sum(ta.correct) AS total_correct,
       sum(ta.total) AS total_questions,
-      round((sum(ta.correct)::numeric / nullif(sum(ta.total), 0)) * 500)::int AS score_out_of_500,
+      sum(ta.correct) AS score_points,
       max(ta.completed_at) AS last_attempt_at
     FROM test_attempts ta
     INNER JOIN users u ON u.id = ta.user_id
     ${whereSql}
     GROUP BY ta.user_id
-    ORDER BY score_out_of_500 DESC, total_correct DESC, last_attempt_at ASC
+    ORDER BY score_points DESC, total_correct DESC, last_attempt_at ASC
     LIMIT $${idx};
   `;
 
@@ -113,7 +130,7 @@ router.get('/', async (req, res) => {
         name: row.display_name || 'User',
         city: row.signup_district || '',
         state: row.signup_state || '',
-        score: row.score_out_of_500 || 0,
+        score: Number(row.score_points || 0),
         totalCorrect: Number(row.total_correct || 0),
         totalQuestions: Number(row.total_questions || 0),
         lastAttemptAt: row.last_attempt_at,
@@ -125,6 +142,130 @@ router.get('/', async (req, res) => {
     }
     console.error(e);
     return res.status(500).json({ error: 'Failed to load leaderboard' });
+  }
+});
+
+router.get('/tests', async (req, res) => {
+  const range = parseRange(req.query.range || 'all');
+  if (!range) {
+    return res.status(400).json({ error: 'range must be weekly, monthly or all' });
+  }
+  const city = String(req.query.city || '').trim();
+  const state = String(req.query.state || '').trim();
+  const limit = parseLimit(req.query.limit);
+  const params = [];
+  const filters = [`COALESCE(ta.test_catalog_id, tm.id) IS NOT NULL`];
+  const idxRef = { value: 1 };
+  addRangeFilter(filters, range, 'ta');
+  buildCommonLocationFilters(filters, params, idxRef, city, state, 'u');
+  params.push(limit);
+
+  const whereSql = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  const q = `
+    SELECT
+      COALESCE(t.id, tm.id)::text AS test_id,
+      COALESCE(t.title, tm.title) AS test_title,
+      COUNT(*)::int AS attempts_count,
+      COUNT(DISTINCT ta.user_id)::int AS participants_count,
+      MAX(ta.completed_at) AS last_attempt_at
+    FROM test_attempts ta
+    INNER JOIN users u ON u.id = ta.user_id
+    LEFT JOIN tests t ON t.id = ta.test_catalog_id
+    LEFT JOIN tests tm ON ta.test_catalog_id IS NULL AND lower(trim(tm.title)) = lower(trim(ta.test_name))
+    ${whereSql}
+    GROUP BY COALESCE(t.id, tm.id), COALESCE(t.title, tm.title)
+    ORDER BY last_attempt_at DESC
+    LIMIT $${idxRef.value};
+  `;
+
+  try {
+    const { rows } = await pool.query(q, params);
+    return res.json({
+      items: rows.map((row) => ({
+        testId: row.test_id,
+        testTitle: row.test_title || 'Test',
+        attemptsCount: Number(row.attempts_count || 0),
+        participantsCount: Number(row.participants_count || 0),
+        lastAttemptAt: row.last_attempt_at,
+      })),
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load leaderboard tests' });
+  }
+});
+
+router.get('/test/:testId', async (req, res) => {
+  const range = parseRange(req.query.range || 'weekly');
+  if (!range) {
+    return res.status(400).json({ error: 'range must be weekly, monthly or all' });
+  }
+  const testId = String(req.params.testId || '').trim();
+  if (!testId) {
+    return res.status(400).json({ error: 'testId required' });
+  }
+  const city = String(req.query.city || '').trim();
+  const state = String(req.query.state || '').trim();
+  const limit = parseLimit(req.query.limit);
+  const params = [];
+  const filters = [`COALESCE(ta.test_catalog_id, tm.id) = $1::uuid`];
+  params.push(testId);
+  const idxRef = { value: 2 };
+  addRangeFilter(filters, range, 'ta');
+  buildCommonLocationFilters(filters, params, idxRef, city, state, 'u');
+  params.push(limit);
+  const whereSql = `WHERE ${filters.join(' AND ')}`;
+  const q = `
+    SELECT
+      ta.user_id AS user_id,
+      max(u.display_name) AS display_name,
+      max(u.signup_state) AS signup_state,
+      max(u.signup_district) AS signup_district,
+      sum(ta.correct) AS total_correct,
+      sum(ta.total) AS total_questions,
+      sum(ta.correct) AS score_points,
+      max(ta.completed_at) AS last_attempt_at
+    FROM test_attempts ta
+    INNER JOIN users u ON u.id = ta.user_id
+    LEFT JOIN tests tm ON ta.test_catalog_id IS NULL AND lower(trim(tm.title)) = lower(trim(ta.test_name))
+    ${whereSql}
+    GROUP BY ta.user_id
+    ORDER BY score_points DESC, total_correct DESC, last_attempt_at ASC
+    LIMIT $${idxRef.value};
+  `;
+
+  try {
+    const testRes = await pool.query(
+      `SELECT id::text AS id, title FROM tests WHERE id = $1::uuid LIMIT 1`,
+      [testId],
+    );
+    if (!testRes.rows[0]) {
+      return res.status(404).json({ error: 'Test not found' });
+    }
+    const { rows } = await pool.query(q, params);
+    return res.json({
+      test: {
+        testId: testRes.rows[0].id,
+        testTitle: testRes.rows[0].title || 'Test',
+      },
+      items: rows.map((row, index) => ({
+        rank: index + 1,
+        userId: row.user_id,
+        name: row.display_name || 'User',
+        city: row.signup_district || '',
+        state: row.signup_state || '',
+        score: Number(row.score_points || 0),
+        totalCorrect: Number(row.total_correct || 0),
+        totalQuestions: Number(row.total_questions || 0),
+        lastAttemptAt: row.last_attempt_at,
+      })),
+    });
+  } catch (e) {
+    if (e.code === '22P02') {
+      return res.status(400).json({ error: 'Invalid testId' });
+    }
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load test leaderboard' });
   }
 });
 

@@ -2,6 +2,7 @@ package com.example.mocktestapp.newui.history
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import com.example.mocktestapp.newui.leaderboard.LeaderboardScreenNew
 
 @Composable
 fun ResultsHistoryScreenNew(
@@ -9,11 +10,9 @@ fun ResultsHistoryScreenNew(
     onBack: () -> Unit,
     showAppBarBack: Boolean = true,
 ) {
-    HistoryScreenNew(
+    LeaderboardScreenNew(
         modifier = modifier,
         onBack = onBack,
-        title = "Results",
-        showAppBarBack = showAppBarBack,
     )
 }
 

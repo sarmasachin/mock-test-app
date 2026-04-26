@@ -29,6 +29,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 
@@ -88,20 +91,53 @@ fun ReviewScreenNew(
             )
             Spacer(Modifier.height(18.dp))
 
-            val questions = dummyReviewItems()
-
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                itemsIndexed(questions) { index, item ->
-                    ReviewQuestionCard(
-                        index = index,
-                        title = item.title,
-                        yourAnswer = item.yourAnswer,
-                        correctAnswer = item.correctAnswer,
-                        onOpenSolution = { onOpenSolution(index + 1) },
+            val questions by produceState(initialValue = emptyList<ReviewItem>(), key1 = testName) {
+                value = ContentRepository.loadQuizQuestionsForTest(testName).map { q ->
+                    ReviewItem(
+                        title = q.title,
+                        yourAnswer = "Not available",
+                        correctAnswer = q.options.getOrNull(q.correctIndex).orEmpty().ifBlank { "Not available" },
+                        explanation = q.explanation,
                     )
+                }
+            }
+
+            if (questions.isEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surface),
+                    border = BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Review details are not available yet.",
+                            color = p.textPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = "This test has no published review questions.",
+                            color = p.textSecondary,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    itemsIndexed(questions) { index, item ->
+                        ReviewQuestionCard(
+                            index = index,
+                            title = item.title,
+                            yourAnswer = item.yourAnswer,
+                            correctAnswer = item.correctAnswer,
+                            onOpenSolution = { onOpenSolution(index + 1) },
+                        )
+                    }
                 }
             }
         }
@@ -112,23 +148,8 @@ private data class ReviewItem(
     val title: String,
     val yourAnswer: String,
     val correctAnswer: String,
+    val explanation: String,
 )
-
-private fun dummyReviewItems(): List<ReviewItem> {
-    val options = listOf("Option A", "Option B", "Option C", "Option D")
-    return List(10) { index ->
-        val qNo = index + 1
-        ReviewItem(
-            title = "Arithmetic Question $qNo",
-            yourAnswer = when (index % 3) {
-                0 -> "Option D"
-                1 -> "Not answered"
-                else -> "Option B"
-            },
-            correctAnswer = options[index % options.size],
-        )
-    }
-}
 
 @Composable
 private fun ReviewQuestionCard(
@@ -198,6 +219,19 @@ fun ReviewSolutionScreenNew(
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
+    val questions by produceState(initialValue = emptyList<ReviewItem>(), key1 = testName) {
+        value = ContentRepository.loadQuizQuestionsForTest(testName).map { q ->
+            ReviewItem(
+                title = q.title,
+                yourAnswer = "Not available",
+                correctAnswer = q.options.getOrNull(q.correctIndex).orEmpty().ifBlank { "Not available" },
+                explanation = q.explanation,
+            )
+        }
+    }
+    val totalQuestions = questions.size.coerceAtLeast(1)
+    val safeQuestionNo = questionNo.coerceIn(1, totalQuestions)
+    val activeQuestion = questions.getOrNull(safeQuestionNo - 1)
     Scaffold(
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0),
@@ -229,7 +263,7 @@ fun ReviewSolutionScreenNew(
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "$testName · Q$questionNo",
+                text = "$testName · Q$safeQuestionNo",
                 color = p.textSecondary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -241,9 +275,9 @@ fun ReviewSolutionScreenNew(
                     .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                repeat(10) { idx ->
+                repeat(totalQuestions) { idx ->
                     val q = idx + 1
-                    val selected = q == questionNo
+                    val selected = q == safeQuestionNo
                     val shape = RoundedCornerShape(10.dp)
                     Text(
                         text = "Q$q",
@@ -268,6 +302,22 @@ fun ReviewSolutionScreenNew(
                 border = BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
+                    activeQuestion?.let { question ->
+                        Text(
+                            text = question.title,
+                            color = p.textPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "Correct answer: ${question.correctAnswer}",
+                            color = p.success,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                    }
                     Text(
                         text = "Step-by-step solution",
                         color = p.textPrimary,
@@ -276,7 +326,9 @@ fun ReviewSolutionScreenNew(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "1) Read question carefully.\n2) Identify formula or concept.\n3) Solve each step and verify units.\n4) Match final value with options.\n\nDemo solution placeholder for Q$questionNo. Backend/CMS se real solution text bind kar sakte ho.",
+                        text = activeQuestion?.explanation?.ifBlank {
+                            "Detailed step-by-step solution is not available for Q$safeQuestionNo yet."
+                        } ?: "Detailed step-by-step solution is not available for Q$safeQuestionNo yet.",
                         color = p.textSecondary,
                         fontSize = 13.sp,
                         lineHeight = 19.sp,

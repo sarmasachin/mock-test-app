@@ -89,6 +89,30 @@ async function ensureOptionalColumns() {
       `ALTER TABLE tests
        ADD COLUMN IF NOT EXISTS result_release_at TIMESTAMPTZ`,
     );
+    await pool.query(
+      `ALTER TABLE tests
+       ADD COLUMN IF NOT EXISTS capacity_total INTEGER NOT NULL DEFAULT 0`,
+    );
+    await pool.query(
+      `ALTER TABLE tests
+       ADD COLUMN IF NOT EXISTS enrolled_count INTEGER NOT NULL DEFAULT 0`,
+    );
+    await pool.query(
+      `ALTER TABLE tests
+       ADD COLUMN IF NOT EXISTS badge_enabled BOOLEAN NOT NULL DEFAULT false`,
+    );
+    await pool.query(
+      `ALTER TABLE tests
+       ADD COLUMN IF NOT EXISTS badge_text VARCHAR(40) NOT NULL DEFAULT 'Live'`,
+    );
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS test_applications (
+         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+         applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+         PRIMARY KEY (user_id, test_id)
+       )`,
+    );
   } catch (e) {
     if (e && e.code === '42P01') return;
     console.error('optional_columns_init_error', e);

@@ -37,6 +37,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -60,6 +62,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.mocktestapp.BuildConfig
 import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
@@ -71,12 +74,26 @@ fun QuizScreenNew(
     modifier: Modifier = Modifier,
     testName: String,
     onBack: () -> Unit,
-    onSubmit: (Int, Int, Int, Long) -> Unit,
+    onSubmit: (Int, Int, Int, Int, Long) -> Unit,
 ) {
+    val defaultResultReleaseAtMs = remember {
+        System.currentTimeMillis() + BuildConfig.RESULT_RELEASE_DELAY_HOURS * 60L * 60L * 1000L
+    }
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
 
-    val totalQuestions = 10
+    var questionsLoaded by remember(testName) { mutableStateOf(false) }
+    val questions by produceState(initialValue = emptyList<QuizQuestion>(), key1 = testName) {
+        value = ContentRepository.loadQuizQuestionsForTest(testName).map {
+            QuizQuestion(
+                title = it.title,
+                options = it.options,
+                correctIndex = it.correctIndex,
+            )
+        }
+        questionsLoaded = true
+    }
+    val totalQuestions = questions.size
     var current by remember { mutableIntStateOf(0) }
     val answers = remember { mutableStateMapOf<Int, Int>() }
     var questionNavigationMode by remember { mutableStateOf("sequential") }
@@ -85,7 +102,7 @@ fun QuizScreenNew(
     var submitDialogSubtitle by remember { mutableStateOf("After submitting test you won't be able to re-attempt") }
     var resultReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(testName) {
         val instruction = ContentRepository.loadInstructionContent()
         submitDialogBrand = instruction?.submitDialogBrand?.ifBlank { submitDialogBrand } ?: submitDialogBrand
         submitDialogTitle = instruction?.submitDialogTitle?.ifBlank { submitDialogTitle } ?: submitDialogTitle
@@ -101,15 +118,16 @@ fun QuizScreenNew(
     }
 
     var remainingSeconds by remember { mutableIntStateOf(12 * 60) }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(testName, questionsLoaded, questions.size) {
+        if (!questionsLoaded || questions.isEmpty()) return@LaunchedEffect
         while (remainingSeconds > 0) {
             delay(1000)
             remainingSeconds -= 1
         }
-        val correct = answers.count { (q, ans) -> ans == (q % 4) }
+        val correct = answers.count { (q, ans) -> questions.getOrNull(q)?.correctIndex == ans }
         val answered = answers.size
         val wrong = (answered - correct).coerceAtLeast(0)
-        onSubmit(answered, correct, wrong, resultReleaseAtMs ?: (System.currentTimeMillis() + 2 * 60 * 1000L))
+        onSubmit(answered, correct, wrong, totalQuestions, resultReleaseAtMs ?: defaultResultReleaseAtMs)
     }
 
     val answeredCount = answers.size
@@ -132,6 +150,9 @@ fun QuizScreenNew(
         showExitConfirm = true
     }
 
+    val isLoadingQuestions = !questionsLoaded
+    val hasNoQuestions = questionsLoaded && questions.isEmpty()
+
     Scaffold(
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0),
@@ -143,9 +164,79 @@ fun QuizScreenNew(
                 .padding(padding)
                 .verticalScroll(rememberScrollState()),
         ) {
+            if (isLoadingQuestions || hasNoQuestions) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.Rounded.ArrowBack,
+                            contentDescription = "Back",
+                            tint = p.textPrimary,
+                        )
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "Quiz",
+                        color = p.textPrimary,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 18.sp,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = testName,
+                    color = p.primaryButton,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 18.sp,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                )
+                Spacer(Modifier.height(12.dp))
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.16f)),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = if (isLoadingQuestions) "Loading questions..." else "No questions available",
+                            color = p.textPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = if (isLoadingQuestions) {
+                                "Please wait while this test is prepared."
+                            } else {
+                                "This test has no published questions yet. Contact admin and try again later."
+                            },
+                            color = p.textSecondary,
+                            fontSize = 12.sp,
+                        )
+                        if (isLoadingQuestions) {
+                            Spacer(Modifier.height(12.dp))
+                            CircularProgressIndicator(color = p.accent)
+                        }
+                        Spacer(Modifier.height(14.dp))
+                        GhostButton(
+                            text = "Back",
+                            enabled = true,
+                            onClick = onBack,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+                return@Scaffold
+            }
+
             TopBar(
                 current = current + 1,
-                total = totalQuestions,
+                total = totalQuestions.coerceAtLeast(1),
                 remainingSeconds = remainingSeconds,
                 onBack = { showExitConfirm = true },
                 onSubmit = { showSubmitConfirm = true },
@@ -200,9 +291,11 @@ fun QuizScreenNew(
 
             Spacer(Modifier.height(14.dp))
 
-            val questionTitle = "Q${current + 1}. Arithmetic Question ${current + 1}"
+            val activeQuestion = questions.getOrElse(current) { questions.first() }
+            val questionTitle = "Q${current + 1}. ${activeQuestion.title}"
             QuestionCard(
                 title = questionTitle,
+                options = activeQuestion.options,
                 selected = answers[current],
                 onSelect = { option -> answers[current] = option },
             )
@@ -281,14 +374,20 @@ fun QuizScreenNew(
             onCancel = { showSubmitConfirm = false },
             onSubmit = {
                 showSubmitConfirm = false
-                val correct = answers.count { (q, ans) -> ans == (q % 4) }
+                val correct = answers.count { (q, ans) -> questions.getOrNull(q)?.correctIndex == ans }
                 val answered = answers.size
                 val wrong = (answered - correct).coerceAtLeast(0)
-                onSubmit(answered, correct, wrong, resultReleaseAtMs ?: (System.currentTimeMillis() + 2 * 60 * 1000L))
+                onSubmit(answered, correct, wrong, totalQuestions, resultReleaseAtMs ?: defaultResultReleaseAtMs)
             },
         )
     }
 }
+
+private data class QuizQuestion(
+    val title: String,
+    val options: List<String>,
+    val correctIndex: Int,
+)
 
 @Composable
 private fun SubmitTestDialog(
@@ -623,6 +722,7 @@ private fun QuestionChip(
 @Composable
 private fun QuestionCard(
     title: String,
+    options: List<String>,
     selected: Int?,
     onSelect: (Int) -> Unit,
 ) {
@@ -642,7 +742,6 @@ private fun QuestionCard(
             )
             Spacer(Modifier.height(12.dp))
 
-            val options = listOf("Option A", "Option B", "Option C", "Option D")
             options.forEachIndexed { idx, text ->
                 OptionRow(
                     text = text,

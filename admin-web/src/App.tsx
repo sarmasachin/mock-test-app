@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import {
   AnalyticsInsightsTabImpl,
@@ -64,6 +64,8 @@ type TestItem = {
   exam_mode?: string;
   negative_marking_text?: string;
   test_type_label?: string;
+  badge_enabled?: boolean;
+  badge_text?: string;
   valid_until?: string | null;
   answer_key_release_at?: string | null;
   result_release_at?: string | null;
@@ -169,9 +171,51 @@ type HomeNewsSlideItem = {
   imageUrl: string;
   enabled: boolean;
 };
+type PromoWidgetChip = {
+  id: string;
+  title: string;
+  subtitle: string;
+  icon: string;
+  enabled: boolean;
+};
+type PromoWidgetCard = {
+  id: string;
+  title: string;
+  subtitle: string;
+  buttonText: string;
+  bgColor: string;
+  enabled: boolean;
+};
+type StudentUpdateWidgetCard = {
+  id: string;
+  title: string;
+  subtitle: string;
+  iconUrl: string;
+  enabled: boolean;
+};
+type StudentUpdateWidgetPill = {
+  id: string;
+  title: string;
+  subtitle: string;
+  icon: string;
+  enabled: boolean;
+};
 type HomeContentSettings = {
   welcomeText: string;
   quickActionsTitle: string;
+  autoSaveEnabled: boolean;
+  themePreset: 'classic' | 'soft' | 'vibrant' | 'premium';
+  promoWidgetEnabled: boolean;
+  promoWidgetHtml: string;
+  promoWidgetChips: PromoWidgetChip[];
+  promoWidgetCards: PromoWidgetCard[];
+  studentUpdateWidgetEnabled: boolean;
+  studentUpdateWidgetHtml: string;
+  studentUpdateWidgetPills: StudentUpdateWidgetPill[];
+  studentUpdateWidgetCards: StudentUpdateWidgetCard[];
+  newsCategoryMenu: string[];
+  jobCategoryMenu: string[];
+  examCategoryMenu: string[];
   sections: HomeContentSection[];
   quickActionSections: HomeQuickActionSection[];
   banners: HomeBannerItem[];
@@ -300,6 +344,7 @@ function App() {
   const [messageType, setMessageType] = useState<'info' | 'error' | 'success'>('info');
   const [tab, setTab] = useState<Tab>('dashboard');
   const [selectedQuestionTestId, setSelectedQuestionTestId] = useState<string>('');
+  const sideNavRef = useRef<HTMLElement | null>(null);
 
   const authedApi = useMemo(() => {
     const instance = axios.create({ baseURL: apiBase, timeout: 15000 });
@@ -309,6 +354,19 @@ function App() {
     });
     return instance;
   }, [token]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || window.innerWidth > 900) return;
+    const nav = sideNavRef.current;
+    if (!nav) return;
+    const activeBtn = nav.querySelector('button.active');
+    if (!activeBtn) return;
+    activeBtn.scrollIntoView({
+      behavior: 'smooth',
+      inline: 'start',
+      block: 'nearest',
+    });
+  }, [tab]);
 
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
@@ -402,7 +460,7 @@ function App() {
             <p className="brand-tag">MockTest</p>
             <h2 className="brand-title">Admin Panel</h2>
           </div>
-          <nav className="side-nav">
+          <nav ref={sideNavRef} className="side-nav">
             {(['dashboard', 'analyticsInsights', 'leaderboard', 'allTests', 'questionBuilder', 'profile', 'feedback', 'helpSupport', 'reportIssue', 'achievement', 'privacyPolicy', 'termsOfUse', 'dailyDigest', 'dailyQuiz', 'articles', 'homeContent', 'pollSettings', 'pushNotificationSettings', 'notificationScheduling', 'publishScheduling', 'submitApplicationContent', 'instructionContent', 'examCategories', 'settings', 'auditLogs', 'users', 'userManagementAdvanced'] as Tab[]).map(
               (name) => (
               <button key={name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>
@@ -603,7 +661,7 @@ function LeaderboardTab() {
           <div key={item.userId} className="row">
             <span>#{item.rank}</span>
             <span>{item.name}</span>
-            <span>{item.score}/500</span>
+            <span>{item.score} pts ({item.totalCorrect}/{item.totalQuestions})</span>
             <span>{item.city}</span>
             <span>{item.state}</span>
           </div>
@@ -642,6 +700,8 @@ function TestsTab({
   const [examMode, setExamMode] = useState('Online CBT');
   const [negativeMarkingText, setNegativeMarkingText] = useState('Yes (-1)');
   const [testTypeLabel, setTestTypeLabel] = useState('Full Mock');
+  const [badgeEnabled, setBadgeEnabled] = useState(true);
+  const [badgeText, setBadgeText] = useState('Live');
   const [validUntil, setValidUntil] = useState('');
   const [answerKeyReleaseAt, setAnswerKeyReleaseAt] = useState('');
   const [resultReleaseAt, setResultReleaseAt] = useState('');
@@ -701,6 +761,8 @@ function TestsTab({
             exam_mode: String(x.exam_mode || 'Practice'),
             negative_marking_text: String(x.negative_marking_text || 'No'),
             test_type_label: String(x.test_type_label || 'Full Mock'),
+            badge_enabled: normalizeBoolean(x.badge_enabled, false),
+            badge_text: String(x.badge_text || 'Live'),
             valid_until: x.valid_until || '',
             answer_key_release_at: x.answer_key_release_at || '',
             result_release_at: x.result_release_at || '',
@@ -740,6 +802,8 @@ function TestsTab({
         examMode: examMode.trim() || 'Practice',
         negativeMarkingText: negativeMarkingText.trim() || 'No',
         testTypeLabel: testTypeLabel.trim() || 'Full Mock',
+        badgeEnabled,
+        badgeText: badgeText.trim() || 'Live',
         validUntil: validUntil.trim(),
         answerKeyReleaseAt: answerKeyReleaseAt || null,
         resultReleaseAt: resultReleaseAt || null,
@@ -764,6 +828,8 @@ function TestsTab({
       setExamMode('Online CBT');
       setNegativeMarkingText('Yes (-1)');
       setTestTypeLabel('Full Mock');
+      setBadgeEnabled(true);
+      setBadgeText('Live');
       setValidUntil('');
       setAnswerKeyReleaseAt('');
       setResultReleaseAt('');
@@ -799,6 +865,8 @@ function TestsTab({
         examMode: current.exam_mode || 'Practice',
         negativeMarkingText: current.negative_marking_text || 'No',
         testTypeLabel: current.test_type_label || 'Full Mock',
+        badgeEnabled: normalizeBoolean(current.badge_enabled, false),
+        badgeText: current.badge_text || 'Live',
         validUntil: current.valid_until || '',
         answerKeyReleaseAt: current.answer_key_release_at || null,
         resultReleaseAt: current.result_release_at || null,
@@ -823,6 +891,26 @@ function TestsTab({
       await load();
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Failed to delete test');
+    }
+  }
+
+  async function applyLiveBadgeToPublishedTests() {
+    const text = window.prompt('Badge text for published tests', badgeText || 'Live');
+    if (text === null) return;
+    const finalText = text.trim() || 'Live';
+    try {
+      setError('');
+      const res = await apiClient.post('/admin/tests/badge/bulk-live', {
+        badgeText: finalText,
+        onlyPublished: true,
+      });
+      const updatedCount = Number(res.data?.updatedCount || 0);
+      setBadgeEnabled(true);
+      setBadgeText(finalText);
+      await load();
+      window.alert(`Live badge applied to ${updatedCount} published test(s).`);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to apply live badge to published tests');
     }
   }
 
@@ -1018,6 +1106,7 @@ function TestsTab({
                 <input value={examMode} onChange={(e) => setExamMode(e.target.value)} placeholder="Exam mode" />
                 <input value={negativeMarkingText} onChange={(e) => setNegativeMarkingText(e.target.value)} placeholder="Negative marking" />
                 <input value={testTypeLabel} onChange={(e) => setTestTypeLabel(e.target.value)} placeholder="Test type label" />
+                <input value={badgeText} onChange={(e) => setBadgeText(e.target.value)} placeholder="Badge text (e.g. Live)" />
               </div>
             </div>
 
@@ -1039,12 +1128,19 @@ function TestsTab({
                 />
                 dynamic fluctuation
               </label>
+              <label className="check-wrap">
+                <input type="checkbox" checked={badgeEnabled} onChange={(e) => setBadgeEnabled(e.target.checked)} />
+                show badge
+              </label>
               <button type="submit">Add Test</button>
             </div>
           </form>
           <div className="inline-form all-tests-tools">
             <button type="button" className="all-tests-refresh" onClick={load}>
               Refresh Tests
+            </button>
+            <button type="button" className="ghost" onClick={applyLiveBadgeToPublishedTests}>
+              Apply Live Badge (Published)
             </button>
             <input
               value={search}
@@ -1252,6 +1348,23 @@ function TestsTab({
                       <label className="check-wrap">
                         <input
                           type="checkbox"
+                          checked={normalizeBoolean(item.badge_enabled, false)}
+                          onChange={(e) =>
+                            setItems((p) => p.map((x) => (x.id === item.id ? { ...x, badge_enabled: e.target.checked } : x)))
+                          }
+                        />
+                        show badge
+                      </label>
+                      <input
+                        value={item.badge_text || 'Live'}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, badge_text: e.target.value } : x)))
+                        }
+                        placeholder="badge text"
+                      />
+                      <label className="check-wrap">
+                        <input
+                          type="checkbox"
                           checked={normalizeBoolean(item.dynamic_date_enabled, false)}
                           onChange={(e) =>
                             setItems((p) => p.map((x) => (x.id === item.id ? { ...x, dynamic_date_enabled: e.target.checked } : x)))
@@ -1279,7 +1392,7 @@ function TestsTab({
                     <span>{item.slug}<br />{item.exam_date || '-'}</span>
                     <span>{item.test_kind}<br />{item.duration_minutes} min · {item.question_count} Q</span>
                     <span>{item.is_published ? 'Published' : 'Hidden'}<br />{item.enrolled_count || 0}/{item.capacity_total || 0}</span>
-                    <span>{item.dynamic_fluctuation_on_publish ? 'Fluctuation: On' : 'Fluctuation: Off'}<br />{item.dynamic_date_enabled ? `Date: On (${item.date_cycle_days || 0}d)` : 'Date: Off'}</span>
+                    <span>{item.dynamic_fluctuation_on_publish ? 'Fluctuation: On' : 'Fluctuation: Off'}<br />{item.dynamic_date_enabled ? `Date: On (${item.date_cycle_days || 0}d)` : 'Date: Off'}<br />{item.badge_enabled ? `Badge: ${item.badge_text || 'Live'}` : 'Badge: Off'}</span>
                     <button onClick={() => setEditingId(item.id)}>Edit</button>
                     <div className="inline-form">
                       <button onClick={() => loadQuestions(item)}>Open Builder</button>
@@ -2034,6 +2147,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   const ARTICLES_PER_PAGE = 20;
   const [items, setItems] = useState<ArticleItem[]>([]);
   const [feedKind, setFeedKind] = useState<'news' | 'job' | 'exam'>('news');
+  const [listFeedFilter, setListFeedFilter] = useState<'all' | 'news' | 'job' | 'exam'>('all');
   const [headline, setHeadline] = useState('');
   const [summary, setSummary] = useState('');
   const [category, setCategory] = useState('');
@@ -2114,6 +2228,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   const visibleItems = items.filter((item) => {
+    if (listFeedFilter !== 'all' && item.feed_kind !== listFeedFilter) return false;
     const q = search.trim().toLowerCase();
     if (!q) return true;
     return (
@@ -2124,6 +2239,8 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   });
   const totalArticlesPages = Math.max(1, Math.ceil(visibleItems.length / ARTICLES_PER_PAGE));
   const safeArticlesPage = Math.min(articlesPage, totalArticlesPages);
+  const rangeStart = visibleItems.length === 0 ? 0 : (safeArticlesPage - 1) * ARTICLES_PER_PAGE + 1;
+  const rangeEnd = Math.min(safeArticlesPage * ARTICLES_PER_PAGE, visibleItems.length);
   const pagedArticles = useMemo(() => {
     const start = (safeArticlesPage - 1) * ARTICLES_PER_PAGE;
     return visibleItems.slice(start, start + ARTICLES_PER_PAGE);
@@ -2185,6 +2302,18 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
         <button type="button" className="all-tests-refresh" onClick={load}>
           Refresh Articles
         </button>
+        <select
+          value={listFeedFilter}
+          onChange={(e) => {
+            setListFeedFilter(e.target.value as 'all' | 'news' | 'job' | 'exam');
+            setArticlesPage(1);
+          }}
+        >
+          <option value="all">All types</option>
+          <option value="news">News only</option>
+          <option value="job">Job only</option>
+          <option value="exam">Exam only</option>
+        </select>
         <input
           value={search}
           onChange={(e) => {
@@ -2261,6 +2390,9 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
       <div className="pagination-wrap">
         <span>
           Page {safeArticlesPage} of {totalArticlesPages}
+        </span>
+        <span>
+          Showing {rangeStart}-{rangeEnd} of {visibleItems.length}
         </span>
         <div className="inline-form pagination-controls">
           <button
@@ -2401,6 +2533,18 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
     await saveAll(nextItems);
   }
 
+  async function moveItem(id: string, direction: -1 | 1) {
+    const index = items.findIndex((x) => x.id === id);
+    if (index < 0) return;
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= items.length) return;
+    const nextItems = [...items];
+    const temp = nextItems[targetIndex];
+    nextItems[targetIndex] = nextItems[index];
+    nextItems[index] = temp;
+    await saveAll(nextItems);
+  }
+
   const totalPages = Math.max(1, Math.ceil(items.length / PROFILE_ITEMS_PER_PAGE));
   const safePage = Math.min(page, totalPages);
   const pagedItems = useMemo(() => {
@@ -2455,6 +2599,8 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
           <span>Path</span>
           <span>Toggle</span>
           <span>Open</span>
+          <span>Up</span>
+          <span>Down</span>
           <span>Update</span>
           <span>Delete</span>
         </div>
@@ -2483,6 +2629,17 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
                   enabled
                 </label>
                 <button type="button" onClick={() => setSelectedMenuItemId(item.id)}>Open</button>
+                <button type="button" className="ghost" onClick={() => moveItem(item.id, -1)} disabled={items.findIndex((x) => x.id === item.id) === 0}>
+                  Up
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => moveItem(item.id, 1)}
+                  disabled={items.findIndex((x) => x.id === item.id) === items.length - 1}
+                >
+                  Down
+                </button>
                 <button type="button" onClick={() => updateItem(item)}>Save</button>
                 <button type="button" className="ghost" onClick={() => setEditingId('')}>Cancel</button>
               </>
@@ -2497,6 +2654,17 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
                 </label>
                 <button type="button" onClick={() => setSelectedMenuItemId(item.id)} disabled={!item.enabled}>
                   Open
+                </button>
+                <button type="button" className="ghost" onClick={() => moveItem(item.id, -1)} disabled={items.findIndex((x) => x.id === item.id) === 0}>
+                  Up
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => moveItem(item.id, 1)}
+                  disabled={items.findIndex((x) => x.id === item.id) === items.length - 1}
+                >
+                  Down
                 </button>
                 <button type="button" onClick={() => setEditingId(item.id)}>Update</button>
                 <button type="button" className="danger" onClick={() => removeItem(item.id)}>Delete</button>
@@ -2777,6 +2945,19 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   const [settings, setSettings] = useState<HomeContentSettings>({
     welcomeText: 'Welcome Rahul',
     quickActionsTitle: 'Quick actions',
+    autoSaveEnabled: false,
+    themePreset: 'premium',
+    promoWidgetEnabled: false,
+    promoWidgetHtml: '',
+    promoWidgetChips: [],
+    promoWidgetCards: [],
+    studentUpdateWidgetEnabled: false,
+    studentUpdateWidgetHtml: '',
+    studentUpdateWidgetPills: [],
+    studentUpdateWidgetCards: [],
+    newsCategoryMenu: [],
+    jobCategoryMenu: [],
+    examCategoryMenu: [],
     sections: [{ id: 'category', title: 'Category', items: ['Math', 'Reasoning', 'English', 'GK'] }],
     quickActionSections: [
       {
@@ -2800,10 +2981,112 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   const [newSectionItems, setNewSectionItems] = useState('');
   const [newQuickSectionTitle, setNewQuickSectionTitle] = useState('');
   const [newQuickSectionItems, setNewQuickSectionItems] = useState('');
+  const [newPromoChipTitle, setNewPromoChipTitle] = useState('');
+  const [newPromoChipSubtitle, setNewPromoChipSubtitle] = useState('');
+  const [newPromoChipIcon, setNewPromoChipIcon] = useState('');
+  const [newPromoCardTitle, setNewPromoCardTitle] = useState('');
+  const [newPromoCardSubtitle, setNewPromoCardSubtitle] = useState('');
+  const [newPromoCardButtonText, setNewPromoCardButtonText] = useState('');
+  const [newPromoCardBgColor, setNewPromoCardBgColor] = useState('#1d59b2');
+  const [newStudentUpdateCardTitle, setNewStudentUpdateCardTitle] = useState('');
+  const [newStudentUpdateCardSubtitle, setNewStudentUpdateCardSubtitle] = useState('');
+  const [newStudentUpdateCardIconUrl, setNewStudentUpdateCardIconUrl] = useState('');
+  const [newStudentUpdatePillTitle, setNewStudentUpdatePillTitle] = useState('');
+  const [newStudentUpdatePillSubtitle, setNewStudentUpdatePillSubtitle] = useState('');
+  const [newStudentUpdatePillIcon, setNewStudentUpdatePillIcon] = useState('');
+  const [newNewsCategoryMenuTitle, setNewNewsCategoryMenuTitle] = useState('');
+  const [newJobCategoryMenuTitle, setNewJobCategoryMenuTitle] = useState('');
+  const [newExamCategoryMenuTitle, setNewExamCategoryMenuTitle] = useState('');
+  const [previewColumns, setPreviewColumns] = useState<2 | 3 | 4>(3);
   const [bannerFile, setBannerFile] = useState<File | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [uploadingBanner, setUploadingBanner] = useState(false);
+  const autoSaveReadyRef = useRef(false);
+
+  async function persistHomeContent(currentSettings: HomeContentSettings, opts?: { silent?: boolean }) {
+    const silent = opts?.silent === true;
+    try {
+      if (!silent) setError('');
+      setSaving(true);
+      const enabledChips = currentSettings.promoWidgetChips.filter((x) => x.enabled && x.title.trim());
+      const enabledCards = currentSettings.promoWidgetCards.filter((x) => x.enabled && x.title.trim());
+      const chipHtml = enabledChips
+        .map((chip) => {
+          const subtitle = chip.subtitle.trim();
+          const icon = chip.icon.trim() || 'tag';
+          return `<div style="display:inline-flex;align-items:center;gap:8px;background:#fff;padding:8px 12px;border-radius:12px;border:1px solid #e5e7eb;white-space:nowrap;margin-right:8px;">
+            <span style="font-size:12px;color:#1f2937;">${icon}</span>
+            <span style="font-size:12px;color:#374151;font-weight:600;">${chip.title}${subtitle ? `: <b>${subtitle}</b>` : ''}</span>
+          </div>`;
+        })
+        .join('');
+      const cardHtml = enabledCards
+        .map(
+          (card) => `<div style="min-width:90%;scroll-snap-align:center;background:${card.bgColor || '#1d59b2'};border-radius:16px;padding:20px;min-height:120px;color:white;">
+            <p style="opacity:0.9;font-size:11px;margin:0 0 6px 0;">${card.subtitle || ''}</p>
+            <p style="font-size:18px;font-weight:800;margin:0 0 14px 0;">${card.title}</p>
+            <button style="background:white;color:${card.bgColor || '#1d59b2'};border:none;border-radius:999px;padding:6px 14px;font-size:11px;font-weight:700;">${card.buttonText || 'Open'}</button>
+          </div>`,
+        )
+        .join('');
+      const generatedPromoHtml = `<div style="background:#f5f7f9;padding:10px;">
+        <div style="display:flex;overflow:auto;-ms-overflow-style:none;scrollbar-width:none;gap:8px;margin-bottom:12px;">${chipHtml}</div>
+        <div style="display:flex;overflow:auto;gap:12px;scroll-snap-type:x mandatory;">${cardHtml}</div>
+      </div>`;
+      const enabledStudentUpdatePills = currentSettings.studentUpdateWidgetPills.filter((x) => x.enabled && x.title.trim());
+      const studentUpdatePillHtml = enabledStudentUpdatePills
+        .map((pill) => {
+          const subtitle = pill.subtitle.trim();
+          const icon = pill.icon.trim() || 'tag';
+          return `<div style="display:inline-flex;align-items:center;gap:8px;background:#fff;padding:8px 12px;border-radius:12px;border:1px solid #e5e7eb;white-space:nowrap;margin-right:8px;">
+            <span style="font-size:12px;color:#1f2937;">${icon}</span>
+            <span style="font-size:12px;color:#374151;font-weight:600;">${pill.title}${subtitle ? `: <b>${subtitle}</b>` : ''}</span>
+          </div>`;
+        })
+        .join('');
+      const enabledStudentUpdateCards = currentSettings.studentUpdateWidgetCards.filter((x) => x.enabled && x.title.trim());
+      const studentUpdateCardHtml = enabledStudentUpdateCards
+        .map((card) => {
+          const subtitle = card.subtitle.trim();
+          const iconPart = card.iconUrl.trim()
+            ? `<img src="${card.iconUrl.trim()}" alt="logo" style="width:32px;height:32px;object-fit:contain;" />`
+            : `<div style="width:24px;height:24px;background:#e5e7eb;border-radius:999px;"></div>`;
+          return `<div style="min-width:92%;scroll-snap-align:center;background:#ffffff;border-radius:20px;padding:12px 16px;display:flex;align-items:center;border:1px solid #f3f4f6;box-shadow:0 4px 20px -2px rgba(0,0,0,0.05);">
+            <div style="flex-shrink:0;margin-right:12px;">
+              <div style="width:44px;height:44px;border-radius:999px;border:1px solid #f3f4f6;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#f9fafb;">
+                ${iconPart}
+              </div>
+            </div>
+            <div style="flex-grow:1;">
+              <h3 style="color:#1d2939;font-size:14px;line-height:1.2;font-weight:700;margin:0;">${card.title}</h3>
+              <p style="color:#667085;font-size:12px;margin:4px 0 0 0;font-weight:500;">${subtitle}</p>
+            </div>
+          </div>`;
+        })
+        .join('');
+      const generatedStudentUpdateHtml = `<div style="background:#f5f7f9;padding:10px;">
+        <div style="display:flex;overflow:auto;-ms-overflow-style:none;scrollbar-width:none;gap:8px;margin-bottom:12px;">${studentUpdatePillHtml}</div>
+        <div style="display:flex;overflow:auto;gap:12px;scroll-snap-type:x mandatory;">${studentUpdateCardHtml}</div>
+        <div style="display:flex;justify-content:center;margin-top:12px;gap:4px;">
+          <div style="width:16px;height:4px;background:#9ca3af;border-radius:999px;"></div>
+          <div style="width:4px;height:4px;background:#e5e7eb;border-radius:999px;"></div>
+          <div style="width:4px;height:4px;background:#e5e7eb;border-radius:999px;"></div>
+        </div>
+      </div>`;
+      await apiClient.patch('/admin/settings', {
+        homeContent: {
+          ...currentSettings,
+          promoWidgetHtml: generatedPromoHtml,
+          studentUpdateWidgetHtml: generatedStudentUpdateHtml,
+        },
+      });
+    } catch (err: any) {
+      if (!silent) setError(err?.response?.data?.error || 'Failed to save home content');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function load() {
     try {
@@ -2817,6 +3100,67 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
         setSettings({
           welcomeText: String(home.welcomeText || 'Welcome Rahul'),
           quickActionsTitle: String(home.quickActionsTitle || 'Quick actions'),
+          autoSaveEnabled: home.autoSaveEnabled === true,
+          themePreset:
+            String(home.themePreset || 'premium').toLowerCase() === 'classic'
+              ? 'classic'
+              : String(home.themePreset || 'premium').toLowerCase() === 'soft'
+              ? 'soft'
+              : String(home.themePreset || 'premium').toLowerCase() === 'vibrant'
+              ? 'vibrant'
+              : 'premium',
+          promoWidgetEnabled: home.promoWidgetEnabled === true,
+          promoWidgetHtml: String(home.promoWidgetHtml || ''),
+          promoWidgetChips: Array.isArray(home.promoWidgetChips)
+            ? home.promoWidgetChips.map((chip: any, idx: number) => ({
+                id: String(chip.id || `promo-chip-${idx + 1}`),
+                title: String(chip.title || ''),
+                subtitle: String(chip.subtitle || ''),
+                icon: String(chip.icon || ''),
+                enabled: chip.enabled !== false,
+              }))
+            : [],
+          promoWidgetCards: Array.isArray(home.promoWidgetCards)
+            ? home.promoWidgetCards.map((card: any, idx: number) => ({
+                id: String(card.id || `promo-card-${idx + 1}`),
+                title: String(card.title || ''),
+                subtitle: String(card.subtitle || ''),
+                buttonText: String(card.buttonText || ''),
+                bgColor: String(card.bgColor || '#1d59b2'),
+                enabled: card.enabled !== false,
+              }))
+            : [],
+          studentUpdateWidgetEnabled: home.studentUpdateWidgetEnabled === true || home.billWidgetEnabled === true,
+          studentUpdateWidgetHtml: String(home.studentUpdateWidgetHtml || home.billWidgetHtml || ''),
+          studentUpdateWidgetPills: Array.isArray(home.studentUpdateWidgetPills)
+            ? home.studentUpdateWidgetPills.map((pill: any, idx: number) => ({
+                id: String(pill.id || `student-update-pill-${idx + 1}`),
+                title: String(pill.title || ''),
+                subtitle: String(pill.subtitle || ''),
+                icon: String(pill.icon || ''),
+                enabled: pill.enabled !== false,
+              }))
+            : [],
+          studentUpdateWidgetCards: Array.isArray(home.studentUpdateWidgetCards)
+            ? home.studentUpdateWidgetCards.map((card: any, idx: number) => ({
+                id: String(card.id || `student-update-card-${idx + 1}`),
+                title: String(card.title || ''),
+                subtitle: String(card.subtitle || ''),
+                iconUrl: String(card.iconUrl || ''),
+                enabled: card.enabled !== false,
+              }))
+            : Array.isArray(home.billWidgetCards)
+            ? home.billWidgetCards.map((card: any, idx: number) => ({
+                id: String(card.id || `student-update-card-${idx + 1}`),
+                title: String(card.title || ''),
+                subtitle: String(card.subtitle || ''),
+                iconUrl: String(card.iconUrl || ''),
+                enabled: card.enabled !== false,
+              }))
+            : [],
+          newsCategoryMenu: Array.isArray(home.newsCategoryMenu) ? home.newsCategoryMenu.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
+          jobCategoryMenu: Array.isArray(home.jobCategoryMenu) ? home.jobCategoryMenu.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
+          examCategoryMenu: Array.isArray(home.examCategoryMenu) ? home.examCategoryMenu.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
           sections: Array.isArray(home.sections)
             ? home.sections.map((s: any, idx: number) => ({
                 id: String(s.id || `section-${idx + 1}`),
@@ -2863,16 +3207,20 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   async function save() {
-    try {
-      setError('');
-      setSaving(true);
-      await apiClient.patch('/admin/settings', { homeContent: settings });
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to save home content');
-    } finally {
-      setSaving(false);
-    }
+    await persistHomeContent(settings);
   }
+
+  useEffect(() => {
+    if (!autoSaveReadyRef.current) {
+      autoSaveReadyRef.current = true;
+      return;
+    }
+    if (!settings.autoSaveEnabled) return;
+    const timer = window.setTimeout(() => {
+      void persistHomeContent(settings, { silent: true });
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [settings]);
 
   function addSection() {
     const title = newSectionTitle.trim();
@@ -2996,6 +3344,129 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
     });
   }
 
+  function addPromoChip() {
+    const title = newPromoChipTitle.trim();
+    if (!title) return;
+    setSettings((p) => ({
+      ...p,
+      promoWidgetChips: [
+        ...p.promoWidgetChips,
+        {
+          id: `promo-chip-${Date.now()}`,
+          title,
+          subtitle: newPromoChipSubtitle.trim(),
+          icon: newPromoChipIcon.trim(),
+          enabled: true,
+        },
+      ],
+    }));
+    setNewPromoChipTitle('');
+    setNewPromoChipSubtitle('');
+    setNewPromoChipIcon('');
+  }
+
+  function addPromoCard() {
+    const title = newPromoCardTitle.trim();
+    if (!title) return;
+    setSettings((p) => ({
+      ...p,
+      promoWidgetCards: [
+        ...p.promoWidgetCards,
+        {
+          id: `promo-card-${Date.now()}`,
+          title,
+          subtitle: newPromoCardSubtitle.trim(),
+          buttonText: newPromoCardButtonText.trim() || 'Open',
+          bgColor: newPromoCardBgColor.trim() || '#1d59b2',
+          enabled: true,
+        },
+      ],
+    }));
+    setNewPromoCardTitle('');
+    setNewPromoCardSubtitle('');
+    setNewPromoCardButtonText('');
+    setNewPromoCardBgColor('#1d59b2');
+  }
+
+  function addStudentUpdateCard() {
+    const title = newStudentUpdateCardTitle.trim();
+    if (!title) return;
+    setSettings((p) => ({
+      ...p,
+      studentUpdateWidgetCards: [
+        ...p.studentUpdateWidgetCards,
+        {
+          id: `student-update-card-${Date.now()}`,
+          title,
+          subtitle: newStudentUpdateCardSubtitle.trim(),
+          iconUrl: newStudentUpdateCardIconUrl.trim(),
+          enabled: true,
+        },
+      ],
+    }));
+    setNewStudentUpdateCardTitle('');
+    setNewStudentUpdateCardSubtitle('');
+    setNewStudentUpdateCardIconUrl('');
+  }
+
+  function addStudentUpdatePill() {
+    const title = newStudentUpdatePillTitle.trim();
+    if (!title) return;
+    setSettings((p) => ({
+      ...p,
+      studentUpdateWidgetPills: [
+        ...p.studentUpdateWidgetPills,
+        {
+          id: `student-update-pill-${Date.now()}`,
+          title,
+          subtitle: newStudentUpdatePillSubtitle.trim(),
+          icon: newStudentUpdatePillIcon.trim(),
+          enabled: true,
+        },
+      ],
+    }));
+    setNewStudentUpdatePillTitle('');
+    setNewStudentUpdatePillSubtitle('');
+    setNewStudentUpdatePillIcon('');
+  }
+
+  function addNewsCategoryMenuItem() {
+    const title = newNewsCategoryMenuTitle.trim();
+    if (!title) return;
+    setSettings((p) => ({
+      ...p,
+      newsCategoryMenu: [...p.newsCategoryMenu, title],
+    }));
+    setNewNewsCategoryMenuTitle('');
+  }
+
+  function addJobCategoryMenuItem() {
+    const title = newJobCategoryMenuTitle.trim();
+    if (!title) return;
+    setSettings((p) => ({
+      ...p,
+      jobCategoryMenu: [...p.jobCategoryMenu, title],
+    }));
+    setNewJobCategoryMenuTitle('');
+  }
+
+  function addExamCategoryMenuItem() {
+    const title = newExamCategoryMenuTitle.trim();
+    if (!title) return;
+    setSettings((p) => ({
+      ...p,
+      examCategoryMenu: [...p.examCategoryMenu, title],
+    }));
+    setNewExamCategoryMenuTitle('');
+  }
+
+  function toRows<T>(items: T[], columns: number): T[][] {
+    const safe = Math.max(1, columns);
+    const rows: T[][] = [];
+    for (let i = 0; i < items.length; i += safe) rows.push(items.slice(i, i + safe));
+    return rows;
+  }
+
   return (
     <section className="panel-card">
       <div className="panel-head">
@@ -3012,6 +3483,62 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
           onChange={(e) => setSettings((p) => ({ ...p, quickActionsTitle: e.target.value }))}
           placeholder="Quick actions title"
         />
+        <select
+          value={settings.themePreset}
+          onChange={(e) => setSettings((p) => ({ ...p, themePreset: e.target.value as 'classic' | 'soft' | 'vibrant' | 'premium' }))}
+        >
+          <option value="classic">Theme preset: Classic (old default)</option>
+          <option value="soft">Theme preset: Soft</option>
+          <option value="vibrant">Theme preset: Vibrant</option>
+          <option value="premium">Theme preset: Premium</option>
+        </select>
+        <label className="check-wrap">
+          <input
+            type="checkbox"
+            checked={settings.autoSaveEnabled}
+            onChange={(e) => setSettings((p) => ({ ...p, autoSaveEnabled: e.target.checked }))}
+          />
+          Auto save changes (without Save All button)
+        </label>
+        <label className="check-wrap">
+          <input
+            type="checkbox"
+            checked={settings.promoWidgetEnabled}
+            onChange={(e) => setSettings((p) => ({ ...p, promoWidgetEnabled: e.target.checked }))}
+          />
+          Promo section active (show on app home)
+        </label>
+        <label className="check-wrap">
+          <input
+            type="checkbox"
+            checked={settings.studentUpdateWidgetEnabled}
+            onChange={(e) => setSettings((p) => ({ ...p, studentUpdateWidgetEnabled: e.target.checked }))}
+          />
+          Student updates widget active (show on app home)
+        </label>
+        <input value={newPromoChipTitle} onChange={(e) => setNewPromoChipTitle(e.target.value)} placeholder="Promo pill title" />
+        <input value={newPromoChipSubtitle} onChange={(e) => setNewPromoChipSubtitle(e.target.value)} placeholder="Promo pill subtitle (optional)" />
+        <input value={newPromoChipIcon} onChange={(e) => setNewPromoChipIcon(e.target.value)} placeholder="Promo pill icon label (e.g. qr, bolt)" />
+        <button type="button" onClick={addPromoChip}>Add Promo Pill</button>
+        <input value={newPromoCardTitle} onChange={(e) => setNewPromoCardTitle(e.target.value)} placeholder="Color tab title" />
+        <input value={newPromoCardSubtitle} onChange={(e) => setNewPromoCardSubtitle(e.target.value)} placeholder="Color tab subtitle" />
+        <input value={newPromoCardButtonText} onChange={(e) => setNewPromoCardButtonText(e.target.value)} placeholder="Color tab button text" />
+        <input value={newPromoCardBgColor} onChange={(e) => setNewPromoCardBgColor(e.target.value)} placeholder="Color tab background color (e.g. #1d59b2)" />
+        <button type="button" onClick={addPromoCard}>Add Color Tab</button>
+        <input value={newStudentUpdateCardTitle} onChange={(e) => setNewStudentUpdateCardTitle(e.target.value)} placeholder="Student update card title" />
+        <input value={newStudentUpdateCardSubtitle} onChange={(e) => setNewStudentUpdateCardSubtitle(e.target.value)} placeholder="Student update subtitle (optional)" />
+        <input value={newStudentUpdateCardIconUrl} onChange={(e) => setNewStudentUpdateCardIconUrl(e.target.value)} placeholder="Student update icon URL (optional)" />
+        <button type="button" onClick={addStudentUpdateCard}>Add Student Update Card</button>
+        <input value={newStudentUpdatePillTitle} onChange={(e) => setNewStudentUpdatePillTitle(e.target.value)} placeholder="Student update pill title" />
+        <input value={newStudentUpdatePillSubtitle} onChange={(e) => setNewStudentUpdatePillSubtitle(e.target.value)} placeholder="Student update pill subtitle (optional)" />
+        <input value={newStudentUpdatePillIcon} onChange={(e) => setNewStudentUpdatePillIcon(e.target.value)} placeholder="Student update pill icon label (e.g. new, hot)" />
+        <button type="button" onClick={addStudentUpdatePill}>Add Student Update Pill</button>
+        <input value={newNewsCategoryMenuTitle} onChange={(e) => setNewNewsCategoryMenuTitle(e.target.value)} placeholder="News menu category (e.g. Education)" />
+        <button type="button" onClick={addNewsCategoryMenuItem}>Add News Menu Category</button>
+        <input value={newJobCategoryMenuTitle} onChange={(e) => setNewJobCategoryMenuTitle(e.target.value)} placeholder="Job menu category (e.g. Govt Jobs)" />
+        <button type="button" onClick={addJobCategoryMenuItem}>Add Job Menu Category</button>
+        <input value={newExamCategoryMenuTitle} onChange={(e) => setNewExamCategoryMenuTitle(e.target.value)} placeholder="Exam menu category (e.g. Admit Card)" />
+        <button type="button" onClick={addExamCategoryMenuItem}>Add Exam Menu Category</button>
         <input
           type="number"
           min={0}
@@ -3050,6 +3577,56 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
         <button type="button" onClick={addQuickActionSection}>
           Add Quick Action Section
         </button>
+      </div>
+      <div className="panel-head">
+        <h3>Responsive Preview</h3>
+      </div>
+      <div className="inline-form">
+        <span>Columns preview:</span>
+        <button type="button" className={previewColumns === 2 ? '' : 'ghost'} onClick={() => setPreviewColumns(2)}>
+          2
+        </button>
+        <button type="button" className={previewColumns === 3 ? '' : 'ghost'} onClick={() => setPreviewColumns(3)}>
+          3
+        </button>
+        <button type="button" className={previewColumns === 4 ? '' : 'ghost'} onClick={() => setPreviewColumns(4)}>
+          4
+        </button>
+      </div>
+      <div className="list table">
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr' }}>
+          <span>Category preview ({previewColumns} columns)</span>
+        </div>
+        {settings.sections.map((section) => (
+          <div key={`preview-cat-${section.id}`} className="row" style={{ gridTemplateColumns: '1fr' }}>
+            <div style={{ width: '100%' }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>{section.title || 'Untitled section'}</div>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${previewColumns}, minmax(0,1fr))`, gap: 8 }}>
+                {toRows(section.items, previewColumns).flat().map((item, idx) => (
+                  <span key={`${section.id}-cat-${idx}`} className="badge">{item}</span>
+                ))}
+                <span className="badge">See All</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="list table">
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr' }}>
+          <span>Quick action preview ({previewColumns} columns)</span>
+        </div>
+        {settings.quickActionSections.map((section) => (
+          <div key={`preview-qa-${section.id}`} className="row" style={{ gridTemplateColumns: '1fr' }}>
+            <div style={{ width: '100%' }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>{section.title || 'Untitled quick section'}</div>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${previewColumns}, minmax(0,1fr))`, gap: 8 }}>
+                {toRows(section.items, previewColumns).flat().map((item, idx) => (
+                  <span key={`${section.id}-qa-${idx}`} className="badge">{item.title || item.actionKey || 'Action'}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
       <div className="inline-form">
         <input
@@ -3319,6 +3896,365 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
                 setSettings((p) => ({
                   ...p,
                   quickActionSections: p.quickActionSections.filter((x) => x.id !== section.id),
+                }))
+              }
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="list table">
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr 1fr 120px 90px 90px' }}>
+          <span>Promo Pill Title</span>
+          <span>Subtitle / Icon</span>
+          <span>Enabled</span>
+          <span>Update</span>
+          <span>Delete</span>
+        </div>
+        {settings.promoWidgetChips.map((chip) => (
+          <div key={chip.id} className="row" style={{ gridTemplateColumns: '1fr 1fr 120px 90px 90px' }}>
+            <input
+              value={chip.title}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  promoWidgetChips: p.promoWidgetChips.map((x) => (x.id === chip.id ? { ...x, title: e.target.value } : x)),
+                }))
+              }
+            />
+            <input
+              value={`${chip.subtitle}${chip.icon ? ` | ${chip.icon}` : ''}`}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  promoWidgetChips: p.promoWidgetChips.map((x) =>
+                    x.id === chip.id
+                      ? {
+                          ...x,
+                          subtitle: e.target.value.split('|')[0]?.trim() || '',
+                          icon: e.target.value.split('|')[1]?.trim() || '',
+                        }
+                      : x,
+                  ),
+                }))
+              }
+            />
+            <label className="check-wrap">
+              <input
+                type="checkbox"
+                checked={chip.enabled}
+                onChange={(e) =>
+                  setSettings((p) => ({
+                    ...p,
+                    promoWidgetChips: p.promoWidgetChips.map((x) => (x.id === chip.id ? { ...x, enabled: e.target.checked } : x)),
+                  }))
+                }
+              />
+              on
+            </label>
+            <button type="button" onClick={save}>Save</button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() =>
+                setSettings((p) => ({
+                  ...p,
+                  promoWidgetChips: p.promoWidgetChips.filter((x) => x.id !== chip.id),
+                }))
+              }
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="list table">
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr 1fr 120px 120px 90px 90px' }}>
+          <span>Color Tab Title</span>
+          <span>Subtitle</span>
+          <span>Button</span>
+          <span>BG Color</span>
+          <span>Update</span>
+          <span>Delete</span>
+        </div>
+        {settings.promoWidgetCards.map((card) => (
+          <div key={card.id} className="row" style={{ gridTemplateColumns: '1fr 1fr 120px 120px 90px 90px' }}>
+            <input
+              value={card.title}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  promoWidgetCards: p.promoWidgetCards.map((x) => (x.id === card.id ? { ...x, title: e.target.value } : x)),
+                }))
+              }
+            />
+            <input
+              value={card.subtitle}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  promoWidgetCards: p.promoWidgetCards.map((x) => (x.id === card.id ? { ...x, subtitle: e.target.value } : x)),
+                }))
+              }
+            />
+            <input
+              value={card.buttonText}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  promoWidgetCards: p.promoWidgetCards.map((x) => (x.id === card.id ? { ...x, buttonText: e.target.value } : x)),
+                }))
+              }
+            />
+            <input
+              value={card.bgColor}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  promoWidgetCards: p.promoWidgetCards.map((x) => (x.id === card.id ? { ...x, bgColor: e.target.value } : x)),
+                }))
+              }
+            />
+            <button type="button" onClick={save}>Save</button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() =>
+                setSettings((p) => ({
+                  ...p,
+                  promoWidgetCards: p.promoWidgetCards.filter((x) => x.id !== card.id),
+                }))
+              }
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="list table">
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr 90px 90px' }}>
+          <span>News Menu Category</span>
+          <span>Update</span>
+          <span>Delete</span>
+        </div>
+        {settings.newsCategoryMenu.map((title, index) => (
+          <div key={`${title}-${index}`} className="row" style={{ gridTemplateColumns: '1fr 90px 90px' }}>
+            <input
+              value={title}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  newsCategoryMenu: p.newsCategoryMenu.map((x, i) => (i === index ? e.target.value : x)),
+                }))
+              }
+            />
+            <button type="button" onClick={save}>Save</button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() =>
+                setSettings((p) => ({
+                  ...p,
+                  newsCategoryMenu: p.newsCategoryMenu.filter((_, i) => i !== index),
+                }))
+              }
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="list table">
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr 90px 90px' }}>
+          <span>Job Menu Category</span>
+          <span>Update</span>
+          <span>Delete</span>
+        </div>
+        {settings.jobCategoryMenu.map((title, index) => (
+          <div key={`${title}-${index}`} className="row" style={{ gridTemplateColumns: '1fr 90px 90px' }}>
+            <input
+              value={title}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  jobCategoryMenu: p.jobCategoryMenu.map((x, i) => (i === index ? e.target.value : x)),
+                }))
+              }
+            />
+            <button type="button" onClick={save}>Save</button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() =>
+                setSettings((p) => ({
+                  ...p,
+                  jobCategoryMenu: p.jobCategoryMenu.filter((_, i) => i !== index),
+                }))
+              }
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="list table">
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr 90px 90px' }}>
+          <span>Exam Menu Category</span>
+          <span>Update</span>
+          <span>Delete</span>
+        </div>
+        {settings.examCategoryMenu.map((title, index) => (
+          <div key={`${title}-${index}`} className="row" style={{ gridTemplateColumns: '1fr 90px 90px' }}>
+            <input
+              value={title}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  examCategoryMenu: p.examCategoryMenu.map((x, i) => (i === index ? e.target.value : x)),
+                }))
+              }
+            />
+            <button type="button" onClick={save}>Save</button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() =>
+                setSettings((p) => ({
+                  ...p,
+                  examCategoryMenu: p.examCategoryMenu.filter((_, i) => i !== index),
+                }))
+              }
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="list table">
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr 1fr 120px 90px 90px' }}>
+          <span>Student Update Pill</span>
+          <span>Subtitle / Icon</span>
+          <span>Enabled</span>
+          <span>Update</span>
+          <span>Delete</span>
+        </div>
+        {settings.studentUpdateWidgetPills.map((pill) => (
+          <div key={pill.id} className="row" style={{ gridTemplateColumns: '1fr 1fr 120px 90px 90px' }}>
+            <input
+              value={pill.title}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  studentUpdateWidgetPills: p.studentUpdateWidgetPills.map((x) => (x.id === pill.id ? { ...x, title: e.target.value } : x)),
+                }))
+              }
+            />
+            <input
+              value={`${pill.subtitle}${pill.icon ? ` | ${pill.icon}` : ''}`}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  studentUpdateWidgetPills: p.studentUpdateWidgetPills.map((x) =>
+                    x.id === pill.id
+                      ? {
+                          ...x,
+                          subtitle: e.target.value.split('|')[0]?.trim() || '',
+                          icon: e.target.value.split('|')[1]?.trim() || '',
+                        }
+                      : x,
+                  ),
+                }))
+              }
+            />
+            <label className="check-wrap">
+              <input
+                type="checkbox"
+                checked={pill.enabled}
+                onChange={(e) =>
+                  setSettings((p) => ({
+                    ...p,
+                    studentUpdateWidgetPills: p.studentUpdateWidgetPills.map((x) => (x.id === pill.id ? { ...x, enabled: e.target.checked } : x)),
+                  }))
+                }
+              />
+              on
+            </label>
+            <button type="button" onClick={save}>Save</button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() =>
+                setSettings((p) => ({
+                  ...p,
+                  studentUpdateWidgetPills: p.studentUpdateWidgetPills.filter((x) => x.id !== pill.id),
+                }))
+              }
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="list table">
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr 1fr 1fr 120px 90px 90px' }}>
+          <span>Student Update Title</span>
+          <span>Subtitle</span>
+          <span>Icon URL</span>
+          <span>Enabled</span>
+          <span>Update</span>
+          <span>Delete</span>
+        </div>
+        {settings.studentUpdateWidgetCards.map((card) => (
+          <div key={card.id} className="row" style={{ gridTemplateColumns: '1fr 1fr 1fr 120px 90px 90px' }}>
+            <input
+              value={card.title}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  studentUpdateWidgetCards: p.studentUpdateWidgetCards.map((x) => (x.id === card.id ? { ...x, title: e.target.value } : x)),
+                }))
+              }
+            />
+            <input
+              value={card.subtitle}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  studentUpdateWidgetCards: p.studentUpdateWidgetCards.map((x) => (x.id === card.id ? { ...x, subtitle: e.target.value } : x)),
+                }))
+              }
+            />
+            <input
+              value={card.iconUrl}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  studentUpdateWidgetCards: p.studentUpdateWidgetCards.map((x) => (x.id === card.id ? { ...x, iconUrl: e.target.value } : x)),
+                }))
+              }
+            />
+            <label className="check-wrap">
+              <input
+                type="checkbox"
+                checked={card.enabled}
+                onChange={(e) =>
+                  setSettings((p) => ({
+                    ...p,
+                    studentUpdateWidgetCards: p.studentUpdateWidgetCards.map((x) => (x.id === card.id ? { ...x, enabled: e.target.checked } : x)),
+                  }))
+                }
+              />
+              on
+            </label>
+            <button type="button" onClick={save}>Save</button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() =>
+                setSettings((p) => ({
+                  ...p,
+                  studentUpdateWidgetCards: p.studentUpdateWidgetCards.filter((x) => x.id !== card.id),
                 }))
               }
             >

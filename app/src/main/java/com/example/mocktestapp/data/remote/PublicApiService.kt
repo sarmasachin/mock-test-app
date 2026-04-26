@@ -22,6 +22,11 @@ interface PublicApiService {
         @Query("limit") limit: Int = 40,
     ): TestsListResponse
 
+    @GET("tests/{testId}/questions")
+    suspend fun getTestQuestions(
+        @Path("testId") testId: String,
+    ): TestQuestionsResponse
+
     @GET("digest/today")
     suspend fun getDailyDigestToday(): DailyDigestTodayResponse
 
@@ -39,6 +44,23 @@ interface PublicApiService {
         @Query("testCatalogId") testCatalogId: String? = null,
         @Query("limit") limit: Int = 100,
     ): LeaderboardResponse
+
+    @GET("leaderboard/tests")
+    suspend fun getLeaderboardTests(
+        @Query("range") range: String = "all",
+        @Query("city") city: String? = null,
+        @Query("state") state: String? = null,
+        @Query("limit") limit: Int = 100,
+    ): LeaderboardTestsResponse
+
+    @GET("leaderboard/test/{testId}")
+    suspend fun getLeaderboardByTest(
+        @Path("testId") testId: String,
+        @Query("range") range: String,
+        @Query("city") city: String? = null,
+        @Query("state") state: String? = null,
+        @Query("limit") limit: Int = 100,
+    ): LeaderboardByTestResponse
 
     @GET("leaderboard/filters")
     suspend fun getLeaderboardFilters(): LeaderboardFiltersResponse

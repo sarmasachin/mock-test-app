@@ -789,6 +789,7 @@ fun ProfileEditPasswordScreen(
 @Composable
 fun ProfileEmailVerificationScreen(
     onBack: () -> Unit,
+    onVerified: () -> Unit = onBack,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -803,6 +804,7 @@ fun ProfileEmailVerificationScreen(
     var inlineMessage by remember { mutableStateOf("") }
     var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
     var verificationCompleted by remember { mutableStateOf(false) }
+    var verifyInProgress by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val isVerifiedNow = emailVerified || verificationCompleted
 
@@ -819,7 +821,7 @@ fun ProfileEmailVerificationScreen(
         if (isVerifiedNow) {
             // Give user feedback moment, then auto-return to profile.
             delay(1800)
-            onBack()
+            onVerified()
         }
     }
 
@@ -930,12 +932,14 @@ fun ProfileEmailVerificationScreen(
                                     inlineMessage = "Enter valid 6-digit OTP"
                                     return@launch
                                 }
+                                verifyInProgress = true
                                 AuthRepository.confirmEmailVerification(otp).fold(
                                     onSuccess = { msg ->
                                         inlineType = InlineMessageType.Success
                                         inlineMessage = msg
                                         otpRequested = false
                                         verificationCompleted = true
+                                        verifyInProgress = false
                                     },
                                     onFailure = { e ->
                                         inlineType = InlineMessageType.Error
@@ -943,6 +947,7 @@ fun ProfileEmailVerificationScreen(
                                             e.message,
                                             "Could not verify email",
                                         )
+                                        verifyInProgress = false
                                     },
                                 )
                             }
@@ -950,8 +955,13 @@ fun ProfileEmailVerificationScreen(
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(containerColor = p.accent),
                         shape = RoundedCornerShape(12.dp),
+                        enabled = !verifyInProgress,
                     ) {
-                        Text("Verify OTP", color = Color.White, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (verifyInProgress) "Verifying..." else "Verify OTP",
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -1014,6 +1024,7 @@ fun ProfileNotificationsScreen(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val enabled by AppPreferencesRepository.notificationsEnabled.collectAsState(initial = true)
+    val scoreVisible by AppPreferencesRepository.scoreVisibilityEnabled.collectAsState(initial = true)
     val context = LocalContext.current
     val prefs = remember(context) { context.getSharedPreferences("notification_engine", Context.MODE_PRIVATE) }
     var examAlerts by remember { mutableStateOf(prefs.getBoolean("cat_exam", true)) }
@@ -1065,6 +1076,30 @@ fun ProfileNotificationsScreen(
                 Switch(
                     checked = enabled,
                     onCheckedChange = { AppPreferencesRepository.setNotificationsEnabled(it) },
+                )
+            }
+            Spacer(Modifier.height(18.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Show score numbers",
+                        color = p.textPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = if (scoreVisible) "Score numbers are visible" else "Score numbers are hidden",
+                        color = p.textSecondary,
+                        fontSize = 13.sp,
+                    )
+                }
+                Switch(
+                    checked = scoreVisible,
+                    onCheckedChange = { AppPreferencesRepository.setScoreVisibilityEnabled(it) },
                 )
             }
             Spacer(Modifier.height(18.dp))

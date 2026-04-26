@@ -76,6 +76,85 @@ function normalizeHomeContent(value) {
   const safe = value || {};
   const welcomeText = String(safe.welcomeText || '').trim().slice(0, 120);
   const quickActionsTitle = String(safe.quickActionsTitle || '').trim().slice(0, 80);
+  const autoSaveEnabled = safe.autoSaveEnabled === true;
+  const themePresetRaw = String(safe.themePreset || 'premium').trim().toLowerCase();
+  const themePreset = ['classic', 'soft', 'vibrant', 'premium'].includes(themePresetRaw) ? themePresetRaw : 'premium';
+  const promoWidgetEnabled = safe.promoWidgetEnabled === true;
+  const promoWidgetHtml = String(safe.promoWidgetHtml || '').slice(0, 50000);
+  const studentUpdateWidgetEnabled = safe.studentUpdateWidgetEnabled === true || safe.billWidgetEnabled === true;
+  const studentUpdateWidgetHtml = String(safe.studentUpdateWidgetHtml || safe.billWidgetHtml || '').slice(0, 50000);
+  const rawPromoWidgetChips = Array.isArray(safe.promoWidgetChips) ? safe.promoWidgetChips : [];
+  const rawPromoWidgetCards = Array.isArray(safe.promoWidgetCards) ? safe.promoWidgetCards : [];
+  const rawStudentUpdateWidgetCards = Array.isArray(safe.studentUpdateWidgetCards)
+    ? safe.studentUpdateWidgetCards
+    : Array.isArray(safe.billWidgetCards)
+    ? safe.billWidgetCards
+    : [];
+  const rawStudentUpdateWidgetPills = Array.isArray(safe.studentUpdateWidgetPills) ? safe.studentUpdateWidgetPills : [];
+  const rawNewsCategoryMenu = Array.isArray(safe.newsCategoryMenu) ? safe.newsCategoryMenu : [];
+  const rawJobCategoryMenu = Array.isArray(safe.jobCategoryMenu) ? safe.jobCategoryMenu : [];
+  const rawExamCategoryMenu = Array.isArray(safe.examCategoryMenu) ? safe.examCategoryMenu : [];
+  const promoWidgetChips = rawPromoWidgetChips
+    .map((chip, index) => {
+      const x = chip || {};
+      return {
+        id: String(x.id || `promo-chip-${index + 1}`).trim().slice(0, 60),
+        title: String(x.title || '').trim().slice(0, 80),
+        subtitle: String(x.subtitle || '').trim().slice(0, 120),
+        icon: String(x.icon || '').trim().slice(0, 40),
+        enabled: x.enabled !== false,
+      };
+    })
+    .filter((x) => x.title);
+  const promoWidgetCards = rawPromoWidgetCards
+    .map((card, index) => {
+      const x = card || {};
+      return {
+        id: String(x.id || `promo-card-${index + 1}`).trim().slice(0, 60),
+        title: String(x.title || '').trim().slice(0, 120),
+        subtitle: String(x.subtitle || '').trim().slice(0, 240),
+        buttonText: String(x.buttonText || '').trim().slice(0, 60),
+        bgColor: String(x.bgColor || '').trim().slice(0, 20),
+        enabled: x.enabled !== false,
+      };
+    })
+    .filter((x) => x.title);
+  const studentUpdateWidgetCards = rawStudentUpdateWidgetCards
+    .map((card, index) => {
+      const x = card || {};
+      return {
+        id: String(x.id || `student-update-card-${index + 1}`).trim().slice(0, 60),
+        title: String(x.title || '').trim().slice(0, 120),
+        subtitle: String(x.subtitle || '').trim().slice(0, 160),
+        iconUrl: String(x.iconUrl || '').trim().slice(0, 800),
+        enabled: x.enabled !== false,
+      };
+    })
+    .filter((x) => x.title);
+  const studentUpdateWidgetPills = rawStudentUpdateWidgetPills
+    .map((pill, index) => {
+      const x = pill || {};
+      return {
+        id: String(x.id || `student-update-pill-${index + 1}`).trim().slice(0, 60),
+        title: String(x.title || '').trim().slice(0, 80),
+        subtitle: String(x.subtitle || '').trim().slice(0, 120),
+        icon: String(x.icon || '').trim().slice(0, 40),
+        enabled: x.enabled !== false,
+      };
+    })
+    .filter((x) => x.title);
+  const newsCategoryMenu = rawNewsCategoryMenu
+    .map((x) => String(x || '').trim().slice(0, 60))
+    .filter(Boolean)
+    .slice(0, 20);
+  const jobCategoryMenu = rawJobCategoryMenu
+    .map((x) => String(x || '').trim().slice(0, 60))
+    .filter(Boolean)
+    .slice(0, 20);
+  const examCategoryMenu = rawExamCategoryMenu
+    .map((x) => String(x || '').trim().slice(0, 60))
+    .filter(Boolean)
+    .slice(0, 20);
   const rawSections = Array.isArray(safe.sections) ? safe.sections : [];
   const rawQuickActionSections = Array.isArray(safe.quickActionSections) ? safe.quickActionSections : [];
   const rawBanners = Array.isArray(safe.banners) ? safe.banners : [];
@@ -144,6 +223,19 @@ function normalizeHomeContent(value) {
     value: {
       welcomeText,
       quickActionsTitle,
+      autoSaveEnabled,
+      themePreset,
+      promoWidgetEnabled,
+      promoWidgetHtml,
+      promoWidgetChips,
+      promoWidgetCards,
+      studentUpdateWidgetEnabled,
+      studentUpdateWidgetHtml,
+      studentUpdateWidgetPills,
+      studentUpdateWidgetCards,
+      newsCategoryMenu,
+      jobCategoryMenu,
+      examCategoryMenu,
       sections,
       quickActionSections,
       banners,
@@ -1167,7 +1259,7 @@ router.get('/tests', async (_req, res) => {
     const { rows } = await pool.query(
       `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
               exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
-              language_mode, exam_mode, negative_marking_text, test_type_label, valid_until,
+              language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until,
               answer_key_release_at, result_release_at,
               dynamic_date_enabled, date_cycle_days,
               COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
@@ -1178,6 +1270,33 @@ router.get('/tests', async (_req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to list tests' });
+  }
+});
+
+router.post('/tests/badge/bulk-live', async (req, res) => {
+  const onlyPublished = (req.body || {}).onlyPublished !== false;
+  const badgeText = String((req.body || {}).badgeText || 'Live').trim().slice(0, 40) || 'Live';
+  try {
+    const query = onlyPublished
+      ? `UPDATE tests
+         SET badge_enabled = true,
+             badge_text = $1,
+             updated_at = now()
+         WHERE is_published = true`
+      : `UPDATE tests
+         SET badge_enabled = true,
+             badge_text = $1,
+             updated_at = now()`;
+    const result = await pool.query(query, [badgeText]);
+    return res.json({
+      ok: true,
+      updatedCount: Number(result.rowCount || 0),
+      badgeText,
+      onlyPublished,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to bulk update test badges' });
   }
 });
 
@@ -1197,6 +1316,8 @@ router.post('/tests', async (req, res) => {
   const examMode = String(body.examMode || 'Practice').trim().slice(0, 40);
   const negativeMarkingText = String(body.negativeMarkingText || 'No').trim().slice(0, 40);
   const testTypeLabel = String(body.testTypeLabel || 'Full Mock').trim().slice(0, 40);
+  const badgeEnabled = body.badgeEnabled === true;
+  const badgeText = String(body.badgeText || 'Live').trim().slice(0, 40) || 'Live';
   const examDate = String(body.examDate || '').trim();
   const validUntil = String(body.validUntil || '').trim();
   const answerKeyReleaseAt = String(body.answerKeyReleaseAt || '').trim();
@@ -1217,12 +1338,12 @@ router.post('/tests', async (req, res) => {
       `INSERT INTO tests (
          slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
          dynamic_fluctuation_on_publish, exam_date, total_marks, slot_label, capacity_total, enrolled_count,
-         attempts_allowed, language_mode, exam_mode, negative_marking_text, test_type_label, valid_until,
+         attempts_allowed, language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until,
          answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::date, $21::timestamptz, $22::timestamptz, $23, $24)
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::date, $23::timestamptz, $24::timestamptz, $25, $26)
        RETURNING id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
                  exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed, language_mode,
-                 exam_mode, negative_marking_text, test_type_label, valid_until, answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days,
+                 exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days,
                  COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish`,
       [
         slug,
@@ -1244,6 +1365,8 @@ router.post('/tests', async (req, res) => {
         examMode,
         negativeMarkingText,
         testTypeLabel,
+        badgeEnabled,
+        badgeText,
         validUntil || null,
         answerKeyReleaseAt || null,
         resultReleaseAt || null,
@@ -1288,6 +1411,8 @@ router.patch('/tests/:id', async (req, res) => {
   const examMode = String(body.examMode || 'Practice').trim().slice(0, 40);
   const negativeMarkingText = String(body.negativeMarkingText || 'No').trim().slice(0, 40);
   const testTypeLabel = String(body.testTypeLabel || 'Full Mock').trim().slice(0, 40);
+  const badgeEnabled = body.badgeEnabled === true;
+  const badgeText = String(body.badgeText || 'Live').trim().slice(0, 40) || 'Live';
   const examDate = String(body.examDate || '').trim();
   const validUntil = String(body.validUntil || '').trim();
   const answerKeyReleaseAt = String(body.answerKeyReleaseAt || '').trim();
@@ -1325,11 +1450,11 @@ router.patch('/tests/:id', async (req, res) => {
            question_count = $6, test_kind = $7, is_published = $8, dynamic_fluctuation_on_publish = $9,
            exam_date = $10::date, total_marks = $11, slot_label = $12, capacity_total = $13, enrolled_count = $14,
            attempts_allowed = $15, language_mode = $16, exam_mode = $17, negative_marking_text = $18,
-           test_type_label = $19, valid_until = $20::date, answer_key_release_at = $21::timestamptz, result_release_at = $22::timestamptz, dynamic_date_enabled = $23, date_cycle_days = $24
-       WHERE id = $25::uuid
+           test_type_label = $19, badge_enabled = $20, badge_text = $21, valid_until = $22::date, answer_key_release_at = $23::timestamptz, result_release_at = $24::timestamptz, dynamic_date_enabled = $25, date_cycle_days = $26
+       WHERE id = $27::uuid
        RETURNING id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
                  exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed, language_mode,
-                 exam_mode, negative_marking_text, test_type_label, valid_until, answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days,
+                 exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days,
                  COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish`,
       [
         slug,
@@ -1351,6 +1476,8 @@ router.patch('/tests/:id', async (req, res) => {
         examMode,
         negativeMarkingText,
         testTypeLabel,
+        badgeEnabled,
+        badgeText,
         validUntil || null,
         answerKeyReleaseAt || null,
         resultReleaseAt || null,

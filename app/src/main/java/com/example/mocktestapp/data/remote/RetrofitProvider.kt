@@ -32,7 +32,7 @@ object RetrofitProvider {
     fun init(@Suppress("UNUSED_PARAMETER") context: Context) {
         val baseUrl = BuildConfig.API_BASE_URL
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
+            level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
         }
 
         val authClient = OkHttpClient.Builder()

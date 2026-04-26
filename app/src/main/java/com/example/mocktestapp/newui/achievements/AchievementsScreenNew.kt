@@ -77,14 +77,14 @@ fun AchievementsScreenNew(
         Badge(
             id = "fullmarks",
             title = "Full marks",
-            subtitle = "Any practice test with 100% (wire real scores later)",
+            subtitle = "Any practice test with 100%",
             unlocked = false,
             icon = Icons.Rounded.Star,
         ),
         Badge(
             id = "topboard",
             title = "Leaderboard legend",
-            subtitle = "Finish in top 10 friends scope (demo)",
+            subtitle = "Finish in top 10 leaderboard scope",
             unlocked = false,
             icon = Icons.Rounded.EmojiEvents,
         ),

@@ -3,6 +3,7 @@ package com.example.mocktestapp.newui.apply
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,6 +26,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
@@ -35,16 +38,23 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.data.AppPreferencesRepository
+import com.example.mocktestapp.data.AuthRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.launch
@@ -73,12 +83,20 @@ fun ApplyForTestScreenNew(
     }
     var showSuccessDialog by remember { mutableStateOf(false) }
     var revealSubmitSection by remember { mutableStateOf(false) }
+    var testId by remember { mutableStateOf("") }
+    var resolvedTestName by remember { mutableStateOf(title) }
     var slotInfo by remember { mutableStateOf("Morning Slot") }
     var appliedInfo by remember { mutableStateOf("0") }
     var remainingSeatsInfo by remember { mutableStateOf("0 seats left") }
+    var submitError by remember { mutableStateOf<String?>(null) }
+    var isSubmitting by remember { mutableStateOf(false) }
+    var isRefreshing by remember { mutableStateOf(false) }
+    var refreshTick by remember { mutableIntStateOf(0) }
     var startSeriesLockMs by remember { mutableStateOf(20_000L) }
     var startSeriesActiveWindowMs by remember { mutableStateOf(30 * 60 * 1000L) }
+    var shouldQueueSeriesOnConfirm by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     LaunchedEffect(Unit) {
         val remote = ContentRepository.loadSubmitApplicationContent() ?: return@LaunchedEffect
@@ -95,11 +113,45 @@ fun ApplyForTestScreenNew(
         startSeriesLockMs = home.startSeriesLockSeconds.coerceAtLeast(0).toLong() * 1000L
         startSeriesActiveWindowMs = home.startSeriesActiveWindowMinutes.coerceAtLeast(1).toLong() * 60_000L
     }
-    LaunchedEffect(title) {
-        val test = ContentRepository.loadTestByTitle(title)
+    LaunchedEffect(title, refreshTick) {
+        isRefreshing = true
+        val directMatch = ContentRepository.loadTestByTitle(title)
+        val test = if (directMatch?.id?.isNotBlank() == true) {
+            directMatch
+        } else {
+            // Some routes pass category/subcategory label instead of exact test title.
+            // Fallback to the first live test in that bucket so submit always has a valid test id.
+            ContentRepository.loadTestsForSubcategory(title)
+                .firstOrNull { it.id.isNotBlank() }
+        }
+        isRefreshing = false
+        testId = test?.id?.trim().orEmpty()
+        resolvedTestName = test?.title?.trim()?.ifBlank { title } ?: title
         slotInfo = test?.slotLabel?.ifBlank { "Morning Slot" } ?: "Morning Slot"
-        appliedInfo = test?.enrolledLabel?.ifBlank { "0" } ?: "0"
-        remainingSeatsInfo = test?.remainingSeatsLabel?.ifBlank { "0 seats left" } ?: "0 seats left"
+        val enrolled = test?.enrolledCount
+        val capacity = test?.capacityTotal
+        val remaining = test?.remainingSeats
+        appliedInfo = if (enrolled != null && capacity != null && capacity > 0) {
+            "${enrolled.coerceAtLeast(0)}/${capacity.coerceAtLeast(0)}"
+        } else {
+            test?.enrolledLabel?.ifBlank { "0" } ?: "0"
+        }
+        remainingSeatsInfo = if (remaining != null) {
+            "${remaining.coerceAtLeast(0)} seats left"
+        } else {
+            test?.remainingSeatsLabel?.ifBlank { "0 seats left" } ?: "0 seats left"
+        }
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                refreshTick += 1
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     Scaffold(
@@ -171,6 +223,18 @@ fun ApplyForTestScreenNew(
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
+                    Spacer(Modifier.height(6.dp))
+                    // Keep a stable slot so the action button does not jump while refresh state toggles.
+                    Text(
+                        text = "Refreshing latest seats...",
+                        color = p.textSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 18.dp)
+                            .graphicsLayer { alpha = if (isRefreshing) 1f else 0f },
+                    )
                     Spacer(Modifier.height(10.dp))
 
                     if (!revealSubmitSection) {
@@ -205,7 +269,36 @@ fun ApplyForTestScreenNew(
                         Spacer(Modifier.height(16.dp))
 
                         Button(
-                            onClick = { showSuccessDialog = true },
+                            onClick = {
+                                if (isSubmitting) return@Button
+                                submitError = null
+                                if (testId.isBlank()) {
+                                    submitError = "Test details unavailable. Please reopen this page."
+                                    return@Button
+                                }
+                                isSubmitting = true
+                                scope.launch {
+                                    val result = AuthRepository.applyForTest(testId)
+                                    isSubmitting = false
+                                    result.onSuccess { response ->
+                                        val enrolled = response.enrolledCount.coerceAtLeast(0)
+                                        val capacity = response.capacityTotal.coerceAtLeast(0)
+                                        val remaining = response.remainingSeats.coerceAtLeast(0)
+                                        appliedInfo = if (capacity > 0) "$enrolled/$capacity" else "$enrolled"
+                                        remainingSeatsInfo = "$remaining seats left"
+                                        shouldQueueSeriesOnConfirm = !response.alreadyApplied
+                                        successMessage = when {
+                                            response.message?.isNotBlank() == true -> response.message
+                                            response.alreadyApplied -> "You have already applied for this test."
+                                            else -> successMessage
+                                        }
+                                        showSuccessDialog = true
+                                    }.onFailure { error ->
+                                        submitError = error.message?.ifBlank { "Unable to submit application." }
+                                            ?: "Unable to submit application."
+                                    }
+                                }
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp),
@@ -214,8 +307,39 @@ fun ApplyForTestScreenNew(
                                 containerColor = p.primaryButton,
                                 contentColor = p.onPrimaryButton,
                             ),
+                            enabled = !isSubmitting,
                         ) {
-                            Text(text = submitButtonLabel, fontWeight = FontWeight.Bold)
+                            if (isSubmitting) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center,
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = p.onPrimaryButton,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "Submitting...",
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = submitButtonLabel,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                        submitError?.let { msg ->
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = msg,
+                                color = Color(0xFFB91C1C),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
                     }
                 }
@@ -232,11 +356,13 @@ fun ApplyForTestScreenNew(
                 Button(
                     onClick = {
                         scope.launch {
-                            AppPreferencesRepository.addAppliedTestSeries(
-                                testName = title,
-                                lockMs = startSeriesLockMs,
-                                activeWindowMs = startSeriesActiveWindowMs,
-                            )
+                            if (shouldQueueSeriesOnConfirm) {
+                                AppPreferencesRepository.addAppliedTestSeries(
+                                    testName = resolvedTestName,
+                                    lockMs = startSeriesLockMs,
+                                    activeWindowMs = startSeriesActiveWindowMs,
+                                )
+                            }
                         }
                         showSuccessDialog = false
                         onSubmit()

@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.mocktestapp.data.AppPreferencesRepository
 import com.example.mocktestapp.data.ContentRepository
 import java.time.LocalDate
 import java.time.YearMonth
@@ -62,6 +64,7 @@ fun DailyDigestScreenNew(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
 ) {
+    val scoreVisible by AppPreferencesRepository.scoreVisibilityEnabled.collectAsState(initial = true)
     val today = remember { LocalDate.now() }
     var selectedDate by remember { mutableStateOf(today) }
     var showQuiz by remember { mutableStateOf(false) }
@@ -141,6 +144,7 @@ fun DailyDigestScreenNew(
             modifier = modifier,
             question = quizItem,
             selectedOptionIndex = submittedOptionIndex,
+            scoreVisible = scoreVisible,
             onBack = onBack,
             onClose = {
                 showResult = false
@@ -242,13 +246,18 @@ private fun DailyQuizResultLiveScreen(
     modifier: Modifier,
     question: ContentRepository.DailyQuizRemote?,
     selectedOptionIndex: Int?,
+    scoreVisible: Boolean,
     onBack: () -> Unit,
     onClose: () -> Unit,
     onReAttempt: () -> Unit,
 ) {
     val correctIndex = question?.correctIndex ?: -1
     val isCorrect = selectedOptionIndex != null && selectedOptionIndex == correctIndex
-    val scoreText = if (isCorrect) "1 / 1" else "0 / 1"
+    val scoreText = if (scoreVisible) {
+        if (isCorrect) "1 / 1" else "0 / 1"
+    } else {
+        "-"
+    }
     Scaffold(
         containerColor = Color(0xFFF4F5F9),
         contentWindowInsets = WindowInsets(0),
@@ -609,8 +618,20 @@ private fun DailyQuizResultScreen(
                     Text("20260423", color = Color(0xFF4E4E4E), fontSize = 14.sp)
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ScoreBox(title = "Score", value = "0.00", subtitle = "Out of 5.00", valueColor = Color(0xFF10B981), modifier = Modifier.weight(1f))
-                        ScoreBox(title = "Rank", value = "115", subtitle = "Out of 125", valueColor = Color(0xFF2563EB), modifier = Modifier.weight(1f))
+                        ScoreBox(
+                            title = "Score",
+                            value = "-",
+                            subtitle = "Out of -",
+                            valueColor = Color(0xFF10B981),
+                            modifier = Modifier.weight(1f),
+                        )
+                        ScoreBox(
+                            title = "Rank",
+                            value = "-",
+                            subtitle = "Out of -",
+                            valueColor = Color(0xFF2563EB),
+                            modifier = Modifier.weight(1f),
+                        )
                     }
                     Spacer(Modifier.height(10.dp))
                     Text("Time Taken : 00 min, 24 sec", color = Color(0xFF454545), fontSize = 14.sp)

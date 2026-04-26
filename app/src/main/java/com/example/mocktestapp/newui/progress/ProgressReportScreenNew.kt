@@ -76,7 +76,7 @@ private data class TestAggregate(
     val bestPercent: Int,
 )
 
-/** Fixed demo “cohort” bands so you can compare locally until a backend exists. */
+/** Static benchmark bands used for peer comparison display. */
 private enum class ComparePeer(
     val chipLabel: String,
     val benchmarkPercent: Int,
@@ -119,6 +119,7 @@ fun ProgressReportScreenNew(
         profile.emailLine.ifBlank { profile.userIdFormatted ?: "guest" }
     }
     val attempts by TestHistoryRepository.observeAttempts(attemptsUserKey).collectAsState(initial = emptyList())
+    val scoreVisible by AppPreferencesRepository.scoreVisibilityEnabled.collectAsState(initial = true)
 
     val sortedChrono = remember(attempts) {
         attempts.sortedBy { it.completedAtMillis }
@@ -240,17 +241,17 @@ fun ProgressReportScreenNew(
             ) {
                 StatMini(
                     title = "Last",
-                    value = "${lastPct ?: 0}%",
+                    value = if (scoreVisible) "${lastPct ?: 0}%" else "-",
                     modifier = Modifier.weight(1f),
                 )
                 StatMini(
                     title = "Best",
-                    value = "$bestPct%",
+                    value = if (scoreVisible) "$bestPct%" else "-",
                     modifier = Modifier.weight(1f),
                 )
                 StatMini(
                     title = "Avg",
-                    value = "$avgPct%",
+                    value = if (scoreVisible) "$avgPct%" else "-",
                     modifier = Modifier.weight(1f),
                 )
                 StatMini(
@@ -263,17 +264,21 @@ fun ProgressReportScreenNew(
             Spacer(Modifier.height(12.dp))
 
             Text(
-                text = "Toward goal ($DisplayGoalPercent%)",
+                text = if (scoreVisible) "Toward goal ($DisplayGoalPercent%)" else "Toward goal (-)",
                 color = p.textPrimary,
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp,
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = if (bestPct >= DisplayGoalPercent) {
-                    "Best score meets or beats your $DisplayGoalPercent% target"
+                text = if (scoreVisible) {
+                    if (bestPct >= DisplayGoalPercent) {
+                        "Best score meets or beats your $DisplayGoalPercent% target"
+                    } else {
+                        "Best score vs target · $gapToGoal pts below goal"
+                    }
                 } else {
-                    "Best score vs target · $gapToGoal pts below goal"
+                    "Best score vs target · -"
                 },
                 color = p.textSecondary,
                 fontSize = 11.sp,
@@ -313,9 +318,9 @@ fun ProgressReportScreenNew(
                 title = "Performance graph",
                 subtitle = "Bars = attempts, line = trend (last 10)",
                 content = {
-                    ScoreBarRow(attempts = recentTen)
+                    ScoreBarRow(attempts = recentTen, scoreVisible = scoreVisible)
                     Spacer(Modifier.height(10.dp))
-                    LastTenTrendLineChart(percents = recentPercents)
+                    LastTenTrendLineChart(percents = recentPercents, scoreVisible = scoreVisible)
                 },
             )
 
@@ -326,6 +331,7 @@ fun ProgressReportScreenNew(
                 userAvg = avgPct,
                 userBest = bestPct,
                 userLast = lastPct ?: 0,
+                scoreVisible = scoreVisible,
             )
 
             Spacer(Modifier.height(14.dp))
@@ -339,7 +345,7 @@ fun ProgressReportScreenNew(
             )
             Spacer(Modifier.height(6.dp))
             aggregates.take(6).forEach { agg ->
-                TestBreakdownRow(aggregate = agg)
+                TestBreakdownRow(aggregate = agg, scoreVisible = scoreVisible)
                 Spacer(Modifier.height(6.dp))
             }
 
@@ -357,7 +363,7 @@ fun ProgressReportScreenNew(
             } else {
                 weakest.forEachIndexed { i, w ->
                     Text(
-                        text = "${i + 1}. ${w.testName} — avg ${w.avgPercent}% (${w.attemptCount} attempt(s))",
+                        text = "${i + 1}. ${w.testName} — avg ${if (scoreVisible) "${w.avgPercent}%" else "-"} (${w.attemptCount} attempt(s))",
                         color = p.textSecondary,
                         fontSize = 13.sp,
                         modifier = Modifier.padding(vertical = 2.dp),
@@ -493,7 +499,10 @@ private fun StatMini(
 }
 
 @Composable
-private fun ScoreBarRow(attempts: List<TestAttemptEntity>) {
+private fun ScoreBarRow(
+    attempts: List<TestAttemptEntity>,
+    scoreVisible: Boolean,
+) {
     val p = mockTestPalette()
     val rowH = 108.dp
     val maxBar = 78.dp
@@ -533,7 +542,7 @@ private fun ScoreBarRow(attempts: List<TestAttemptEntity>) {
                 )
                 Spacer(Modifier.height(5.dp))
                 Text(
-                    text = "$pct",
+                    text = if (scoreVisible) "$pct" else "-",
                     color = p.textSecondary,
                     fontSize = 9.sp,
                     maxLines = 1,
@@ -544,7 +553,10 @@ private fun ScoreBarRow(attempts: List<TestAttemptEntity>) {
 }
 
 @Composable
-private fun LastTenTrendLineChart(percents: List<Int>) {
+private fun LastTenTrendLineChart(
+    percents: List<Int>,
+    scoreVisible: Boolean,
+) {
     val p = mockTestPalette()
     val shape = RoundedCornerShape(12.dp)
     Column(
@@ -603,7 +615,7 @@ private fun LastTenTrendLineChart(percents: List<Int>) {
             }
         }
         Text(
-            text = "0% bottom · 100% top",
+            text = if (scoreVisible) "0% bottom · 100% top" else "- bottom · - top",
             color = p.textSecondary,
             fontSize = 10.sp,
         )
@@ -617,14 +629,15 @@ private fun PeerComparePanel(
     userAvg: Int,
     userBest: Int,
     userLast: Int,
+    scoreVisible: Boolean,
 ) {
     val p = mockTestPalette()
     val shape = RoundedCornerShape(14.dp)
     val bench = selected.benchmarkPercent
     val deltaAvg = userAvg - bench
     val deltaText = when {
-        deltaAvg > 0 -> "Your average is ${deltaAvg}% above this benchmark."
-        deltaAvg < 0 -> "Your average is ${-deltaAvg}% below this benchmark."
+        deltaAvg > 0 -> "Your average is ${if (scoreVisible) "${deltaAvg}%" else "-"} above this benchmark."
+        deltaAvg < 0 -> "Your average is ${if (scoreVisible) "${-deltaAvg}%" else "-"} below this benchmark."
         else -> "Your average matches this benchmark."
     }
     Card(
@@ -635,14 +648,14 @@ private fun PeerComparePanel(
     ) {
         Column(Modifier.padding(14.dp)) {
             Text(
-                text = "Compare yourself (demo)",
+                text = "Compare yourself",
                 color = p.textPrimary,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "Pick a reference band and see how your scores line up. Numbers are illustrative until you plug in real cohort data.",
+                text = "Pick a reference band and see how your scores line up.",
                 color = p.textSecondary,
                 fontSize = 11.sp,
                 lineHeight = 15.sp,
@@ -672,14 +685,14 @@ private fun PeerComparePanel(
             Text(selected.description, color = p.textSecondary, fontSize = 12.sp, lineHeight = 16.sp)
             Spacer(Modifier.height(10.dp))
             Text(
-                text = "Reference: $bench% · $deltaText",
+                text = "Reference: ${if (scoreVisible) "$bench%" else "-"} · $deltaText",
                 color = p.textPrimary,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 lineHeight = 16.sp,
             )
             Spacer(Modifier.height(8.dp))
-            Text("Your average ($userAvg%)", color = p.textSecondary, fontSize = 11.sp)
+            Text("Your average (${if (scoreVisible) "$userAvg%" else "-"})", color = p.textSecondary, fontSize = 11.sp)
             Spacer(Modifier.height(4.dp))
             LinearProgressIndicator(
                 progress = { (userAvg / 100f).coerceIn(0f, 1f) },
@@ -692,7 +705,7 @@ private fun PeerComparePanel(
                 strokeCap = StrokeCap.Round,
             )
             Spacer(Modifier.height(8.dp))
-            Text("Benchmark ($bench%)", color = p.textSecondary, fontSize = 11.sp)
+            Text("Benchmark (${if (scoreVisible) "$bench%" else "-"})", color = p.textSecondary, fontSize = 11.sp)
             Spacer(Modifier.height(4.dp))
             LinearProgressIndicator(
                 progress = { (bench / 100f).coerceIn(0f, 1f) },
@@ -706,7 +719,7 @@ private fun PeerComparePanel(
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                text = "Also: last attempt $userLast% · your best $userBest%",
+                text = "Also: last attempt ${if (scoreVisible) "$userLast%" else "-"} · your best ${if (scoreVisible) "$userBest%" else "-"}",
                 color = p.textSecondary,
                 fontSize = 11.sp,
             )
@@ -715,7 +728,10 @@ private fun PeerComparePanel(
 }
 
 @Composable
-private fun TestBreakdownRow(aggregate: TestAggregate) {
+private fun TestBreakdownRow(
+    aggregate: TestAggregate,
+    scoreVisible: Boolean,
+) {
     val p = mockTestPalette()
     Row(
         modifier = Modifier
@@ -740,8 +756,8 @@ private fun TestBreakdownRow(aggregate: TestAggregate) {
             )
         }
         Column(horizontalAlignment = Alignment.End) {
-            Text("avg ${aggregate.avgPercent}%", color = p.accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Text("best ${aggregate.bestPercent}%", color = p.textSecondary, fontSize = 11.sp)
+            Text("avg ${if (scoreVisible) "${aggregate.avgPercent}%" else "-"}", color = p.accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text("best ${if (scoreVisible) "${aggregate.bestPercent}%" else "-"}", color = p.textSecondary, fontSize = 11.sp)
         }
     }
 }

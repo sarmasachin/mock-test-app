@@ -520,7 +520,7 @@ button:active {
 }
 
 .profile-menu-row {
-  grid-template-columns: 1fr 1.4fr 1fr 120px 90px 90px 90px;
+  grid-template-columns: 1fr 1.4fr 1fr 120px 90px 70px 70px 90px 90px;
 }
 
 .profile-panel {
@@ -928,6 +928,29 @@ button:active {
     max-width: 100%;
   }
 
+  .sidebar {
+    padding: 10px 10px 12px;
+    gap: 10px;
+  }
+
+  .brand-title {
+    font-size: 1.35rem;
+  }
+
+  .side-nav {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: thin;
+  }
+
+  .side-nav button {
+    flex: 0 0 auto;
+    min-width: 148px;
+    white-space: nowrap;
+  }
+
   .topbar {
     flex-direction: column;
     align-items: flex-start;
@@ -940,6 +963,17 @@ button:active {
   .questions-table .row,
   .audit-table .row {
     grid-template-columns: 1fr;
+  }
+
+  .table .row-head {
+    display: none;
+  }
+
+  .table .row {
+    border: 1px solid #e3eaf4;
+    border-radius: 10px;
+    margin: 8px;
+    background: #ffffff;
   }
 
   .question-form {
@@ -970,8 +1004,10 @@ button:active {
 }
 
 @media (max-width: 640px) {
-  .side-nav {
-    grid-template-columns: 1fr;
+  .side-nav button {
+    min-width: 132px;
+    padding: 9px 10px;
+    font-size: 0.78rem;
   }
 
   .topbar {

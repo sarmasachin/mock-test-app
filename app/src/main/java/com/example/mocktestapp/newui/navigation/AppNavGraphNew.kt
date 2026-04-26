@@ -22,6 +22,7 @@ import androidx.navigation.compose.rememberNavController
 import com.example.mocktestapp.newui.auth.AuthRouteNew
 import com.example.mocktestapp.newui.auth.CompleteProfileScreenNew
 import com.example.mocktestapp.newui.auth.ForgotPasswordScreenNew
+import com.example.mocktestapp.newui.legal.TermsOfServiceScreenNew
 
 internal object RoutesNew {
     const val BOOTSTRAP = "bootstrap"
@@ -132,6 +133,12 @@ fun AppNavGraphNew() {
                     }
                 },
                 onForgotPassword = { navController.navigate(RoutesNew.FORGOT_PASSWORD) },
+                onOpenTerms = { navController.navigate(RoutesNew.TERMS) },
+            )
+        }
+        composable(RoutesNew.TERMS) {
+            TermsOfServiceScreenNew(
+                onBack = { navController.popBackStack() },
             )
         }
         composable(RoutesNew.COMPLETE_PROFILE) {

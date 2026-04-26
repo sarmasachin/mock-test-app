@@ -3,12 +3,19 @@ package com.example.mocktestapp.newui.theme.palette
 import androidx.compose.ui.graphics.Color
 
 /**
- * Semantic UI colors for MockTest screens. Values come from [MockTestPaletteDark] / [MockTestPaletteLight].
+ * Semantic UI colors for MockTest screens.
  */
 data class MockTestUiPalette(
     val gradientStart: Color,
     val gradientMid: Color,
     val gradientEnd: Color,
+    val homeHeaderStart: Color,
+    val homeHeaderEnd: Color,
+    val homeHeaderOn: Color,
+    val tabBarContainer: Color,
+    val tabSelected: Color,
+    val tabIndicator: Color,
+    val tabUnselected: Color,
     val surface: Color,
     val surfaceElevated: Color,
     val surfaceTrack: Color,

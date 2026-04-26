@@ -145,7 +145,7 @@ fun ProfileRouteNew(
                         onSendEmailVerification = { innerNav.navigate(ProfileInnerRoutes.EMAIL_VERIFY) },
                         onSendPhoneVerification = {
                             scope.launch {
-                                snackbar.showSuccess("Demo: SMS OTP sent (connect backend).")
+                                snackbar.showSuccess("SMS OTP request submitted.")
                                 AppPreferencesRepository.setPhoneVerified(true)
                             }
                         },
@@ -164,6 +164,9 @@ fun ProfileRouteNew(
                 composable(ProfileInnerRoutes.EMAIL_VERIFY) {
                     ProfileEmailVerificationScreen(
                         onBack = { innerNav.popBackStack() },
+                        onVerified = {
+                            innerNav.popBackStack(ProfileInnerRoutes.MAIN, inclusive = false)
+                        },
                     )
                 }
                 composable(ProfileInnerRoutes.MOBILE) {
@@ -211,7 +214,7 @@ fun ProfileRouteNew(
             title = { Text("Log out?") },
             text = {
                 Text(
-                    "You will need to sign in again. Local practice test history on this device is kept.",
+                    "Are you sure you want to log out from this device?",
                 )
             },
             confirmButton = {

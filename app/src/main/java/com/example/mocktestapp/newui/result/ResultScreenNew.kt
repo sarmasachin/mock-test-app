@@ -12,6 +12,7 @@ import androidx.core.content.FileProvider
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -62,11 +64,19 @@ fun ResultScreenNew(
     answered: Int = 3,
     correct: Int = 0,
     wrong: Int = 3,
+    total: Int = 0,
+    publishAtMillisOverride: Long? = null,
+    onGoSubmitApplication: () -> Unit,
     onAnswerKey: () -> Unit,
     onReview: () -> Unit,
 ) {
     val p = mockTestPalette()
-    val bg = Brush.verticalGradient(colors = p.gradientColors())
+    val bg = Brush.verticalGradient(
+        colors = listOf(
+            Color(0xFFF8FAFF),
+            Color(0xFFEEF4FF),
+        ),
+    )
     val context = LocalContext.current
     val profile by AppPreferencesRepository.drawerUserProfile.collectAsState(
         initial = AppPreferencesRepository.DrawerUserProfile(
@@ -75,6 +85,8 @@ fun ResultScreenNew(
             userIdFormatted = null,
         ),
     )
+    val scoreVisible by AppPreferencesRepository.scoreVisibilityEnabled.collectAsState(initial = true)
+    val appliedSeries by AppPreferencesRepository.appliedTestSeries.collectAsState(initial = emptyList())
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var answerKeyReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
     var resultReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
@@ -89,10 +101,33 @@ fun ResultScreenNew(
             nowMs = System.currentTimeMillis()
         }
     }
-    val isResultLocked = (resultReleaseAtMs ?: 0L) > nowMs
+    val safeTotal = total.coerceAtLeast(answered).coerceAtLeast(correct + wrong)
+    val scoreDisplayText = if (scoreVisible) "$correct / ${safeTotal.coerceAtLeast(1)}" else "-"
+    val hasAttemptData = safeTotal > 0 || answered > 0 || correct > 0 || wrong > 0
+    val shouldShowSubmitApplicationGate = !hasAttemptData && appliedSeries.isEmpty()
+    val effectiveResultReleaseAt = maxOf(resultReleaseAtMs ?: 0L, publishAtMillisOverride ?: 0L)
+    val isResultLocked = effectiveResultReleaseAt > nowMs
     val isAnswerKeyLocked = (answerKeyReleaseAtMs ?: 0L) > nowMs
-    val resultCountdown = formatCountdown((resultReleaseAtMs ?: 0L) - nowMs)
+    val resultCountdown = formatCountdown(effectiveResultReleaseAt - nowMs)
     val answerKeyCountdown = formatCountdown((answerKeyReleaseAtMs ?: 0L) - nowMs)
+    val questionCountState by produceState<Int?>(initialValue = null, key1 = testName) {
+        val count = ContentRepository.loadQuizQuestionsForTest(testName).size
+        value = count
+    }
+    val isQuestionDataLoading = questionCountState == null
+    val hasQuestionData = (questionCountState ?: 0) > 0
+    val canOpenDetailViews = !isQuestionDataLoading && hasQuestionData
+    val answerKeyButtonText = when {
+        isQuestionDataLoading -> "Answer Key • Loading..."
+        !hasQuestionData -> "Answer Key • Not available"
+        isAnswerKeyLocked -> "Answer Key • $answerKeyCountdown"
+        else -> "Answer Key"
+    }
+    val reviewButtonText = when {
+        isQuestionDataLoading -> "Review • Loading..."
+        !hasQuestionData -> "Review • Not available"
+        else -> "Review"
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -102,7 +137,8 @@ fun ResultScreenNew(
             modifier = modifier
                 .fillMaxSize()
                 .background(bg)
-                .padding(padding),
+                .padding(padding)
+                .padding(horizontal = 18.dp, vertical = 14.dp),
         ) {
             Text(
                 text = "Result",
@@ -125,36 +161,123 @@ fun ResultScreenNew(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(shape)
-                    .border(1.dp, p.border.copy(alpha = 0.16f), shape),
+                    .border(1.dp, Color(0xFFE5E7EB), shape),
                 shape = shape,
-                colors = CardDefaults.cardColors(containerColor = p.surface),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = scoreText,
-                        color = p.textPrimary,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 34.sp,
-                    )
+                    if (!hasAttemptData) {
+                        Text(
+                            text = "No test attempt found yet. Start and submit a test to view results.",
+                            color = Color(0xFF0F172A),
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                        )
+                        Spacer(Modifier.height(14.dp))
+                        SolidPillButton(
+                            text = "Go to Submit Application",
+                            onClick = onGoSubmitApplication,
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = true,
+                            containerColor = Color(0xFF2563EB),
+                            contentColor = Color.White,
+                        )
+                        return@Column
+                    }
+                    if (shouldShowSubmitApplicationGate) {
+                        Text(
+                            text = "Please submit a test application first. You can take the test after your application is submitted.",
+                            color = Color(0xFF0F172A),
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                        )
+                        Spacer(Modifier.height(14.dp))
+                        SolidPillButton(
+                            text = "Go to Submit Application",
+                            onClick = onGoSubmitApplication,
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = true,
+                            containerColor = Color(0xFF2563EB),
+                            contentColor = Color.White,
+                        )
+                        return@Column
+                    }
 
-                    Spacer(Modifier.height(14.dp))
                     if (isResultLocked) {
                         Text(
+                            text = "You have successfully submitted the test.",
+                            color = Color(0xFF0F172A),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
                             text = "Result unlock in $resultCountdown",
-                            color = p.textPrimary,
+                            color = Color(0xFF1D4ED8),
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 18.sp,
                         )
-                        Spacer(Modifier.height(12.dp))
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = "Your full result details will be available after unlock.",
+                            color = Color(0xFF475569),
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 13.sp,
+                        )
+                        return@Column
                     }
 
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(
+                                brush = Brush.horizontalGradient(
+                                    colors = listOf(
+                                        Color(0xFF1D4ED8),
+                                        Color(0xFF3B82F6),
+                                    ),
+                                ),
+                            )
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                    ) {
+                        Text(
+                            text = scoreDisplayText,
+                            color = Color.White,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 34.sp,
+                        )
+                    }
+
+                    Spacer(Modifier.height(14.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        StatMini(title = "Answered", value = answered.toString(), modifier = Modifier.weight(1f))
-                        StatMini(title = "Correct", value = correct.toString(), modifier = Modifier.weight(1f))
-                        StatMini(title = "Wrong", value = wrong.toString(), modifier = Modifier.weight(1f))
+                        StatMini(
+                            title = "Answered",
+                            value = if (scoreVisible) answered.toString() else "-",
+                            modifier = Modifier.weight(1f),
+                            containerColor = Color(0xFFF5F3FF),
+                            valueColor = Color(0xFF7C3AED),
+                            titleColor = Color(0xFF6D28D9),
+                        )
+                        StatMini(
+                            title = "Correct",
+                            value = if (scoreVisible) correct.toString() else "-",
+                            modifier = Modifier.weight(1f),
+                            containerColor = Color(0xFFECFDF3),
+                            valueColor = Color(0xFF16A34A),
+                            titleColor = Color(0xFF166534),
+                        )
+                        StatMini(
+                            title = "Wrong",
+                            value = if (scoreVisible) wrong.toString() else "-",
+                            modifier = Modifier.weight(1f),
+                            containerColor = Color(0xFFFEF2F2),
+                            valueColor = Color(0xFFDC2626),
+                            titleColor = Color(0xFFB91C1C),
+                        )
                     }
 
                     Spacer(Modifier.height(16.dp))
@@ -164,16 +287,36 @@ fun ResultScreenNew(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         GhostPillButton(
-                            text = if (isAnswerKeyLocked) "Answer Key • $answerKeyCountdown" else "Answer Key",
-                            onClick = { if (!isAnswerKeyLocked) onAnswerKey() },
+                            text = answerKeyButtonText,
+                            onClick = {
+                                if (!isQuestionDataLoading && hasQuestionData && !isAnswerKeyLocked) {
+                                    onAnswerKey()
+                                }
+                            },
                             modifier = Modifier.weight(1f),
-                            enabled = !isAnswerKeyLocked,
+                            enabled = canOpenDetailViews && !isAnswerKeyLocked,
+                            containerColor = Color(0xFFDBEAFE),
+                            contentColor = Color(0xFF1D4ED8),
+                            borderColor = Color(0xFF93C5FD),
                         )
                         SolidPillButton(
-                            text = "Review",
-                            onClick = { if (!isResultLocked) onReview() },
+                            text = reviewButtonText,
+                            onClick = {
+                                if (canOpenDetailViews) onReview()
+                            },
                             modifier = Modifier.weight(1f),
-                            enabled = !isResultLocked,
+                            enabled = canOpenDetailViews,
+                            containerColor = Color(0xFF14B8A6),
+                            contentColor = Color.White,
+                        )
+                    }
+                    if (!hasQuestionData && !isQuestionDataLoading) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "Answer key and review will be enabled after questions are published for this test.",
+                            color = Color(0xFF64748B),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
                         )
                     }
 
@@ -181,7 +324,6 @@ fun ResultScreenNew(
                     GhostPillButton(
                         text = "Share score",
                         onClick = {
-                            if (isResultLocked) return@GhostPillButton
                             try {
                                 val now = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a").format(LocalDateTime.now())
                                 val userName = profile.displayName.ifBlank { "Guest User" }
@@ -190,10 +332,11 @@ fun ResultScreenNew(
                                     userName = userName,
                                     userId = userId,
                                     testName = testName,
-                                    scoreText = scoreText,
+                                    scoreText = scoreDisplayText,
                                     answered = answered,
                                     correct = correct,
                                     wrong = wrong,
+                                    total = safeTotal,
                                     sharedAt = now,
                                 )
                                 val outFile = File(context.cacheDir, "result_share_${System.currentTimeMillis()}.png")
@@ -217,7 +360,10 @@ fun ResultScreenNew(
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !isResultLocked,
+                        enabled = true,
+                        containerColor = Color(0xFFE0E7FF),
+                        contentColor = Color(0xFF3730A3),
+                        borderColor = Color(0xFFC7D2FE),
                     )
                 }
             }
@@ -233,6 +379,7 @@ private fun createResultShareCardBitmap(
     answered: Int,
     correct: Int,
     wrong: Int,
+    total: Int,
     sharedAt: String,
 ): Bitmap {
     val width = 1080
@@ -243,8 +390,9 @@ private fun createResultShareCardBitmap(
     val safeUserName = userName.take(24)
     val scoreParts = scoreText.split("/")
     val scored = scoreParts.getOrNull(0)?.trim()?.toIntOrNull() ?: correct
-    val total = scoreParts.getOrNull(1)?.trim()?.toIntOrNull() ?: (correct + wrong).coerceAtLeast(1)
-    val percentage = ((scored * 100f) / total.coerceAtLeast(1)).coerceIn(0f, 100f)
+    val resolvedTotal = scoreParts.getOrNull(1)?.trim()?.toIntOrNull()
+        ?: total.coerceAtLeast(correct + wrong).coerceAtLeast(1)
+    val percentage = ((scored * 100f) / resolvedTotal.coerceAtLeast(1)).coerceIn(0f, 100f)
     val performanceBand = when {
         percentage >= 85f -> "Top Performer"
         percentage >= 60f -> "Strong Attempt"
@@ -385,14 +533,16 @@ private fun StatMini(
     title: String,
     value: String,
     modifier: Modifier = Modifier,
+    containerColor: Color,
+    valueColor: Color,
+    titleColor: Color,
 ) {
-    val p = mockTestPalette()
     val shape = RoundedCornerShape(16.dp)
     Card(
         modifier = modifier.height(76.dp),
         shape = shape,
-        colors = CardDefaults.cardColors(containerColor = p.surfaceElevated),
-        border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.12f)),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.8f)),
     ) {
         Column(
             modifier = Modifier
@@ -401,9 +551,9 @@ private fun StatMini(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(text = title, color = p.textSecondary, fontSize = 12.sp)
+            Text(text = title, color = titleColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
-            Text(text = value, color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
+            Text(text = value, color = valueColor, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
         }
     }
 }
@@ -414,18 +564,22 @@ private fun GhostPillButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
+    containerColor: Color,
+    contentColor: Color,
+    borderColor: Color,
 ) {
-    val p = mockTestPalette()
     Button(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier.height(46.dp),
         shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.buttonColors(
-            containerColor = p.surface,
-            contentColor = p.textPrimary,
+            containerColor = containerColor,
+            contentColor = contentColor,
+            disabledContainerColor = containerColor.copy(alpha = 0.6f),
+            disabledContentColor = contentColor.copy(alpha = 0.6f),
         ),
-        border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.16f)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
     ) {
         Text(text = text, fontWeight = FontWeight.Bold)
     }
@@ -437,16 +591,19 @@ private fun SolidPillButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
+    containerColor: Color,
+    contentColor: Color,
 ) {
-    val p = mockTestPalette()
     Button(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier.height(46.dp),
         shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.buttonColors(
-            containerColor = p.primaryButton,
-            contentColor = p.onPrimaryButton,
+            containerColor = containerColor,
+            contentColor = contentColor,
+            disabledContainerColor = containerColor.copy(alpha = 0.6f),
+            disabledContentColor = contentColor.copy(alpha = 0.6f),
         ),
     ) {
         Text(text = text, fontWeight = FontWeight.Bold)

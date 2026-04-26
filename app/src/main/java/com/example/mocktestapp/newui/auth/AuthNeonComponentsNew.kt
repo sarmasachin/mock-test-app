@@ -10,11 +10,14 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -23,6 +26,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Text
@@ -217,13 +221,18 @@ fun NeonTextField(
 fun NeonButton(
     text: String,
     onClick: () -> Unit,
+    enabled: Boolean = true,
+    loading: Boolean = false,
 ) {
     val p = mockTestPalette()
     Button(
         onClick = onClick,
+        enabled = enabled,
         colors = ButtonDefaults.buttonColors(
             containerColor = p.primaryButton,
             contentColor = p.onPrimaryButton,
+            disabledContainerColor = p.primaryButton.copy(alpha = 0.6f),
+            disabledContentColor = p.onPrimaryButton.copy(alpha = 0.75f),
         ),
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier
@@ -231,7 +240,21 @@ fun NeonButton(
             .height(48.dp),
     ) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(text = text, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            if (loading) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        color = p.onPrimaryButton,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            } else {
+                Text(text = text, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            }
         }
     }
 }

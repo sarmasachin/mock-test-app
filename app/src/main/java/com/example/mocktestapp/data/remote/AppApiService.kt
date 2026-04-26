@@ -40,6 +40,9 @@ interface AppApiService {
     @POST("attempts")
     suspend fun postAttempt(@Body body: AttemptRequest): AttemptResponse
 
+    @POST("tests/{testId}/apply")
+    suspend fun applyForTest(@Path("testId") testId: String): ApplyTestResponse
+
     @POST("polls/{pollId}/vote")
     suspend fun postPollVote(
         @Path("pollId") pollId: String,

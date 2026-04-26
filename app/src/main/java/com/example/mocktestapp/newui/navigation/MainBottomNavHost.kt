@@ -1,5 +1,6 @@
 package com.example.mocktestapp.newui.navigation
 
+import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,17 +17,21 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import android.widget.Toast
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavController
 import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -72,6 +77,9 @@ import com.example.mocktestapp.newui.result.ReviewSolutionScreenNew
 import com.example.mocktestapp.newui.tests.StartTestPreviewScreenNew
 import com.example.mocktestapp.newui.tests.TestsScreenNew
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.launch
 
 private object MainTabRoutes {
@@ -143,6 +151,7 @@ fun MainBottomNavHost(
     rootNavController: NavController,
 ) {
     val mainNavController = rememberNavController()
+    val context = LocalContext.current
     val p = mockTestPalette()
     val scope = rememberCoroutineScope()
     val drawerProfile by AppPreferencesRepository.drawerUserProfile.collectAsState(
@@ -152,7 +161,30 @@ fun MainBottomNavHost(
             userIdFormatted = null,
         ),
     )
+    val attemptsUserKey = remember(drawerProfile.emailLine, drawerProfile.userIdFormatted) {
+        drawerProfile.emailLine.ifBlank { drawerProfile.userIdFormatted ?: "guest" }
+    }
+    val attempts by TestHistoryRepository.observeAttempts(attemptsUserKey).collectAsState(initial = emptyList())
+    val pendingResult by AppPreferencesRepository.pendingResultState.collectAsState(initial = null)
     var profileReselectSignal by remember { mutableIntStateOf(0) }
+    var lastBackPressAtMs by remember { mutableStateOf(0L) }
+    val navBackStackEntry by mainNavController.currentBackStackEntryAsState()
+    val currentDestination = navBackStackEntry?.destination
+    val isOnHomeRoot = currentDestination?.route == MainTabRoutes.Home
+    val showPendingSubmissionMessage = {
+        val pending = pendingResult
+        if (pending != null) {
+            val formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a")
+            val whenText = runCatching {
+                formatter.format(Instant.ofEpochMilli(pending.publishAtMillis).atZone(ZoneId.systemDefault()))
+            }.getOrDefault("the scheduled time")
+            Toast.makeText(
+                context,
+                "You have successfully submitted the test. Your result will be available on $whenText.",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
 
     val tabs = remember {
         listOf(
@@ -162,12 +194,19 @@ fun MainBottomNavHost(
             MainTabItem(MainTabRoutes.Profile, "Profile", Icons.Outlined.Person),
         )
     }
+    BackHandler(enabled = isOnHomeRoot) {
+        val now = System.currentTimeMillis()
+        if (now - lastBackPressAtMs < 2000L) {
+            (context as? Activity)?.finish()
+        } else {
+            lastBackPressAtMs = now
+            Toast.makeText(context, "Press back again to close app", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     Scaffold(
         containerColor = p.surface,
         bottomBar = {
-            val navBackStackEntry by mainNavController.currentBackStackEntryAsState()
-            val currentDestination = navBackStackEntry?.destination
             val showBottomBar = currentDestination
                 ?.hierarchy
                 ?.any { d ->
@@ -181,7 +220,7 @@ fun MainBottomNavHost(
                 currentDestination?.route == RoutesNew.TERMS
             if (showBottomBar) {
                 NavigationBar(
-                    containerColor = p.surface,
+                    containerColor = p.tabBarContainer,
                     tonalElevation = 10.dp,
                 ) {
                     tabs.forEach { tab ->
@@ -219,11 +258,11 @@ fun MainBottomNavHost(
                             },
                             alwaysShowLabel = true,
                             colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = Color.Black,
-                                selectedTextColor = Color.Black,
+                                selectedIconColor = p.tabSelected,
+                                selectedTextColor = p.tabSelected,
                                 indicatorColor = Color.Transparent,
-                                unselectedIconColor = p.textSecondary,
-                                unselectedTextColor = p.textSecondary,
+                                unselectedIconColor = p.tabUnselected,
+                                unselectedTextColor = p.tabUnselected,
                             ),
                         )
                     }
@@ -262,19 +301,41 @@ fun MainBottomNavHost(
                         mainNavController.navigateMainTab(MainTabRoutes.Tests)
                     },
                     onStartTest = { testName ->
-                        val safeName = testName.ifBlank { "bsc nursing moc test" }
+                        if (pendingResult != null) {
+                            showPendingSubmissionMessage()
+                            return@HomeRouteNew
+                        }
+                        val safeName = testName.ifBlank { "Test" }
                         mainNavController.navigate("${RoutesNew.START_TEST_PREVIEW}/$safeName")
                     },
                     onLeaderboard = { mainNavController.navigate(RoutesNew.LEADERBOARD) },
                     onResults = {
-                        mainNavController.navigate(
-                            "${RoutesNew.RESULT}/Latest Test?answered=0&correct=0&wrong=0",
-                        )
+                        val pending = pendingResult
+                        if (pending != null) {
+                            val safeName = pending.testName.ifBlank { "Test" }
+                            mainNavController.navigate(
+                                "${RoutesNew.RESULT}/$safeName?answered=${pending.answered}&correct=${pending.correct}&wrong=${pending.wrong}&total=${pending.total}&publishAt=${pending.publishAtMillis}",
+                            )
+                        } else {
+                            val latestAttempt = attempts.maxByOrNull { it.completedAtMillis }
+                            if (latestAttempt != null) {
+                                val safeName = latestAttempt.testName.ifBlank { "Test" }
+                                val total = latestAttempt.total.coerceAtLeast(0)
+                                val answered = total
+                                val correct = latestAttempt.correct.coerceAtLeast(0).coerceAtMost(answered)
+                                val wrong = (answered - correct).coerceAtLeast(0)
+                                mainNavController.navigate(
+                                    "${RoutesNew.RESULT}/$safeName?answered=$answered&correct=$correct&wrong=$wrong&total=$total&publishAt=0",
+                                )
+                            } else {
+                                Toast.makeText(context, "No attempts yet. Start a test first.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
                     },
-                    onOpenPendingResult = { testName, answered, correct, wrong ->
+                    onOpenPendingResult = { testName, answered, correct, wrong, total, publishAtMillis ->
                         val safeName = testName.ifBlank { "Test" }
                         mainNavController.navigate(
-                            "${RoutesNew.RESULT}/$safeName?answered=$answered&correct=$correct&wrong=$wrong",
+                            "${RoutesNew.RESULT}/$safeName?answered=$answered&correct=$correct&wrong=$wrong&total=$total&publishAt=$publishAtMillis",
                         )
                     },
                     onBookmarks = { mainNavController.navigate(RoutesNew.BOOKMARKS) },
@@ -344,6 +405,10 @@ fun MainBottomNavHost(
                     subcategory = name.ifBlank { "Topic" },
                     onBack = { mainNavController.popBackOrHome() },
                     onOpenTest = { test ->
+                        if (pendingResult != null) {
+                            showPendingSubmissionMessage()
+                            return@TestsScreenNew
+                        }
                         mainNavController.navigate("${RoutesNew.INSTRUCTIONS}/$test")
                     },
                 )
@@ -355,9 +420,16 @@ fun MainBottomNavHost(
             ) { entry ->
                 val name = entry.arguments?.getString("name").orEmpty()
                 StartTestPreviewScreenNew(
-                    testName = name.ifBlank { "bsc nursing moc test" },
+                    testName = name.ifBlank { "Test" },
                     onBack = { mainNavController.popBackOrHome() },
-                    onStartTest = { mainNavController.navigate("${RoutesNew.QUIZ}/$name") },
+                    onStartTest = { selectedTestName ->
+                        if (pendingResult != null) {
+                            showPendingSubmissionMessage()
+                            return@StartTestPreviewScreenNew
+                        }
+                        val safeSelectedName = selectedTestName.ifBlank { name.ifBlank { "Test" } }
+                        mainNavController.navigate("${RoutesNew.QUIZ}/$safeSelectedName")
+                    },
                 )
             }
 
@@ -369,7 +441,13 @@ fun MainBottomNavHost(
                 InstructionsScreenNew(
                     testName = name.ifBlank { "Test" },
                     onBack = { mainNavController.popBackOrHome() },
-                    onStartTest = { mainNavController.navigate("${RoutesNew.QUIZ}/$name") },
+                    onStartTest = {
+                        if (pendingResult != null) {
+                            showPendingSubmissionMessage()
+                            return@InstructionsScreenNew
+                        }
+                        mainNavController.navigate("${RoutesNew.QUIZ}/$name")
+                    },
                 )
             }
 
@@ -378,10 +456,17 @@ fun MainBottomNavHost(
                 arguments = listOf(navArgument("name") { type = NavType.StringType }),
             ) { entry ->
                 val name = entry.arguments?.getString("name").orEmpty()
+                if (pendingResult != null) {
+                    LaunchedEffect(pendingResult?.publishAtMillis) {
+                        showPendingSubmissionMessage()
+                        mainNavController.goToHomeTab()
+                    }
+                    return@composable
+                }
                 QuizScreenNew(
-                    testName = name.ifBlank { "bsc nursing moc test" },
+                    testName = name.ifBlank { "Test" },
                     onBack = { mainNavController.popBackOrHome() },
-                    onSubmit = { answered, correct, wrong, publishAt ->
+                    onSubmit = { answered, correct, wrong, total, publishAt ->
                         val attemptsUserKey = drawerProfile.emailLine.ifBlank {
                             drawerProfile.userIdFormatted ?: "guest"
                         }
@@ -390,23 +475,25 @@ fun MainBottomNavHost(
                                 userKey = attemptsUserKey,
                                 testName = name.ifBlank { "Test" },
                                 correct = correct,
-                                total = 10,
+                                total = total,
                             )
+                            AppPreferencesRepository.markPendingResultSubmittedNow(
+                                testName = name.ifBlank { "Test" },
+                                publishAtMillis = publishAt,
+                                answered = answered,
+                                correct = correct,
+                                wrong = wrong,
+                                total = total,
+                            )
+                            AppPreferencesRepository.removeAppliedTestSeriesNow(name.ifBlank { "Test" })
+                            mainNavController.goToHomeTab()
                         }
-                        AppPreferencesRepository.markPendingResultSubmitted(
-                            testName = name.ifBlank { "Test" },
-                            publishAtMillis = publishAt,
-                            answered = answered,
-                            correct = correct,
-                            wrong = wrong,
-                        )
-                        mainNavController.goToHomeTab()
                     },
                 )
             }
 
             composable(
-                route = "${RoutesNew.RESULT}/{name}?answered={answered}&correct={correct}&wrong={wrong}",
+                route = "${RoutesNew.RESULT}/{name}?answered={answered}&correct={correct}&wrong={wrong}&total={total}&publishAt={publishAt}",
                 arguments = listOf(
                     navArgument("name") { type = NavType.StringType },
                     navArgument("answered") {
@@ -421,19 +508,31 @@ fun MainBottomNavHost(
                         type = NavType.IntType
                         defaultValue = 3
                     },
+                    navArgument("total") {
+                        type = NavType.IntType
+                        defaultValue = 0
+                    },
+                    navArgument("publishAt") {
+                        type = NavType.LongType
+                        defaultValue = 0L
+                    },
                 ),
             ) { entry ->
                 val name = entry.arguments?.getString("name").orEmpty()
                 val answered = entry.arguments?.getInt("answered") ?: 3
                 val correct = entry.arguments?.getInt("correct") ?: 0
                 val wrong = entry.arguments?.getInt("wrong") ?: 3
-                val total = 10
+                val total = entry.arguments?.getInt("total") ?: 0
+                val publishAt = entry.arguments?.getLong("publishAt") ?: 0L
                 ResultScreenNew(
                     testName = name.ifBlank { "Arithmetic Sprint" },
-                    scoreText = "$correct / $total",
+                    scoreText = "-",
                     answered = answered,
                     correct = correct,
                     wrong = wrong,
+                    total = total,
+                    publishAtMillisOverride = publishAt.takeIf { it > 0L },
+                    onGoSubmitApplication = { mainNavController.navigateMainTab(MainTabRoutes.Tests) },
                     onAnswerKey = { mainNavController.navigate("${RoutesNew.ANSWER_KEY}/$name") },
                     onReview = { mainNavController.navigate("${RoutesNew.REVIEW}/$name") },
                 )
@@ -479,7 +578,12 @@ fun MainBottomNavHost(
                     onBack = { mainNavController.popBackOrHome() },
                     onOpenQuestion = { nextQ ->
                         if (nextQ != qNo) {
-                            mainNavController.navigate("${RoutesNew.REVIEW_SOLUTION}/$name/$nextQ")
+                            val currentRoute = "${RoutesNew.REVIEW_SOLUTION}/$name/$qNo"
+                            mainNavController.navigate("${RoutesNew.REVIEW_SOLUTION}/$name/$nextQ") {
+                                // Replace current question route so back exits solution screen directly.
+                                popUpTo(currentRoute) { inclusive = true }
+                                launchSingleTop = true
+                            }
                         }
                     },
                 )
@@ -567,7 +671,7 @@ fun MainBottomNavHost(
                 ProgressReportScreenNew(
                     onBack = { mainNavController.popBackOrHome() },
                     onStartPractice = {
-                        mainNavController.navigate("${RoutesNew.INSTRUCTIONS}/bsc nursing moc test") {
+                        mainNavController.navigate("${RoutesNew.INSTRUCTIONS}/Test") {
                             launchSingleTop = true
                         }
                     },

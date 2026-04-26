@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +42,7 @@ import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 
 data class TestCardNew(
+    val id: String = "",
     val slug: String = "",
     val title: String,
     val meta: String,
@@ -55,9 +57,14 @@ data class TestCardNew(
     val examMode: String? = null,
     val negativeMarkingText: String? = null,
     val testTypeLabel: String? = null,
+    val badgeEnabled: Boolean = false,
+    val badgeText: String = "Live",
     val validUntil: String? = null,
     val answerKeyReleaseAt: String? = null,
     val resultReleaseAt: String? = null,
+    val capacityTotal: Int? = null,
+    val enrolledCount: Int? = null,
+    val remainingSeats: Int? = null,
 )
 
 @Composable
@@ -132,93 +139,114 @@ private fun TestRow(
     val p = mockTestPalette()
     val shape = RoundedCornerShape(18.dp)
     var expanded by remember(test.title) { mutableStateOf(false) }
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = shape,
-        colors = CardDefaults.cardColors(containerColor = p.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
-    ) {
-        Row(
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(top = 10.dp),
+            shape = shape,
+            colors = CardDefaults.cardColors(containerColor = p.surface),
+            border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = test.title,
-                    color = p.textPrimary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = test.meta,
-                    color = p.textSecondary,
-                    fontSize = 12.sp,
-                )
-                Spacer(Modifier.height(10.dp))
-                val primaryRows = listOfNotNull(
-                    test.examDate?.let { "Exam Date: $it" },
-                    test.durationLabel?.let { "Duration: $it" },
-                    test.questionsMarks?.let { "Questions/Marks: $it" },
-                    test.enrolledLabel?.let { "Enrolled: $it" },
-                    test.remainingSeatsLabel?.let { "Seats Left: $it" },
-                )
-                primaryRows.forEach { line ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = line,
-                        color = p.textSecondary,
-                        fontSize = 11.sp,
+                        text = test.title,
+                        color = p.textPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.ExtraBold,
                     )
-                }
-                val extraRows = listOfNotNull(
-                    test.slotLabel?.takeIf { it.isNotBlank() }?.let { "Slot: $it" },
-                    test.attemptsAllowed?.let { "Attempts: $it" },
-                    test.languageMode?.let { "Language: $it" },
-                    test.examMode?.let { "Mode: $it" },
-                    test.negativeMarkingText?.let { "Negative: $it" },
-                    test.testTypeLabel?.let { "Type: $it" },
-                    test.validUntil?.let { "Valid Till: $it" },
-                )
-                if (expanded) {
-                    extraRows.forEach { line ->
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = test.meta,
+                        color = p.textSecondary,
+                        fontSize = 12.sp,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    val primaryRows = listOfNotNull(
+                        test.examDate?.let { "Exam Date: $it" },
+                        test.durationLabel?.let { "Duration: $it" },
+                        test.questionsMarks?.let { "Questions/Marks: $it" },
+                        test.enrolledLabel?.let { "Enrolled: $it" },
+                        test.remainingSeatsLabel?.let { "Seats Left: $it" },
+                    )
+                    primaryRows.forEach { line ->
                         Text(
                             text = line,
                             color = p.textSecondary,
                             fontSize = 11.sp,
                         )
                     }
+                    val extraRows = listOfNotNull(
+                        test.slotLabel?.takeIf { it.isNotBlank() }?.let { "Slot: $it" },
+                        test.attemptsAllowed?.let { "Attempts: $it" },
+                        test.languageMode?.let { "Language: $it" },
+                        test.examMode?.let { "Mode: $it" },
+                        test.negativeMarkingText?.let { "Negative: $it" },
+                        test.testTypeLabel?.let { "Type: $it" },
+                        test.validUntil?.let { "Valid Till: $it" },
+                    )
+                    if (expanded) {
+                        extraRows.forEach { line ->
+                            Text(
+                                text = line,
+                                color = p.textSecondary,
+                                fontSize = 11.sp,
+                            )
+                        }
+                    }
+                    if (extraRows.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = if (expanded) "Less details" else "View details",
+                            color = p.accent,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { expanded = !expanded }
+                                .padding(horizontal = 8.dp, vertical = 5.dp),
+                        )
+                    }
                 }
-                if (extraRows.isNotEmpty()) {
-                    Spacer(Modifier.height(6.dp))
+
+                val pill = RoundedCornerShape(999.dp)
+                Box(
+                    modifier = Modifier
+                        .clip(pill)
+                        .background(p.systemBlue)
+                        .border(1.dp, p.overlaySoft, pill)
+                        .clickable(onClick = onOpen)
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Text(
-                        text = if (expanded) "Less details" else "View details",
-                        color = p.accent,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable { expanded = !expanded }
-                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                        text = "Start Test Series",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
                     )
                 }
             }
-
-            val pill = RoundedCornerShape(999.dp)
+        }
+        if (test.badgeEnabled) {
             Box(
                 modifier = Modifier
-                    .clip(pill)
-                    .background(p.systemBlue)
-                    .border(1.dp, p.overlaySoft, pill)
-                    .clickable(onClick = onOpen)
-                    .padding(horizontal = 18.dp, vertical = 10.dp),
-                contentAlignment = Alignment.Center,
+                    .align(Alignment.TopCenter)
+                    .offset(y = 0.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFFDC2626))
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
             ) {
                 Text(
-                    text = "Start Test Series",
+                    text = test.badgeText,
                     color = Color.White,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                 )
             }

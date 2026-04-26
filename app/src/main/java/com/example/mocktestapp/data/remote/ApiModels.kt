@@ -151,6 +151,8 @@ data class CatalogTestDto(
     @SerializedName("examMode") val examMode: String? = null,
     @SerializedName("negativeMarkingText") val negativeMarkingText: String? = null,
     @SerializedName("testTypeLabel") val testTypeLabel: String? = null,
+    @SerializedName("badgeEnabled") val badgeEnabled: Boolean? = null,
+    @SerializedName("badgeText") val badgeText: String? = null,
     @SerializedName("validUntil") val validUntil: String? = null,
     @SerializedName("answerKeyReleaseAt") val answerKeyReleaseAt: String? = null,
     @SerializedName("resultReleaseAt") val resultReleaseAt: String? = null,
@@ -160,6 +162,19 @@ data class CatalogTestDto(
 
 data class TestsListResponse(
     val items: List<CatalogTestDto>,
+)
+
+data class TestQuestionDto(
+    val id: Int,
+    val position: Int,
+    @SerializedName("questionPrompt") val questionPrompt: String,
+    val options: List<String>,
+    @SerializedName("correctIndex") val correctIndex: Int,
+    val explanation: String? = null,
+)
+
+data class TestQuestionsResponse(
+    val items: List<TestQuestionDto> = emptyList(),
 )
 
 data class DailyDigestItemDto(
@@ -221,6 +236,16 @@ data class HomeNewsSlideDto(
 data class HomeContentDto(
     @SerializedName("welcomeText") val welcomeText: String? = null,
     @SerializedName("quickActionsTitle") val quickActionsTitle: String? = null,
+    @SerializedName("themePreset") val themePreset: String? = null,
+    @SerializedName("promoWidgetEnabled") val promoWidgetEnabled: Boolean = false,
+    @SerializedName("promoWidgetHtml") val promoWidgetHtml: String? = null,
+    @SerializedName("studentUpdateWidgetEnabled") val studentUpdateWidgetEnabled: Boolean = false,
+    @SerializedName("studentUpdateWidgetHtml") val studentUpdateWidgetHtml: String? = null,
+    @SerializedName("billWidgetEnabled") val billWidgetEnabledLegacy: Boolean = false,
+    @SerializedName("billWidgetHtml") val billWidgetHtmlLegacy: String? = null,
+    @SerializedName("newsCategoryMenu") val newsCategoryMenu: List<String> = emptyList(),
+    @SerializedName("jobCategoryMenu") val jobCategoryMenu: List<String> = emptyList(),
+    @SerializedName("examCategoryMenu") val examCategoryMenu: List<String> = emptyList(),
     val sections: List<HomeContentSectionDto> = emptyList(),
     @SerializedName("quickActionSections") val quickActionSections: List<HomeQuickActionSectionDto> = emptyList(),
     val banners: List<HomeBannerDto> = emptyList(),
@@ -324,6 +349,34 @@ data class LeaderboardItemDto(
 
 data class LeaderboardResponse(
     val items: List<LeaderboardItemDto> = emptyList(),
+)
+
+data class LeaderboardTestSummaryDto(
+    @SerializedName("testId") val testId: String,
+    @SerializedName("testTitle") val testTitle: String,
+    @SerializedName("attemptsCount") val attemptsCount: Int = 0,
+    @SerializedName("participantsCount") val participantsCount: Int = 0,
+    @SerializedName("lastAttemptAt") val lastAttemptAt: String? = null,
+)
+
+data class LeaderboardTestsResponse(
+    val items: List<LeaderboardTestSummaryDto> = emptyList(),
+)
+
+data class LeaderboardByTestResponse(
+    val test: LeaderboardTestSummaryDto,
+    val items: List<LeaderboardItemDto> = emptyList(),
+)
+
+data class ApplyTestResponse(
+    val ok: Boolean = false,
+    @SerializedName("alreadyApplied") val alreadyApplied: Boolean = false,
+    val message: String? = null,
+    @SerializedName("testId") val testId: String? = null,
+    @SerializedName("testTitle") val testTitle: String? = null,
+    @SerializedName("enrolledCount") val enrolledCount: Int = 0,
+    @SerializedName("capacityTotal") val capacityTotal: Int = 0,
+    @SerializedName("remainingSeats") val remainingSeats: Int = 0,
 )
 
 data class LeaderboardFilterTestDto(

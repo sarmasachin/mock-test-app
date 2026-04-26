@@ -13,6 +13,14 @@ Setup
 3. Copy .env.example to .env and set DATABASE_URL and JWT_SECRET (16+ chars).
 4. npm run dev   (or npm start)
 
+Email OTP branding (optional)
+-----------------------------
+- MAIL_BRAND_NAME: brand name shown in OTP emails (default: Free Mock Test App)
+- MAIL_LOGO_URL: public HTTPS image URL shown as top circular logo in OTP emails
+- MAIL_SUPPORT_EMAIL: support line shown in email footer
+- MAIL_SUBJECT_RESET: custom subject for password reset OTP emails
+- MAIL_SUBJECT_EMAIL_VERIFY: custom subject for email verification OTP emails
+
 Default URL: http://127.0.0.1:3000
 
 Endpoints (JSON)

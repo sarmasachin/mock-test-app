@@ -21,20 +21,32 @@ android {
         applicationId = "com.example.mocktestapp"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
-        val apiBase = (localProperties.getProperty("mocktest.apiBaseUrl")
-            ?: "http://10.0.2.2:3000/v1/").let { b -> if (b.endsWith("/")) b else "$b/" }
+        versionCode = 2
+        versionName = "1.0.1"
+        val apiBase = (localProperties.getProperty("mocktest.releaseApiBaseUrl")
+            ?: "https://api.mocktestapp.com/v1/").let { b -> if (b.endsWith("/")) b else "$b/" }
         val escaped = apiBase.replace("\\", "\\\\").replace("\"", "\\\"")
         buildConfigField("String", "API_BASE_URL", "\"$escaped\"")
         // OAuth 2.0 Web client ID (Google Cloud Console) — same value as server GOOGLE_WEB_CLIENT_ID
         val googleWeb = (localProperties.getProperty("mocktest.googleWebClientId") ?: "").replace("\\", "\\\\").replace("\"", "\\\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWeb\"")
+        val resultDelayHours = (localProperties.getProperty("mocktest.resultReleaseDelayHours") ?: "3")
+            .toIntOrNull()
+            ?.coerceAtLeast(1)
+            ?: 3
+        buildConfigField("int", "RESULT_RELEASE_DELAY_HOURS", resultDelayHours.toString())
     }
 
     buildTypes {
+        debug {
+            val debugApiBase = (localProperties.getProperty("mocktest.debugApiBaseUrl")
+                ?: "http://10.0.2.2:3000/v1/").let { b -> if (b.endsWith("/")) b else "$b/" }
+            val debugEscaped = debugApiBase.replace("\\", "\\\\").replace("\"", "\\\"")
+            buildConfigField("String", "API_BASE_URL", "\"$debugEscaped\"")
+        }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

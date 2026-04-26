@@ -52,8 +52,28 @@ fun NewsScreenNew(
     onOpenArticle: (newsId: String) -> Unit,
 ) {
     var articles by remember { mutableStateOf(ManualNewsContent.items) }
+    var newsMenuCategories by remember { mutableStateOf<List<String>>(emptyList()) }
+    var selectedCategory by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         articles = ContentRepository.loadNewsFeed("news")
+        newsMenuCategories = ContentRepository.loadHomeContent()
+            ?.newsCategoryMenu
+            ?.filter { it.isNotBlank() }
+            .orEmpty()
+            .distinctBy { it.lowercase() }
+    }
+    val derivedCategories = remember(articles) {
+        articles.map { it.category.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
+    }
+    val menuCategories = remember(newsMenuCategories, derivedCategories) {
+        (newsMenuCategories + derivedCategories).distinctBy { it.lowercase() }
+    }
+    val visibleArticles = remember(articles, selectedCategory) {
+        if (selectedCategory.isNullOrBlank()) {
+            articles
+        } else {
+            articles.filter { it.category.equals(selectedCategory ?: "", ignoreCase = true) }
+        }
     }
     FeedBrowseScreenNew(
         title = "News",
@@ -61,10 +81,13 @@ fun NewsScreenNew(
         listSectionTitle = "",
         listSectionSubtitle = "",
         feedIcon = Icons.Rounded.Newspaper,
-        items = articles,
+        items = visibleArticles,
         imageSeedPrefix = NewsFeedImageSeedPrefix,
         onBack = onBack,
         onOpenItem = onOpenArticle,
+        categoryMenu = menuCategories,
+        selectedCategory = selectedCategory,
+        onSelectCategory = { selectedCategory = it },
         modifier = modifier,
     )
 }

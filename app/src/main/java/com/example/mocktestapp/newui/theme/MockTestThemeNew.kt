@@ -14,16 +14,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
-import com.example.mocktestapp.newui.theme.palette.MockTestPaletteDark
-import com.example.mocktestapp.newui.theme.palette.MockTestPaletteLight
 import com.example.mocktestapp.newui.theme.palette.ProvideMockTestPalette
+import com.example.mocktestapp.newui.theme.palette.mockTestPaletteDark
+import com.example.mocktestapp.newui.theme.palette.mockTestPaletteLight
 
 @Composable
 fun MockTestThemeNew(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    val palette = if (darkTheme) MockTestPaletteDark else MockTestPaletteLight
+    val palette = if (darkTheme) mockTestPaletteDark() else mockTestPaletteLight()
     val colorScheme = if (darkTheme) {
         darkColorScheme(
             primary = palette.materialPrimary,

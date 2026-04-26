@@ -67,7 +67,8 @@ fun HistoryScreenNew(
         profile.emailLine.ifBlank { profile.userIdFormatted ?: "guest" }
     }
     val attempts by TestHistoryRepository.observeAttempts(attemptsUserKey).collectAsState(initial = emptyList())
-    val items = remember(attempts) { attempts.map { it.toHistoryItem() } }
+    val scoreVisible by AppPreferencesRepository.scoreVisibilityEnabled.collectAsState(initial = true)
+    val items = remember(attempts, scoreVisible) { attempts.map { it.toHistoryItem(scoreVisible) } }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -119,14 +120,14 @@ private data class HistoryItem(
     val scoreText: String,
 )
 
-private fun TestAttemptEntity.toHistoryItem(): HistoryItem {
+private fun TestAttemptEntity.toHistoryItem(scoreVisible: Boolean): HistoryItem {
     val zone = ZoneId.systemDefault()
     val dateText = DateTimeFormatter.ofPattern("MMM d, yyyy")
         .format(Instant.ofEpochMilli(completedAtMillis).atZone(zone).toLocalDate())
     return HistoryItem(
         testName = testName,
         dateText = dateText,
-        scoreText = "$correct / $total",
+        scoreText = if (scoreVisible) "$correct / $total" else "-",
     )
 }
 

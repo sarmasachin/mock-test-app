@@ -126,11 +126,11 @@ Data on device: quiz progress, cached WebView URLs, digest streaks, and verifica
 
 Push notifications: if you enable notifications, Firebase Cloud Messaging may receive tokens and message metadata. Wire your own backend to store tokens responsibly.
 
-Analytics: this demo build does not include third-party analytics by default.
+Analytics: third-party analytics are not enabled by default.
 
 Your rights: you can export local preferences from Profile and request account deletion flows when a backend exists.
 
-Contact: add your support email before publishing.
+Support: use the in-app Help & support section for assistance.
 """.trimIndent()
 
 private val termsText = """
@@ -141,6 +141,4 @@ The app is provided as-is for practice and learning. Exam dates, job listings, a
 You are responsible for complying with third-party website terms when browsing inside the app.
 
 We are not liable for missed deadlines or incorrect content originating from external feeds.
-
-Replace this text with counsel-reviewed terms before production release.
 """.trimIndent()

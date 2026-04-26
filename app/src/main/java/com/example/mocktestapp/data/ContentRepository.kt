@@ -39,6 +39,12 @@ object ContentRepository {
         val correctIndex: Int,
         val explanation: String,
     )
+    data class QuizQuestionRemote(
+        val title: String,
+        val options: List<String>,
+        val correctIndex: Int,
+        val explanation: String,
+    )
     data class HomeSectionRemote(
         val id: String,
         val title: String,
@@ -63,6 +69,14 @@ object ContentRepository {
     data class HomeContentRemote(
         val welcomeText: String?,
         val quickActionsTitle: String?,
+        val themePreset: String?,
+        val promoWidgetEnabled: Boolean,
+        val promoWidgetHtml: String?,
+        val studentUpdateWidgetEnabled: Boolean,
+        val studentUpdateWidgetHtml: String?,
+        val newsCategoryMenu: List<String>,
+        val jobCategoryMenu: List<String>,
+        val examCategoryMenu: List<String>,
         val sections: List<HomeSectionRemote>,
         val quickActionSections: List<HomeQuickActionSectionRemote>,
         val banners: List<String>,
@@ -123,10 +137,19 @@ object ContentRepository {
     )
     data class LeaderboardItemRemote(
         val rank: Int,
+        val userId: String,
         val name: String,
         val city: String,
         val state: String,
         val score: Int,
+        val totalCorrect: Int,
+        val totalQuestions: Int,
+    )
+    data class LeaderboardTestSummaryRemote(
+        val testId: String,
+        val testTitle: String,
+        val attemptsCount: Int,
+        val participantsCount: Int,
     )
     data class LeaderboardFilterTestRemote(
         val id: String,
@@ -213,6 +236,35 @@ object ContentRepository {
         }
     }
 
+    suspend fun loadQuizQuestionsForTest(testName: String): List<QuizQuestionRemote> = withContext(Dispatchers.IO) {
+        val safeName = testName.trim()
+        if (safeName.isBlank()) return@withContext emptyList()
+        try {
+            val test = loadTestByTitle(safeName)
+            val testId = test?.id?.trim().orEmpty()
+            if (testId.isBlank()) return@withContext emptyList()
+            val rows = RetrofitProvider.publicApi.getTestQuestions(testId).items
+            rows.mapNotNull { row ->
+                val prompt = row.questionPrompt.trim()
+                val options = row.options.map { it.trim() }.filter { it.isNotBlank() }
+                val correctIndex = row.correctIndex
+                if (prompt.isBlank() || options.size < 2 || correctIndex !in options.indices) {
+                    null
+                } else {
+                    QuizQuestionRemote(
+                        title = prompt,
+                        options = options,
+                        correctIndex = correctIndex,
+                        explanation = row.explanation?.trim().orEmpty(),
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "loadQuizQuestionsForTest $safeName", e)
+            emptyList()
+        }
+    }
+
     suspend fun loadDailyDigestItem(): DailyDigestRemote? = withContext(Dispatchers.IO) {
         try {
             val row = RetrofitProvider.publicApi.getDailyDigestToday().item
@@ -249,6 +301,14 @@ object ContentRepository {
             HomeContentRemote(
                 welcomeText = content.welcomeText,
                 quickActionsTitle = content.quickActionsTitle,
+                themePreset = content.themePreset,
+                promoWidgetEnabled = content.promoWidgetEnabled,
+                promoWidgetHtml = content.promoWidgetHtml,
+                studentUpdateWidgetEnabled = content.studentUpdateWidgetEnabled || content.billWidgetEnabledLegacy,
+                studentUpdateWidgetHtml = content.studentUpdateWidgetHtml ?: content.billWidgetHtmlLegacy,
+                newsCategoryMenu = content.newsCategoryMenu.filter { it.isNotBlank() },
+                jobCategoryMenu = content.jobCategoryMenu.filter { it.isNotBlank() },
+                examCategoryMenu = content.examCategoryMenu.filter { it.isNotBlank() },
                 sections = content.sections.map {
                     HomeSectionRemote(
                         id = it.id,
@@ -462,14 +522,74 @@ object ContentRepository {
             ).items.map {
                 LeaderboardItemRemote(
                     rank = it.rank,
+                    userId = it.userId,
                     name = it.name,
                     city = it.city.orEmpty(),
                     state = it.state.orEmpty(),
                     score = it.score,
+                    totalCorrect = it.totalCorrect,
+                    totalQuestions = it.totalQuestions,
                 )
             }
         } catch (e: Exception) {
             Log.w(TAG, "loadLeaderboard", e)
+            emptyList()
+        }
+    }
+
+    suspend fun loadLeaderboardByTest(
+        testId: String,
+        range: String,
+        city: String?,
+        state: String?,
+    ): List<LeaderboardItemRemote> = withContext(Dispatchers.IO) {
+        if (testId.isBlank()) return@withContext emptyList()
+        try {
+            RetrofitProvider.publicApi.getLeaderboardByTest(
+                testId = testId,
+                range = range,
+                city = city?.takeIf { it.isNotBlank() },
+                state = state?.takeIf { it.isNotBlank() },
+                limit = 100,
+            ).items.map {
+                LeaderboardItemRemote(
+                    rank = it.rank,
+                    userId = it.userId,
+                    name = it.name,
+                    city = it.city.orEmpty(),
+                    state = it.state.orEmpty(),
+                    score = it.score,
+                    totalCorrect = it.totalCorrect,
+                    totalQuestions = it.totalQuestions,
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "loadLeaderboardByTest", e)
+            emptyList()
+        }
+    }
+
+    suspend fun loadLeaderboardTests(
+        range: String,
+        city: String?,
+        state: String?,
+    ): List<LeaderboardTestSummaryRemote> = withContext(Dispatchers.IO) {
+        try {
+            RetrofitProvider.publicApi.getLeaderboardTests(
+                range = range,
+                city = city?.takeIf { it.isNotBlank() },
+                state = state?.takeIf { it.isNotBlank() },
+                limit = 100,
+            ).items.map {
+                LeaderboardTestSummaryRemote(
+                    testId = it.testId,
+                    testTitle = it.testTitle,
+                    attemptsCount = it.attemptsCount,
+                    participantsCount = it.participantsCount,
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "loadLeaderboardTests", e)
             emptyList()
         }
     }
@@ -482,21 +602,24 @@ object ContentRepository {
 
     private fun defaultTests(subcategory: String): List<TestCardNew> = listOf(
         TestCardNew(
+            id = "",
             slug = "",
-            title = "${subcategory.trim()} Sprint",
-            meta = "Mock test overview",
-            examDate = "15 Feb 2026",
-            durationLabel = "3 hrs",
-            questionsMarks = "100 Q / 400 marks",
-            slotLabel = "Morning Slot",
-            enrolledLabel = "410/500",
-            remainingSeatsLabel = "90 seats left",
-            attemptsAllowed = "1 attempt",
-            languageMode = "Hindi / English",
-            examMode = "Online CBT",
-            negativeMarkingText = "Yes (-1)",
-            testTypeLabel = "Full Mock",
-            validUntil = "Available till 20 Feb",
+            title = subcategory.trim().ifBlank { "Test" },
+            meta = "No published test is available for this category.",
+            examDate = null,
+            durationLabel = null,
+            questionsMarks = null,
+            slotLabel = null,
+            enrolledLabel = "0",
+            remainingSeatsLabel = "0 seats left",
+            attemptsAllowed = null,
+            languageMode = null,
+            examMode = null,
+            negativeMarkingText = null,
+            testTypeLabel = null,
+            badgeEnabled = false,
+            badgeText = "",
+            validUntil = null,
         ),
     )
 
@@ -516,6 +639,7 @@ object ContentRepository {
         val enrolled = (enrolledCount ?: 0).coerceAtLeast(0)
         val remaining = (remainingSeats ?: (capacity - enrolled)).coerceAtLeast(0)
         return TestCardNew(
+            id = id,
             slug = slug,
             title = title,
             meta = meta,
@@ -530,9 +654,14 @@ object ContentRepository {
             examMode = examMode,
             negativeMarkingText = negativeMarkingText,
             testTypeLabel = testTypeLabel,
+            badgeEnabled = badgeEnabled == true,
+            badgeText = badgeText?.trim().takeUnless { it.isNullOrBlank() } ?: "Live",
             validUntil = validUntil?.let { "Available till $it" },
             answerKeyReleaseAt = answerKeyReleaseAt,
             resultReleaseAt = resultReleaseAt,
+            capacityTotal = capacity,
+            enrolledCount = enrolled,
+            remainingSeats = remaining,
         )
     }
 

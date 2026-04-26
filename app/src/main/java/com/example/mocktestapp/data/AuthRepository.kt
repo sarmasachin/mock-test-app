@@ -17,6 +17,7 @@ import com.example.mocktestapp.data.remote.RegisterRequest
 import com.example.mocktestapp.data.remote.AuthUserDto
 import com.example.mocktestapp.data.remote.RetrofitProvider
 import com.example.mocktestapp.data.remote.TextMessageBody
+import com.example.mocktestapp.data.remote.ApplyTestResponse
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -441,6 +442,24 @@ object AuthRepository {
             )
         } catch (e: Exception) {
             Log.w(TAG, "postAttemptRemote failed (offline or 401?)", e)
+        }
+    }
+
+    suspend fun applyForTest(testId: String): Result<ApplyTestResponse> = withContext(Dispatchers.IO) {
+        loadStoredTokens()
+        if (accessTokenMem.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("Sign in required"))
+        }
+        if (testId.isBlank()) {
+            return@withContext Result.failure(Exception("Test details not found"))
+        }
+        try {
+            val resp = RetrofitProvider.appApi.applyForTest(testId.trim())
+            Result.success(resp)
+        } catch (e: HttpException) {
+            Result.failure(Exception(parseHttpError(e)))
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 

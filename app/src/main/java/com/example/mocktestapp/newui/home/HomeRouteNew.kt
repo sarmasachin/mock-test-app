@@ -13,7 +13,7 @@ fun HomeRouteNew(
     onStartTest: (String) -> Unit,
     onLeaderboard: () -> Unit,
     onResults: () -> Unit,
-    onOpenPendingResult: (String, Int, Int, Int) -> Unit,
+    onOpenPendingResult: (String, Int, Int, Int, Int, Long) -> Unit,
     onBookmarks: () -> Unit,
     onOpenJobAlert: () -> Unit,
     onOpenExamAlert: () -> Unit,

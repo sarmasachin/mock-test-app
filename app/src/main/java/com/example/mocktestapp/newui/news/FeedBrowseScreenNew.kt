@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
@@ -72,6 +73,9 @@ fun FeedBrowseScreenNew(
     modifier: Modifier = Modifier,
     topStoriesSectionLabel: String = "",
     listSectionTitle: String = "",
+    categoryMenu: List<String> = emptyList(),
+    selectedCategory: String? = null,
+    onSelectCategory: ((String) -> Unit)? = null,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -144,6 +148,33 @@ fun FeedBrowseScreenNew(
             }
 
             item { Spacer(Modifier.height(12.dp)) }
+
+            if (categoryMenu.isNotEmpty() && onSelectCategory != null) {
+                item {
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(categoryMenu) { category ->
+                            val selected = selectedCategory == category
+                            Text(
+                                text = category,
+                                color = if (selected) Color.White else p.accent,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(if (selected) p.accent else Color.Transparent)
+                                    .border(1.dp, p.accent.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
+                                    .clickable { onSelectCategory(category) }
+                                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                            )
+                        }
+                    }
+                }
+                item { Spacer(Modifier.height(10.dp)) }
+            }
 
             if (topStories.isNotEmpty()) {
                 item {
