@@ -23,8 +23,11 @@ android {
         targetSdk = 34
         versionCode = 2
         versionName = "1.0.1"
-        val apiBase = (localProperties.getProperty("mocktest.releaseApiBaseUrl")
-            ?: "https://api.mocktestapp.com/v1/").let { b -> if (b.endsWith("/")) b else "$b/" }
+        val apiBase = (
+            localProperties.getProperty("mocktest.releaseApiBaseUrl")
+                ?: localProperties.getProperty("mocktest.apiBaseUrl")
+                ?: "https://api.mocktestapp.com/v1/"
+            ).let { b -> if (b.endsWith("/")) b else "$b/" }
         val escaped = apiBase.replace("\\", "\\\\").replace("\"", "\\\"")
         buildConfigField("String", "API_BASE_URL", "\"$escaped\"")
         // OAuth 2.0 Web client ID (Google Cloud Console) — same value as server GOOGLE_WEB_CLIENT_ID
@@ -39,8 +42,11 @@ android {
 
     buildTypes {
         debug {
-            val debugApiBase = (localProperties.getProperty("mocktest.debugApiBaseUrl")
-                ?: "http://10.0.2.2:3000/v1/").let { b -> if (b.endsWith("/")) b else "$b/" }
+            val debugApiBase = (
+                localProperties.getProperty("mocktest.debugApiBaseUrl")
+                    ?: localProperties.getProperty("mocktest.apiBaseUrl")
+                    ?: "http://10.0.2.2:3000/v1/"
+                ).let { b -> if (b.endsWith("/")) b else "$b/" }
             val debugEscaped = debugApiBase.replace("\\", "\\\\").replace("\"", "\\\"")
             buildConfigField("String", "API_BASE_URL", "\"$debugEscaped\"")
         }
