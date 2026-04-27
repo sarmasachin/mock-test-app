@@ -304,7 +304,8 @@ const TAB_ICONS: Record<Tab, string> = {
   users: 'US',
 };
 
-const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000/v1';
+const apiBase =
+  import.meta.env.VITE_API_BASE_URL || 'https://mock-test-app-1-d1gf.onrender.com/v1';
 
 const api = axios.create({
   baseURL: apiBase,
