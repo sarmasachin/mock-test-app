@@ -1,7 +1,7 @@
 -- Seed one default admin user for fresh setup
--- Email: sharma.sahchinctr@gmail.com
+-- Email: sharma.sachinctr@gmail.com
 -- Mobile: (empty; login with email)
--- Password: 123456
+-- Password: commingsoon@123
 
 BEGIN;
 
@@ -9,8 +9,20 @@ DO $$
 DECLARE
     chosen_id INTEGER;
 BEGIN
+    -- Migrate earlier typo email to corrected email when safe.
     IF EXISTS (
         SELECT 1 FROM users WHERE email_normalized = lower(trim('sharma.sahchinctr@gmail.com'))
+    ) AND NOT EXISTS (
+        SELECT 1 FROM users WHERE email_normalized = lower(trim('sharma.sachinctr@gmail.com'))
+    ) THEN
+        UPDATE users
+        SET email = 'sharma.sachinctr@gmail.com',
+            updated_at = now()
+        WHERE email_normalized = lower(trim('sharma.sahchinctr@gmail.com'));
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM users WHERE email_normalized = lower(trim('sharma.sachinctr@gmail.com'))
     ) THEN
         UPDATE users
         SET
@@ -20,9 +32,9 @@ BEGIN
             phone = CASE WHEN phone = '' THEN '' ELSE phone END,
             signup_state = 'Himachal Pradesh',
             signup_district = 'Bilaspur',
-            password_hash = '$2a$12$jX56hgCA8XziZPo27td65ezmbLv6pNoRX3qJtsOTdcdN1EUwzP6/u',
+            password_hash = '$2a$12$5ga0MwcBtZFOv0nS/qO7kO7mswiM9mfPw7QAQ2UhCuWPHdzWPkOge',
             updated_at = now()
-        WHERE email_normalized = lower(trim('sharma.sahchinctr@gmail.com'));
+        WHERE email_normalized = lower(trim('sharma.sachinctr@gmail.com'));
     ELSE
         LOOP
             chosen_id := 100000 + floor(random() * 900000)::int;
@@ -38,8 +50,8 @@ BEGIN
                     is_admin,
                     is_super_admin
                 ) VALUES (
-                    'sharma.sahchinctr@gmail.com',
-                    '$2a$12$jX56hgCA8XziZPo27td65ezmbLv6pNoRX3qJtsOTdcdN1EUwzP6/u',
+                    'sharma.sachinctr@gmail.com',
+                    '$2a$12$5ga0MwcBtZFOv0nS/qO7kO7mswiM9mfPw7QAQ2UhCuWPHdzWPkOge',
                     'Super Admin',
                     '',
                     chosen_id,
@@ -52,7 +64,7 @@ BEGIN
             EXCEPTION
                 WHEN unique_violation THEN
                     IF EXISTS (
-                        SELECT 1 FROM users WHERE email_normalized = lower(trim('sharma.sahchinctr@gmail.com'))
+                        SELECT 1 FROM users WHERE email_normalized = lower(trim('sharma.sachinctr@gmail.com'))
                     ) THEN
                         EXIT;
                     END IF;
