@@ -363,19 +363,10 @@ router.post('/device-token', async (req, res) => {
   const token = String(body.token || '').trim();
   const platform = String(body.platform || 'android').trim().toLowerCase().slice(0, 20) || 'android';
   const appVersion = String(body.appVersion || '').trim().slice(0, 40);
-  const tokenSuffix = token.length > 8 ? token.slice(-8) : token;
   if (!token || token.length < 20) {
-    console.warn('device_token_rejected', { userId: req.userId, platform, appVersion, tokenLen: token.length });
     return res.status(400).json({ error: 'Valid device token is required' });
   }
   try {
-    console.info('device_token_register_attempt', {
-      userId: req.userId,
-      platform,
-      appVersion,
-      tokenLen: token.length,
-      tokenSuffix,
-    });
     await ensureUserDeviceTokensTable();
     await pool.query(
       `INSERT INTO user_device_tokens (token, user_id, platform, app_version, updated_at)
@@ -384,21 +375,9 @@ router.post('/device-token', async (req, res) => {
        DO UPDATE SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform, app_version = EXCLUDED.app_version, updated_at = now()`,
       [token, req.userId, platform, appVersion],
     );
-    console.info('device_token_register_success', {
-      userId: req.userId,
-      platform,
-      appVersion,
-      tokenSuffix,
-    });
     return res.json({ ok: true });
   } catch (e) {
-    console.error('device_token_register_error', {
-      userId: req.userId,
-      platform,
-      appVersion,
-      tokenSuffix,
-      error: String(e && e.message ? e.message : e),
-    });
+    console.error(e);
     return res.status(500).json({ error: 'Failed to register device token' });
   }
 });
