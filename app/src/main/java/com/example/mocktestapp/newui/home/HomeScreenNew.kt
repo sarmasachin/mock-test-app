@@ -395,9 +395,18 @@ fun HomeScreenNew(
         homePollPopupEnabled = pollSettings.showHomePopup
         val activePoll = pollSettings.items.firstOrNull()
         homePollActive = activePoll
+        val votedPollIds = AppPreferencesRepository.getVotedPollIdsNow().map { it.trim() }.toSet()
+        val status = activePoll?.let { ContentRepository.loadPollVoteStatus(it.id) }
+        if (status?.hasVoted == true && activePoll != null) {
+            homePollSelections[activePoll.id] = status.optionIndexes.toSet()
+            homePollResults[activePoll.id] = status.counts
+            AppPreferencesRepository.markPollVoted(activePoll.id)
+        }
         if (
             pollSettings.showHomePopup &&
             activePoll != null &&
+            status?.hasVoted != true &&
+            !votedPollIds.contains(activePoll.id.trim()) &&
             !activePoll.id.equals(homePollPopupDismissedPollId, ignoreCase = true)
         ) {
             homePollPopupVisible = true
@@ -758,7 +767,10 @@ fun HomeScreenNew(
                             val result = ContentRepository.submitPollVote(pollId, optionIndexes.toList())
                             if (result?.ok == true) {
                                 homePollResults[pollId] = result.counts
+                                AppPreferencesRepository.markPollVoted(pollId)
                                 homePollMessage = "Vote submitted successfully."
+                                homePollPopupDismissedPollId = pollId
+                                homePollPopupVisible = false
                                 refreshUnreadCounts()
                             } else {
                                 homePollMessage = "Failed to submit vote."
@@ -1020,6 +1032,7 @@ private fun HomePollPopupModal(
     onSubmit: (pollId: String, optionIndexes: Set<Int>) -> Unit,
 ) {
     val p = mockTestPalette()
+    val hasSubmitted = counts.isNotEmpty() || message?.contains("success", ignoreCase = true) == true
     val normalizedCounts = poll.options.mapIndexed { idx, _ -> counts.getOrElse(idx) { 0 } }
     val totalVotes = normalizedCounts.sum().coerceAtLeast(0)
     Box(
@@ -1081,7 +1094,7 @@ private fun HomePollPopupModal(
                             .clip(RoundedCornerShape(14.dp))
                             .background(if (checked) p.systemBlue.copy(alpha = 0.14f) else p.surface)
                             .border(1.dp, p.border.copy(alpha = 0.22f), RoundedCornerShape(14.dp))
-                            .clickable {
+                            .clickable(enabled = !hasSubmitted) {
                                 onSelectOption(poll.id, idx, poll.allowMultiple)
                             }
                             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -1151,26 +1164,35 @@ private fun HomePollPopupModal(
                     )
                     Spacer(Modifier.height(8.dp))
                 }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    TextButton(
-                        onClick = onMaybeLater,
-                        modifier = Modifier.weight(1f),
+                if (hasSubmitted) {
+                    Text(
+                        text = "Thanks, your response has been recorded.",
+                        color = Color(0xFF0F766E),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Text("Maybe Later")
-                    }
-                    Button(
-                        onClick = { onSubmit(poll.id, selectedIndexes) },
-                        enabled = selectedIndexes.isNotEmpty() && !submitting,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = p.primaryButton,
-                            contentColor = p.onPrimaryButton,
-                        ),
-                    ) {
-                        Text(if (submitting) "Submitting..." else "Submit Vote", fontWeight = FontWeight.Bold)
+                        TextButton(
+                            onClick = onMaybeLater,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Maybe Later")
+                        }
+                        Button(
+                            onClick = { onSubmit(poll.id, selectedIndexes) },
+                            enabled = selectedIndexes.isNotEmpty() && !submitting,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.primaryButton,
+                                contentColor = p.onPrimaryButton,
+                            ),
+                        ) {
+                            Text(if (submitting) "Submitting..." else "Submit Vote", fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
@@ -1334,22 +1356,15 @@ private fun HeaderIconWithCount(
             icon()
         }
         if (count > 0) {
-            Box(
+            Text(
+                text = if (count > 99) "99+" else count.toString(),
+                color = Color(0xFFDC2626),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .offset(x = (-2).dp, y = 4.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(Color(0xFFDC2626))
-                    .padding(horizontal = 5.dp, vertical = 1.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = if (count > 99) "99+" else count.toString(),
-                    color = Color.White,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
+                    .offset(x = (-2).dp, y = 4.dp),
+            )
         }
     }
 }

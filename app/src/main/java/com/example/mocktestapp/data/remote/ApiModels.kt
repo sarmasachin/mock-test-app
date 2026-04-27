@@ -414,6 +414,7 @@ data class PollVoteRequest(
 data class PollVoteResponse(
     val ok: Boolean,
     @SerializedName("pollId") val pollId: String,
+    @SerializedName("hasVoted") val hasVoted: Boolean = true,
     @SerializedName("optionIndexes") val optionIndexes: List<Int> = emptyList(),
     val counts: List<Int> = emptyList(),
 )

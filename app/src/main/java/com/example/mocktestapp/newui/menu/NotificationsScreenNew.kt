@@ -50,11 +50,14 @@ fun NotificationsScreenNew(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     var notifications by remember { mutableStateOf<List<ContentRepository.PushNotificationItemRemote>>(emptyList()) }
+    var loadingNotifications by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
-        val rows = ContentRepository.loadNotifications()
+        loadingNotifications = true
+        val rows = runCatching { ContentRepository.loadNotifications() }.getOrDefault(emptyList())
         notifications = rows
         AppPreferencesRepository.markNotificationsSeen(rows.map { it.id })
+        loadingNotifications = false
     }
 
     Scaffold(
@@ -75,7 +78,9 @@ fun NotificationsScreenNew(
                 Text("Notifications", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
             }
             Spacer(Modifier.height(12.dp))
-            if (notifications.isEmpty()) {
+            if (loadingNotifications) {
+                Text("Loading notifications...", color = p.textSecondary, fontSize = 14.sp)
+            } else if (notifications.isEmpty()) {
                 Text("No notifications available.", color = p.textSecondary, fontSize = 14.sp)
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxSize()) {

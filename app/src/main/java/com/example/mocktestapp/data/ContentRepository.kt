@@ -152,6 +152,7 @@ object ContentRepository {
     data class PollVoteResultRemote(
         val ok: Boolean,
         val pollId: String,
+        val hasVoted: Boolean,
         val optionIndexes: List<Int>,
         val counts: List<Int>,
     )
@@ -518,11 +519,30 @@ object ContentRepository {
             PollVoteResultRemote(
                 ok = response.ok,
                 pollId = response.pollId,
+                hasVoted = response.hasVoted,
                 optionIndexes = response.optionIndexes,
                 counts = response.counts,
             )
         } catch (e: Exception) {
             Log.w(TAG, "submitPollVote", e)
+            null
+        }
+    }
+
+    suspend fun loadPollVoteStatus(pollId: String): PollVoteResultRemote? = withContext(Dispatchers.IO) {
+        val id = pollId.trim()
+        if (id.isBlank()) return@withContext null
+        try {
+            val response = RetrofitProvider.appApi.getPollVoteStatus(id)
+            PollVoteResultRemote(
+                ok = response.ok,
+                pollId = response.pollId,
+                hasVoted = response.hasVoted,
+                optionIndexes = response.optionIndexes,
+                counts = response.counts,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "loadPollVoteStatus", e)
             null
         }
     }

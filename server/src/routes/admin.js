@@ -1511,6 +1511,22 @@ router.patch('/settings', async (req, res) => {
         scheduleAt: new Date().toISOString(),
       });
     }
+    if (normalizedPollSettings !== null) {
+      const pollItems = Array.isArray(normalizedPollSettings.value?.items)
+        ? normalizedPollSettings.value.items
+        : [];
+      const activeCount = pollItems.filter((x) => x && x.enabled !== false).length;
+      if (activeCount > 0) {
+        await enqueueNotification(req.userId, {
+          title: 'New Poll Available',
+          message: activeCount === 1
+            ? 'A new poll is available. Share your opinion now.'
+            : `${activeCount} active polls are available. Share your opinion now.`,
+          target: 'all',
+          scheduleAt: new Date().toISOString(),
+        });
+      }
+    }
     if (normalizedExamCategories !== null) {
       await enqueueNotification(req.userId, {
         title: 'Exam Alerts Updated',

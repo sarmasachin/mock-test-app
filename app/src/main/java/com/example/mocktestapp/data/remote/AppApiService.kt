@@ -49,6 +49,11 @@ interface AppApiService {
         @Body body: PollVoteRequest,
     ): PollVoteResponse
 
+    @GET("polls/{pollId}/vote-status")
+    suspend fun getPollVoteStatus(
+        @Path("pollId") pollId: String,
+    ): PollVoteResponse
+
     @POST("me/device-token")
     suspend fun registerDeviceToken(@Body body: DeviceTokenRegisterRequest): SimpleOkResponse
 }

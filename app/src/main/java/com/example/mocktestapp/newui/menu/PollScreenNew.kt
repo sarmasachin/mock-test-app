@@ -55,17 +55,30 @@ fun PollScreenNew(
     var selected by remember { mutableStateOf(0) }
     val voted = remember { mutableStateMapOf<String, Set<Int>>() }
     val pollResultCounts = remember { mutableStateMapOf<String, List<Int>>() }
+    val pollSubmitted = remember { mutableStateMapOf<String, Boolean>() }
+    var loadingPolls by remember { mutableStateOf(true) }
     var submitMessage by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
-        val rows = ContentRepository.loadPollItems()
+        loadingPolls = true
+        val rows = runCatching { ContentRepository.loadPollItems() }.getOrDefault(emptyList())
         polls = rows
         AppPreferencesRepository.markPollsSeen(rows.map { it.id })
+        loadingPolls = false
     }
 
     val active = polls.getOrNull(selected)
+    LaunchedEffect(active?.id) {
+        val current = active ?: return@LaunchedEffect
+        val status = ContentRepository.loadPollVoteStatus(current.id) ?: return@LaunchedEffect
+        if (status.hasVoted) {
+            voted[current.id] = status.optionIndexes.toSet()
+            pollResultCounts[current.id] = status.counts
+            pollSubmitted[current.id] = true
+        }
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -85,6 +98,11 @@ fun PollScreenNew(
                 Text("Poll", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
             }
             Spacer(Modifier.height(12.dp))
+
+            if (loadingPolls) {
+                Text("Loading poll...", color = p.textSecondary, fontSize = 14.sp)
+                return@Column
+            }
 
             if (polls.isEmpty()) {
                 Text("No active poll.", color = p.textSecondary, fontSize = 14.sp)
@@ -112,8 +130,25 @@ fun PollScreenNew(
             if (active != null) {
                 val currentVotes = voted[active.id] ?: emptySet()
                 val resultCounts = pollResultCounts[active.id] ?: emptyList()
+                val hasSubmitted = pollSubmitted[active.id] == true
                 val normalizedCounts = active.options.mapIndexed { index, _ -> resultCounts.getOrElse(index) { 0 } }
                 val totalVotes = normalizedCounts.sum().coerceAtLeast(0)
+                if (hasSubmitted) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color(0xFFDCFCE7))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    ) {
+                        Text(
+                            text = "You voted",
+                            color = Color(0xFF166534),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 Text(active.question, color = p.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(12.dp))
                 active.options.forEachIndexed { idx, option ->
@@ -127,7 +162,7 @@ fun PollScreenNew(
                             .clip(RoundedCornerShape(14.dp))
                             .background(if (checked) p.systemBlue.copy(alpha = 0.18f) else p.surface)
                             .border(1.dp, p.border.copy(alpha = 0.2f), RoundedCornerShape(14.dp))
-                            .clickable {
+                            .clickable(enabled = !hasSubmitted) {
                                 voted[active.id] = if (active.allowMultiple) {
                                     if (checked) currentVotes - idx else currentVotes + idx
                                 } else {
@@ -204,6 +239,8 @@ fun PollScreenNew(
                             val result = ContentRepository.submitPollVote(active.id, currentVotes.toList())
                             if (result?.ok == true) {
                                 pollResultCounts[active.id] = result.counts
+                                pollSubmitted[active.id] = true
+                                AppPreferencesRepository.markPollVoted(active.id)
                                 submitMessage = "Vote submitted successfully."
                             } else {
                                 submitMessage = "Failed to submit vote."
@@ -211,12 +248,19 @@ fun PollScreenNew(
                             submitting = false
                         }
                     },
-                    enabled = currentVotes.isNotEmpty() && !submitting,
+                    enabled = currentVotes.isNotEmpty() && !submitting && !hasSubmitted,
                     colors = ButtonDefaults.buttonColors(containerColor = p.primaryButton, contentColor = p.onPrimaryButton),
                     modifier = Modifier.fillMaxWidth().height(46.dp),
                     shape = RoundedCornerShape(12.dp),
                 ) {
-                    Text(if (submitting) "Submitting..." else "Submit Vote", fontWeight = FontWeight.Bold)
+                    Text(
+                        when {
+                            submitting -> "Submitting..."
+                            hasSubmitted -> "Already Voted"
+                            else -> "Submit Vote"
+                        },
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
                 if (!submitMessage.isNullOrBlank()) {
                     Spacer(Modifier.height(8.dp))

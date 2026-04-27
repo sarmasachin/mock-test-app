@@ -70,6 +70,7 @@ object AppPreferencesRepository {
     private val keyAuthBootstrapState = stringPreferencesKey("auth_bootstrap_state")
     private val keySeenNotificationIds = stringPreferencesKey("seen_notification_ids")
     private val keySeenPollIds = stringPreferencesKey("seen_poll_ids")
+    private val keyVotedPollIds = stringPreferencesKey("voted_poll_ids")
 
     private const val DefaultStartSeriesLockMs = 20_000L
     private const val DefaultStartSeriesActiveWindowMs = 30 * 60 * 1000L
@@ -646,6 +647,13 @@ object AppPreferencesRepository {
         }.getOrDefault(emptySet())
     }
 
+    suspend fun getVotedPollIdsNow(): Set<String> {
+        if (!::appContext.isInitialized) return emptySet()
+        return runCatching {
+            parseStringSet(store().data.first()[keyVotedPollIds])
+        }.getOrDefault(emptySet())
+    }
+
     suspend fun markNotificationsSeen(ids: Collection<String>) {
         if (!::appContext.isInitialized) return
         val normalized = ids.map { it.trim() }.filter { it.isNotBlank() }.toSet()
@@ -668,6 +676,18 @@ object AppPreferencesRepository {
                 prefs[keySeenPollIds] = encodeStringSet(existing + normalized)
             }
         }.onFailure { Log.e(TAG, "markPollsSeen failed", it) }
+    }
+
+    suspend fun markPollVoted(pollId: String) {
+        if (!::appContext.isInitialized) return
+        val normalized = pollId.trim()
+        if (normalized.isBlank()) return
+        runCatching {
+            store().edit { prefs ->
+                val existing = parseStringSet(prefs[keyVotedPollIds])
+                prefs[keyVotedPollIds] = encodeStringSet(existing + normalized)
+            }
+        }.onFailure { Log.e(TAG, "markPollVoted failed", it) }
     }
 
     /** Clears sign-in profile fields; keeps streak, digest, and cached feed URLs. */
@@ -694,6 +714,7 @@ object AppPreferencesRepository {
                 prefs[keyAuthBootstrapState] = RestoreSessionStatus.LoggedOut.name
                 prefs[keySeenNotificationIds] = "[]"
                 prefs[keySeenPollIds] = "[]"
+                prefs[keyVotedPollIds] = "[]"
             }
         }.onFailure { Log.e(TAG, "clearAuthSessionPrefs failed", it) }
     }
