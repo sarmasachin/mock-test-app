@@ -100,6 +100,10 @@ object AuthRepository {
                 RestoreSessionStatus.Ready
             }
             AppPreferencesRepository.setAuthBootstrapState(status)
+            runCatching {
+                FirebaseMessaging.getInstance().token
+                    .addOnSuccessListener { token -> PushTokenRegistrar.sync(token) }
+            }.onFailure { e -> Log.w(TAG, "restoreSession token fetch failed", e) }
             status
         } catch (e: HttpException) {
             if (e.code() == 401) {
