@@ -206,9 +206,8 @@ fun MainBottomNavHost(
         }
     }
 
-    LaunchedEffect(pendingPushRoute) {
-        val route = pendingPushRoute?.trim().orEmpty()
-        if (route.isBlank()) return@LaunchedEffect
+    val openByPushRoute: (String) -> Unit = { rawRoute ->
+        val route = rawRoute.trim()
         when (route.lowercase()) {
             "poll" -> mainNavController.navigate(RoutesNew.POLL) { launchSingleTop = true }
             "notifications", "notification" -> mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
@@ -220,6 +219,12 @@ fun MainBottomNavHost(
             MainTabRoutes.Home, "home" -> mainNavController.goToHomeTab()
             else -> mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
         }
+    }
+
+    LaunchedEffect(pendingPushRoute) {
+        val route = pendingPushRoute?.trim().orEmpty()
+        if (route.isBlank()) return@LaunchedEffect
+        openByPushRoute(route)
         PushNavigationBridge.consume()
     }
 
@@ -736,7 +741,10 @@ fun MainBottomNavHost(
             }
 
             composable(RoutesNew.NOTIFICATIONS) {
-                NotificationsScreenNew(onBack = { mainNavController.popBackOrHome() })
+                NotificationsScreenNew(
+                    onBack = { mainNavController.popBackOrHome() },
+                    onOpenDeepLink = openByPushRoute,
+                )
             }
 
             composable(RoutesNew.SEE_ALL_CATEGORIES) {

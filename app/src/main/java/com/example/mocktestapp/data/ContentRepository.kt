@@ -161,6 +161,7 @@ object ContentRepository {
         val id: String,
         val title: String,
         val message: String,
+        val deepLink: String?,
         val createdAt: String?,
     )
     data class LeaderboardItemRemote(
@@ -567,6 +568,7 @@ object ContentRepository {
                         id = it.id,
                         title = it.title.orEmpty().ifBlank { "Notification" },
                         message = it.message.orEmpty().ifBlank { "No message" },
+                        deepLink = it.deepLink,
                         createdAt = it.createdAt,
                     )
                 }

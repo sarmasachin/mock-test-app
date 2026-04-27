@@ -2,6 +2,7 @@ package com.example.mocktestapp.newui.menu
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -46,6 +47,7 @@ import java.util.Locale
 @Composable
 fun NotificationsScreenNew(
     onBack: () -> Unit,
+    onOpenDeepLink: (String) -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -85,8 +87,13 @@ fun NotificationsScreenNew(
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxSize()) {
                     items(notifications) { item ->
+                        val targetRoute = resolveNotificationRoute(item)
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = targetRoute.isNotBlank()) {
+                                    onOpenDeepLink(targetRoute)
+                                },
                             shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(containerColor = p.surface),
                             border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
@@ -122,6 +129,21 @@ fun NotificationsScreenNew(
                 }
             }
         }
+    }
+}
+
+private fun resolveNotificationRoute(item: ContentRepository.PushNotificationItemRemote): String {
+    val direct = item.deepLink?.trim().orEmpty()
+    if (direct.isNotBlank()) return direct
+    val haystack = "${item.title.lowercase(Locale.US)} ${item.message.lowercase(Locale.US)}"
+    return when {
+        "poll" in haystack -> "poll"
+        "daily quiz" in haystack || "quiz" in haystack -> "menu_quiz"
+        "job" in haystack -> "job_alert"
+        "exam" in haystack -> "exam_alert"
+        "news" in haystack || "article" in haystack -> "main/news"
+        "test" in haystack || "mock" in haystack -> "main/tests"
+        else -> "notifications"
     }
 }
 

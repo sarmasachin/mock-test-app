@@ -345,6 +345,7 @@ data class PushNotificationItemDto(
     val id: String,
     val title: String? = null,
     val message: String? = null,
+    @SerializedName("deepLink") val deepLink: String? = null,
     val enabled: Boolean = true,
     val status: String? = null,
     @SerializedName("createdAt") val createdAt: String? = null,

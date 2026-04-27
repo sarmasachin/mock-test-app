@@ -4,6 +4,18 @@ const { pool } = require('./db');
 
 const MAX_ITEMS = 500;
 
+async function ensureUserDeviceTokensTable() {
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS user_device_tokens (
+       token TEXT PRIMARY KEY,
+       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       platform VARCHAR(20) NOT NULL DEFAULT 'android',
+       app_version VARCHAR(40) NOT NULL DEFAULT '',
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+     )`,
+  );
+}
+
 async function getJsonSetting(settingKey, fallback) {
   const { rows } = await pool.query(
     `SELECT setting_value FROM app_settings WHERE setting_key = $1 LIMIT 1`,
@@ -56,6 +68,7 @@ async function sendFcmBroadcast(payload) {
   if (!serverKey) return { ok: false, reason: 'FCM_SERVER_KEY missing' };
   let rows = [];
   try {
+    await ensureUserDeviceTokensTable();
     const res = await pool.query(
       `SELECT token FROM user_device_tokens WHERE platform = 'android' ORDER BY updated_at DESC LIMIT 5000`,
     );
