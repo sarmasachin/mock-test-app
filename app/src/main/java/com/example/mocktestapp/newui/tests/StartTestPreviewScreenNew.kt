@@ -71,6 +71,7 @@ fun StartTestPreviewScreenNew(
     testName: String,
     onBack: () -> Unit,
     onStartTest: (String) -> Unit,
+    onApplyForTest: (String) -> Unit,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -284,7 +285,7 @@ fun StartTestPreviewScreenNew(
                     )
                 } else {
                     Text(
-                        text = "No active applied test found. Apply for a test first.",
+                        text = "You need to apply for this test before starting it.",
                         color = p.textSecondary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
@@ -292,28 +293,25 @@ fun StartTestPreviewScreenNew(
                 }
                 Spacer(Modifier.height(8.dp))
                 Button(
-                    onClick = { onStartTest(test.title) },
-                    enabled = !fallbackLocked,
+                    onClick = { onApplyForTest(test.title) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
                         .height(52.dp),
                     shape = RoundedCornerShape(999.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (fallbackLocked) p.border else Color(0xFF10B65A),
+                        containerColor = p.systemBlue,
                         contentColor = Color.White,
-                        disabledContainerColor = p.border,
-                        disabledContentColor = Color.White.copy(alpha = 0.9f),
                     ),
                 ) {
                     Icon(
-                        imageVector = if (fallbackLocked) Icons.Outlined.Lock else Icons.Outlined.PlayArrow,
+                        imageVector = Icons.Outlined.PlayArrow,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(Modifier.size(8.dp))
                     Text(
-                        text = if (fallbackLocked) "Start Test (Locked)" else "Start Test",
+                        text = "Apply Now",
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
                     )

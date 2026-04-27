@@ -6,7 +6,7 @@ import android.content.Context
 import android.os.Build
 
 object MockTestNotificationChannels {
-    const val EXAMS_JOBS_ID = "exams_jobs_alerts"
+    const val EXAMS_JOBS_ID = "exams_jobs_alerts_v2"
     const val DAILY_DIGEST_ID = "daily_digest"
 
     fun ensureChannels(context: Context) {
@@ -15,8 +15,12 @@ object MockTestNotificationChannels {
         val exams = NotificationChannel(
             EXAMS_JOBS_ID,
             "Exam & job alerts",
-            NotificationManager.IMPORTANCE_DEFAULT,
-        ).apply { description = "Exam dates, deadlines, and job alerts (FCM + local)." }
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = "Exam dates, deadlines, and job alerts (FCM + local)."
+            enableVibration(true)
+            setShowBadge(true)
+        }
         val daily = NotificationChannel(
             DAILY_DIGEST_ID,
             "Daily digest",

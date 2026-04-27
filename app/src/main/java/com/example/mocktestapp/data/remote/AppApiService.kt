@@ -48,4 +48,7 @@ interface AppApiService {
         @Path("pollId") pollId: String,
         @Body body: PollVoteRequest,
     ): PollVoteResponse
+
+    @POST("me/device-token")
+    suspend fun registerDeviceToken(@Body body: DeviceTokenRegisterRequest): SimpleOkResponse
 }

@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.mocktestapp.data.AppPreferencesRepository
 import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
@@ -53,12 +54,15 @@ fun PollScreenNew(
     var polls by remember { mutableStateOf<List<ContentRepository.PollItemRemote>>(emptyList()) }
     var selected by remember { mutableStateOf(0) }
     val voted = remember { mutableStateMapOf<String, Set<Int>>() }
+    val pollResultCounts = remember { mutableStateMapOf<String, List<Int>>() }
     var submitMessage by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
-        polls = ContentRepository.loadPollItems()
+        val rows = ContentRepository.loadPollItems()
+        polls = rows
+        AppPreferencesRepository.markPollsSeen(rows.map { it.id })
     }
 
     val active = polls.getOrNull(selected)
@@ -107,10 +111,16 @@ fun PollScreenNew(
 
             if (active != null) {
                 val currentVotes = voted[active.id] ?: emptySet()
+                val resultCounts = pollResultCounts[active.id] ?: emptyList()
+                val normalizedCounts = active.options.mapIndexed { index, _ -> resultCounts.getOrElse(index) { 0 } }
+                val totalVotes = normalizedCounts.sum().coerceAtLeast(0)
                 Text(active.question, color = p.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(12.dp))
                 active.options.forEachIndexed { idx, option ->
                     val checked = currentVotes.contains(idx)
+                    val optionVotes = normalizedCounts.getOrElse(idx) { 0 }
+                    val optionRatio = if (totalVotes > 0) optionVotes.toFloat() / totalVotes.toFloat() else 0f
+                    val optionPercent = (optionRatio * 100f).toInt()
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -127,16 +137,63 @@ fun PollScreenNew(
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(18.dp)
-                                .clip(RoundedCornerShape(9.dp))
-                                .background(if (checked) p.systemBlue else p.surfaceElevated),
-                        )
-                        Spacer(Modifier.size(10.dp))
-                        Text(option, color = p.textPrimary, fontSize = 14.sp)
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .clip(RoundedCornerShape(9.dp))
+                                        .background(if (checked) p.systemBlue else p.surfaceElevated),
+                                )
+                                Spacer(Modifier.size(10.dp))
+                                Text(
+                                    option,
+                                    color = p.textPrimary,
+                                    fontSize = 14.sp,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (resultCounts.isNotEmpty()) {
+                                    Text(
+                                        "$optionPercent% • $optionVotes",
+                                        color = p.textSecondary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                            }
+                            if (resultCounts.isNotEmpty()) {
+                                Spacer(Modifier.height(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(8.dp)
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(p.border.copy(alpha = 0.35f)),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth(optionRatio.coerceIn(0f, 1f))
+                                            .height(8.dp)
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .background(if (checked) p.systemBlue else p.systemBlue.copy(alpha = 0.65f)),
+                                    )
+                                }
+                            }
+                        }
                     }
                     Spacer(Modifier.height(8.dp))
+                }
+                if (resultCounts.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Total votes: $totalVotes",
+                        color = p.textSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
                 }
                 Spacer(Modifier.height(12.dp))
                 Button(
@@ -144,8 +201,13 @@ fun PollScreenNew(
                         scope.launch {
                             submitting = true
                             submitMessage = null
-                            val ok = ContentRepository.submitPollVote(active.id, currentVotes.toList())
-                            submitMessage = if (ok) "Vote submitted successfully." else "Failed to submit vote."
+                            val result = ContentRepository.submitPollVote(active.id, currentVotes.toList())
+                            if (result?.ok == true) {
+                                pollResultCounts[active.id] = result.counts
+                                submitMessage = "Vote submitted successfully."
+                            } else {
+                                submitMessage = "Failed to submit vote."
+                            }
                             submitting = false
                         }
                     },

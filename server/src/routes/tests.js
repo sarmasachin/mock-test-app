@@ -89,6 +89,25 @@ function mapTest(row) {
   };
 }
 
+function normalizeTestAdvancedConfig(rawValue) {
+  const raw = rawValue && typeof rawValue === 'object' ? rawValue : {};
+  const resultVisibilityRaw = String(raw.resultVisibility || 'immediate').trim().toLowerCase();
+  return {
+    publishAt: String(raw.publishAt || '').trim() || null,
+    unpublishAt: String(raw.unpublishAt || '').trim() || null,
+    resultVisibility: ['immediate', 'after_result_time'].includes(resultVisibilityRaw) ? resultVisibilityRaw : 'immediate',
+    reattemptCooldownMinutes: Math.max(0, Number(raw.reattemptCooldownMinutes || 0)),
+    lateJoinMinutes: Math.max(0, Number(raw.lateJoinMinutes || 0)),
+    notifyBeforeMinutes: Math.max(0, Number(raw.notifyBeforeMinutes || 0)),
+    resumeEnabled: raw.resumeEnabled !== false,
+    shuffleQuestions: raw.shuffleQuestions === true,
+    shuffleOptions: raw.shuffleOptions === true,
+    fullscreenRequired: raw.fullscreenRequired === true,
+    copyPasteBlocked: raw.copyPasteBlocked === true,
+    notifyOnPublish: raw.notifyOnPublish !== false,
+  };
+}
+
 router.get('/', async (req, res) => {
   const sub = String(req.query.subcategory || '').trim();
   const kind = String(req.query.testKind || '').trim().toLowerCase();
@@ -138,8 +157,23 @@ router.get('/', async (req, res) => {
            LIMIT $1`;
       params = [limit];
     }
-    const { rows } = await pool.query(q, params);
-    return res.json({ items: rows.map(mapTest) });
+    const [rowsRes, advancedMapRaw] = await Promise.all([
+      pool.query(q, params),
+      pool.query(`SELECT setting_value FROM app_settings WHERE setting_key = 'testAdvancedConfigs' LIMIT 1`),
+    ]);
+    let advancedMap = {};
+    try {
+      const parsed = JSON.parse(String(advancedMapRaw.rows?.[0]?.setting_value || '{}'));
+      advancedMap = parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_e) {
+      advancedMap = {};
+    }
+    return res.json({
+      items: rowsRes.rows.map((row) => ({
+        ...mapTest(row),
+        advancedConfig: normalizeTestAdvancedConfig(advancedMap[row.id]),
+      })),
+    });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to list tests' });
@@ -161,7 +195,7 @@ router.get('/:id/questions', async (req, res) => {
     const { rows } = await pool.query(
       `SELECT id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation
        FROM questions
-       WHERE test_id = $1::uuid
+       WHERE test_id = $1::uuid AND is_published = true
        ORDER BY position ASC, id ASC`,
       [id],
     );

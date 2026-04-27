@@ -430,6 +430,10 @@ fun MainBottomNavHost(
                         val safeSelectedName = selectedTestName.ifBlank { name.ifBlank { "Test" } }
                         mainNavController.navigate("${RoutesNew.QUIZ}/$safeSelectedName")
                     },
+                    onApplyForTest = { selectedTestName ->
+                        val safeSelectedName = selectedTestName.ifBlank { name.ifBlank { "Test" } }
+                        mainNavController.navigate("${RoutesNew.APPLY}/$safeSelectedName")
+                    },
                 )
             }
 

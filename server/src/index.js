@@ -16,6 +16,7 @@ const leaderboardRouter = require('./routes/leaderboard');
 const homeRouter = require('./routes/home');
 const adminRouter = require('./routes/admin');
 const pollsRouter = require('./routes/polls');
+const { publishAppNotification } = require('./notificationDispatch');
 const { pool } = require('./db');
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
@@ -112,6 +113,10 @@ async function ensureOptionalColumns() {
          applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),
          PRIMARY KEY (user_id, test_id)
        )`,
+    );
+    await pool.query(
+      `ALTER TABLE questions
+       ADD COLUMN IF NOT EXISTS is_published BOOLEAN NOT NULL DEFAULT true`,
     );
   } catch (e) {
     if (e && e.code === '42P01') return;
@@ -243,40 +248,17 @@ async function processPublishSchedules() {
         await pool.query(`UPDATE news_articles SET is_published = true WHERE id = $1::uuid`, [String(item.entityId || '')]);
       }
       if (item.notifyOnPublish) {
-        const notifRes = await pool.query(
-          `SELECT setting_value FROM app_settings WHERE setting_key = 'notificationScheduling' LIMIT 1`,
-        );
-        let notifPayload = { items: [] };
-        if (notifRes.rows[0]) {
-          try {
-            notifPayload = JSON.parse(String(notifRes.rows[0].setting_value || '{}')) || { items: [] };
-          } catch (_e) {
-            notifPayload = { items: [] };
-          }
-        }
-        const notifItems = Array.isArray(notifPayload.items) ? notifPayload.items : [];
-        notifItems.unshift({
-          id: `schedule-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
-          title: item.entityType === 'test' ? 'Test Published' : 'News Published',
-          message: item.entityType === 'test' ? 'A scheduled test is now live.' : 'A scheduled news update is now live.',
-          target: 'all',
-          segmentKey: '',
-          scheduleAt: new Date().toISOString(),
-          repeatType: 'none',
-          dayOfWeek: 1,
-          dayOfMonth: 1,
-          repeatUntil: '',
-          status: 'scheduled',
-          createdAt: new Date().toISOString(),
-          sentAt: '',
+        await publishAppNotification(
+          {
+            title: item.entityType === 'test' ? 'Test Published' : 'News Published',
+            message: item.entityType === 'test' ? 'A scheduled test is now live.' : 'A scheduled news update is now live.',
+            target: 'all',
+            scheduleAt: new Date().toISOString(),
+          },
+          null,
+        ).catch((e) => {
+          console.error('scheduled_publish_notification_error', e);
         });
-        await pool.query(
-          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
-           VALUES ('notificationScheduling', $1, NULL)
-           ON CONFLICT (setting_key)
-           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = now()`,
-          [JSON.stringify({ items: notifItems })],
-        );
       }
       nextItems.push({
         ...item,

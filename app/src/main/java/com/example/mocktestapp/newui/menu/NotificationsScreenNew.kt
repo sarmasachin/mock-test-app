@@ -35,9 +35,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.mocktestapp.data.AppPreferencesRepository
 import com.example.mocktestapp.data.ContentRepository
 import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 @Composable
 fun NotificationsScreenNew(
@@ -48,7 +52,9 @@ fun NotificationsScreenNew(
     var notifications by remember { mutableStateOf<List<ContentRepository.PushNotificationItemRemote>>(emptyList()) }
 
     LaunchedEffect(Unit) {
-        notifications = ContentRepository.loadNotifications()
+        val rows = ContentRepository.loadNotifications()
+        notifications = rows
+        AppPreferencesRepository.markNotificationsSeen(rows.map { it.id })
     }
 
     Scaffold(
@@ -81,18 +87,46 @@ fun NotificationsScreenNew(
                             border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
-                                Text(item.title, color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.Top,
+                                ) {
+                                    Text(
+                                        text = item.title,
+                                        color = p.textPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    val dateText = formatNotificationDateTime(item.createdAt)
+                                    if (dateText.isNotBlank()) {
+                                        Text(
+                                            text = dateText,
+                                            color = p.textSecondary.copy(alpha = 0.9f),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium,
+                                        )
+                                    }
+                                }
                                 Spacer(Modifier.height(4.dp))
                                 Text(item.message, color = p.textSecondary, fontSize = 13.sp)
-                                if (!item.createdAt.isNullOrBlank()) {
-                                    Spacer(Modifier.height(6.dp))
-                                    Text(item.createdAt, color = p.textSecondary.copy(alpha = 0.8f), fontSize = 11.sp)
-                                }
                             }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+private fun formatNotificationDateTime(raw: String?): String {
+    val value = raw?.trim().orEmpty()
+    if (value.isBlank()) return ""
+    val formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a", Locale.US)
+    return runCatching {
+        formatter.format(ZonedDateTime.parse(value))
+    }.getOrElse {
+        value
     }
 }

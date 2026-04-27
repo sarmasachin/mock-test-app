@@ -68,6 +68,8 @@ object AppPreferencesRepository {
     private val keyPendingResultTotal = intPreferencesKey("pending_result_total")
     private val keyAppliedTestSeries = stringPreferencesKey("applied_test_series")
     private val keyAuthBootstrapState = stringPreferencesKey("auth_bootstrap_state")
+    private val keySeenNotificationIds = stringPreferencesKey("seen_notification_ids")
+    private val keySeenPollIds = stringPreferencesKey("seen_poll_ids")
 
     private const val DefaultStartSeriesLockMs = 20_000L
     private const val DefaultStartSeriesActiveWindowMs = 30 * 60 * 1000L
@@ -611,6 +613,63 @@ object AppPreferencesRepository {
         return arr.toString()
     }
 
+    private fun parseStringSet(raw: String?): Set<String> {
+        if (raw.isNullOrBlank()) return emptySet()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildSet {
+                for (i in 0 until arr.length()) {
+                    val value = arr.optString(i).trim()
+                    if (value.isNotBlank()) add(value)
+                }
+            }
+        }.getOrElse { emptySet() }
+    }
+
+    private fun encodeStringSet(values: Set<String>): String {
+        val arr = JSONArray()
+        values.filter { it.isNotBlank() }.sorted().forEach { arr.put(it) }
+        return arr.toString()
+    }
+
+    suspend fun getSeenNotificationIdsNow(): Set<String> {
+        if (!::appContext.isInitialized) return emptySet()
+        return runCatching {
+            parseStringSet(store().data.first()[keySeenNotificationIds])
+        }.getOrDefault(emptySet())
+    }
+
+    suspend fun getSeenPollIdsNow(): Set<String> {
+        if (!::appContext.isInitialized) return emptySet()
+        return runCatching {
+            parseStringSet(store().data.first()[keySeenPollIds])
+        }.getOrDefault(emptySet())
+    }
+
+    suspend fun markNotificationsSeen(ids: Collection<String>) {
+        if (!::appContext.isInitialized) return
+        val normalized = ids.map { it.trim() }.filter { it.isNotBlank() }.toSet()
+        if (normalized.isEmpty()) return
+        runCatching {
+            store().edit { prefs ->
+                val existing = parseStringSet(prefs[keySeenNotificationIds])
+                prefs[keySeenNotificationIds] = encodeStringSet(existing + normalized)
+            }
+        }.onFailure { Log.e(TAG, "markNotificationsSeen failed", it) }
+    }
+
+    suspend fun markPollsSeen(ids: Collection<String>) {
+        if (!::appContext.isInitialized) return
+        val normalized = ids.map { it.trim() }.filter { it.isNotBlank() }.toSet()
+        if (normalized.isEmpty()) return
+        runCatching {
+            store().edit { prefs ->
+                val existing = parseStringSet(prefs[keySeenPollIds])
+                prefs[keySeenPollIds] = encodeStringSet(existing + normalized)
+            }
+        }.onFailure { Log.e(TAG, "markPollsSeen failed", it) }
+    }
+
     /** Clears sign-in profile fields; keeps streak, digest, and cached feed URLs. */
     suspend fun clearAuthSessionPrefs() {
         if (!::appContext.isInitialized) return
@@ -633,6 +692,8 @@ object AppPreferencesRepository {
                 prefs[keyPendingResultViewed] = 1
                 prefs[keyAppliedTestSeries] = "[]"
                 prefs[keyAuthBootstrapState] = RestoreSessionStatus.LoggedOut.name
+                prefs[keySeenNotificationIds] = "[]"
+                prefs[keySeenPollIds] = "[]"
             }
         }.onFailure { Log.e(TAG, "clearAuthSessionPrefs failed", it) }
     }

@@ -68,6 +68,7 @@ import com.example.mocktestapp.newui.theme.palette.gradientColors
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.delay
 import java.time.Instant
+import kotlin.random.Random
 
 @Composable
 fun QuizScreenNew(
@@ -93,7 +94,6 @@ fun QuizScreenNew(
         }
         questionsLoaded = true
     }
-    val totalQuestions = questions.size
     var current by remember { mutableIntStateOf(0) }
     val answers = remember { mutableStateMapOf<Int, Int>() }
     var questionNavigationMode by remember { mutableStateOf("sequential") }
@@ -101,6 +101,12 @@ fun QuizScreenNew(
     var submitDialogTitle by remember { mutableStateOf("Are you sure want to submit test") }
     var submitDialogSubtitle by remember { mutableStateOf("After submitting test you won't be able to re-attempt") }
     var resultReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
+    var shuffleQuestionsEnabled by remember(testName) { mutableStateOf(false) }
+    var shuffleOptionsEnabled by remember(testName) { mutableStateOf(false) }
+    var fullscreenRequired by remember(testName) { mutableStateOf(false) }
+    var copyPasteBlocked by remember(testName) { mutableStateOf(false) }
+    var resumeEnabled by remember(testName) { mutableStateOf(true) }
+    var configuredDurationSeconds by remember(testName) { mutableIntStateOf(12 * 60) }
 
     LaunchedEffect(testName) {
         val instruction = ContentRepository.loadInstructionContent()
@@ -115,16 +121,34 @@ fun QuizScreenNew(
         questionNavigationMode = mode
         val testCard = ContentRepository.loadTestByTitle(testName)
         resultReleaseAtMs = parseIsoMillis(testCard?.resultReleaseAt)
+        shuffleQuestionsEnabled = testCard?.shuffleQuestions == true
+        shuffleOptionsEnabled = testCard?.shuffleOptions == true
+        fullscreenRequired = testCard?.fullscreenRequired == true
+        copyPasteBlocked = testCard?.copyPasteBlocked == true
+        resumeEnabled = testCard?.resumeEnabled != false
+        configuredDurationSeconds = parseDurationSeconds(testCard?.durationLabel).coerceAtLeast(60)
     }
 
-    var remainingSeconds by remember { mutableIntStateOf(12 * 60) }
+    var remainingSeconds by remember(testName) { mutableIntStateOf(12 * 60) }
+    LaunchedEffect(testName, configuredDurationSeconds) {
+        remainingSeconds = configuredDurationSeconds.coerceAtLeast(60)
+    }
+    val displayQuestions = remember(questions, shuffleQuestionsEnabled, shuffleOptionsEnabled, testName) {
+        prepareQuestionsForAttempt(
+            source = questions,
+            shuffleQuestions = shuffleQuestionsEnabled,
+            shuffleOptions = shuffleOptionsEnabled,
+            seed = testName.hashCode(),
+        )
+    }
+    val totalQuestions = displayQuestions.size
     LaunchedEffect(testName, questionsLoaded, questions.size) {
-        if (!questionsLoaded || questions.isEmpty()) return@LaunchedEffect
+        if (!questionsLoaded || displayQuestions.isEmpty()) return@LaunchedEffect
         while (remainingSeconds > 0) {
             delay(1000)
             remainingSeconds -= 1
         }
-        val correct = answers.count { (q, ans) -> questions.getOrNull(q)?.correctIndex == ans }
+        val correct = answers.count { (q, ans) -> displayQuestions.getOrNull(q)?.correctIndex == ans }
         val answered = answers.size
         val wrong = (answered - correct).coerceAtLeast(0)
         onSubmit(answered, correct, wrong, totalQuestions, resultReleaseAtMs ?: defaultResultReleaseAtMs)
@@ -251,6 +275,16 @@ fun QuizScreenNew(
                 fontSize = 18.sp,
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
+            if (fullscreenRequired || copyPasteBlocked || !resumeEnabled) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = buildRuleHint(fullscreenRequired, copyPasteBlocked, resumeEnabled),
+                    color = p.answerWrongStart,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 11.sp,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                )
+            }
 
             Spacer(Modifier.height(12.dp))
 
@@ -291,7 +325,7 @@ fun QuizScreenNew(
 
             Spacer(Modifier.height(14.dp))
 
-            val activeQuestion = questions.getOrElse(current) { questions.first() }
+            val activeQuestion = displayQuestions.getOrElse(current) { displayQuestions.first() }
             val questionTitle = "Q${current + 1}. ${activeQuestion.title}"
             QuestionCard(
                 title = questionTitle,
@@ -374,7 +408,7 @@ fun QuizScreenNew(
             onCancel = { showSubmitConfirm = false },
             onSubmit = {
                 showSubmitConfirm = false
-                val correct = answers.count { (q, ans) -> questions.getOrNull(q)?.correctIndex == ans }
+                val correct = answers.count { (q, ans) -> displayQuestions.getOrNull(q)?.correctIndex == ans }
                 val answered = answers.size
                 val wrong = (answered - correct).coerceAtLeast(0)
                 onSubmit(answered, correct, wrong, totalQuestions, resultReleaseAtMs ?: defaultResultReleaseAtMs)
@@ -1118,4 +1152,42 @@ private fun parseIsoMillis(iso: String?): Long? {
     } catch (_: Exception) {
         null
     }
+}
+
+private fun parseDurationSeconds(durationLabel: String?): Int {
+    val raw = durationLabel?.trim().orEmpty().lowercase()
+    if (raw.isBlank()) return 12 * 60
+    val hourMatch = Regex("(\\d+)\\s*(hr|hrs|hour|hours)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+    val minMatch = Regex("(\\d+)\\s*(min|mins|minute|minutes)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+    val totalMinutes = when {
+        hourMatch > 0 || minMatch > 0 -> hourMatch * 60 + minMatch
+        else -> Regex("(\\d+)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 12
+    }
+    return totalMinutes.coerceAtLeast(1) * 60
+}
+
+private fun prepareQuestionsForAttempt(
+    source: List<QuizQuestion>,
+    shuffleQuestions: Boolean,
+    shuffleOptions: Boolean,
+    seed: Int,
+): List<QuizQuestion> {
+    if (source.isEmpty()) return source
+    val random = Random(seed)
+    val base = if (shuffleQuestions) source.shuffled(random) else source
+    if (!shuffleOptions) return base
+    return base.map { q ->
+        val indexed = q.options.mapIndexed { idx, text -> idx to text }.shuffled(random)
+        val newOptions = indexed.map { it.second }
+        val newCorrect = indexed.indexOfFirst { it.first == q.correctIndex }.coerceAtLeast(0)
+        q.copy(options = newOptions, correctIndex = newCorrect)
+    }
+}
+
+private fun buildRuleHint(fullscreenRequired: Boolean, copyPasteBlocked: Boolean, resumeEnabled: Boolean): String {
+    val parts = mutableListOf<String>()
+    if (fullscreenRequired) parts += "Fullscreen required"
+    if (copyPasteBlocked) parts += "Copy/paste blocked"
+    if (!resumeEnabled) parts += "Resume disabled"
+    return parts.joinToString(" • ")
 }

@@ -158,6 +158,22 @@ data class CatalogTestDto(
     @SerializedName("resultReleaseAt") val resultReleaseAt: String? = null,
     @SerializedName("dynamicDateEnabled") val dynamicDateEnabled: Boolean? = null,
     @SerializedName("dateCycleDays") val dateCycleDays: Int? = null,
+    @SerializedName("advancedConfig") val advancedConfig: TestAdvancedConfigDto? = null,
+)
+
+data class TestAdvancedConfigDto(
+    @SerializedName("publishAt") val publishAt: String? = null,
+    @SerializedName("unpublishAt") val unpublishAt: String? = null,
+    @SerializedName("resultVisibility") val resultVisibility: String? = null,
+    @SerializedName("reattemptCooldownMinutes") val reattemptCooldownMinutes: Int? = null,
+    @SerializedName("lateJoinMinutes") val lateJoinMinutes: Int? = null,
+    @SerializedName("notifyBeforeMinutes") val notifyBeforeMinutes: Int? = null,
+    @SerializedName("resumeEnabled") val resumeEnabled: Boolean? = null,
+    @SerializedName("shuffleQuestions") val shuffleQuestions: Boolean? = null,
+    @SerializedName("shuffleOptions") val shuffleOptions: Boolean? = null,
+    @SerializedName("fullscreenRequired") val fullscreenRequired: Boolean? = null,
+    @SerializedName("copyPasteBlocked") val copyPasteBlocked: Boolean? = null,
+    @SerializedName("notifyOnPublish") val notifyOnPublish: Boolean? = null,
 )
 
 data class TestsListResponse(
@@ -320,6 +336,7 @@ data class PollItemDto(
 )
 
 data class PollSettingsDto(
+    @SerializedName("showHomePopup") val showHomePopup: Boolean = true,
     val items: List<PollItemDto> = emptyList(),
 )
 
@@ -399,4 +416,10 @@ data class PollVoteResponse(
     @SerializedName("pollId") val pollId: String,
     @SerializedName("optionIndexes") val optionIndexes: List<Int> = emptyList(),
     val counts: List<Int> = emptyList(),
+)
+
+data class DeviceTokenRegisterRequest(
+    val token: String,
+    val platform: String = "android",
+    @SerializedName("appVersion") val appVersion: String = "",
 )

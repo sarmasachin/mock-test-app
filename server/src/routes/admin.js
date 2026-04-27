@@ -4,6 +4,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { pool } = require('../db');
+const { publishAppNotification } = require('../notificationDispatch');
 
 const router = express.Router();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -53,6 +54,7 @@ const SETTINGS_KEYS = [
   'achievementContent',
   'privacyPolicyContent',
   'termsOfUseContent',
+  'testAdvancedConfigs',
 ];
 
 function normalizeProfileMenuItems(value) {
@@ -74,7 +76,9 @@ function normalizeProfileMenuItems(value) {
 
 function normalizeHomeContent(value) {
   const safe = value || {};
-  const welcomeText = String(safe.welcomeText || '').trim().slice(0, 120);
+  // Keep header personalization stable across all devices.
+  // Admin cannot override this with hardcoded names.
+  const welcomeText = 'Welcome {name}';
   const quickActionsTitle = String(safe.quickActionsTitle || '').trim().slice(0, 80);
   const autoSaveEnabled = safe.autoSaveEnabled === true;
   const themePresetRaw = String(safe.themePreset || 'premium').trim().toLowerCase();
@@ -175,6 +179,12 @@ function normalizeHomeContent(value) {
   if (sections.some((x) => !x.title)) {
     return { error: 'Each section requires a title' };
   }
+  if (sections.length === 0) {
+    return { error: 'At least one section is required' };
+  }
+  if (sections.some((x) => x.items.length === 0)) {
+    return { error: 'Each section requires at least one item' };
+  }
   const quickActionSections = rawQuickActionSections.map((section, index) => {
     const s = section || {};
     const title = String(s.title || '').trim().slice(0, 80);
@@ -195,6 +205,12 @@ function normalizeHomeContent(value) {
   });
   if (quickActionSections.some((x) => !x.title)) {
     return { error: 'Each quick action section requires a title' };
+  }
+  if (quickActionSections.length === 0) {
+    return { error: 'At least one quick action section is required' };
+  }
+  if (quickActionSections.some((x) => x.items.length === 0)) {
+    return { error: 'Each quick action section requires at least one valid action' };
   }
   const banners = rawBanners
     .map((banner, index) => {
@@ -282,6 +298,7 @@ function normalizePollSettings(value) {
     .filter((x) => x.question);
   return {
     value: {
+      showHomePopup: safe.showHomePopup !== false,
       items,
     },
   };
@@ -614,6 +631,17 @@ async function enqueueNotification(userId, payload) {
     ],
   };
   await setJsonSetting('notificationScheduling', next, userId);
+  await publishAppNotification(
+    {
+      title: payload.title,
+      message: payload.message,
+      target: payload.target || 'all',
+      scheduleAt: payload.scheduleAt,
+    },
+    userId || null,
+  ).catch((e) => {
+    console.error('publish_app_notification_error', e);
+  });
 }
 
 function shuffleArray(arr) {
@@ -867,6 +895,7 @@ function normalizeQuestionPayload(body) {
   const choiceD = String(payload.choiceD || '').trim();
   const correctIndex = Number(payload.correctIndex);
   const explanation = String(payload.explanation || '').trim();
+  const isPublished = payload.isPublished !== false;
 
   if (!Number.isInteger(position) || position <= 0) {
     return { error: 'position must be a positive integer' };
@@ -879,7 +908,253 @@ function normalizeQuestionPayload(body) {
     return { error: 'correctIndex must be 0, 1, 2, or 3' };
   }
   return {
-    value: { position, stem, choiceA, choiceB, choiceC, choiceD, correctIndex, explanation },
+    value: { position, stem, choiceA, choiceB, choiceC, choiceD, correctIndex, explanation, isPublished },
+  };
+}
+
+function normalizeStemKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+async function hasDuplicateStemInTest(testId, stem, excludeQuestionId) {
+  const normalized = normalizeStemKey(stem);
+  if (!normalized) return false;
+  const params = [testId];
+  let where = `WHERE test_id = $1::uuid`;
+  if (excludeQuestionId !== undefined && excludeQuestionId !== null) {
+    params.push(Number(excludeQuestionId));
+    where += ` AND id <> $2`;
+  }
+  const { rows } = await pool.query(
+    `SELECT stem
+     FROM questions
+     ${where}`,
+    params,
+  );
+  return rows.some((row) => normalizeStemKey(row.stem) === normalized);
+}
+
+function parseBulkQuestionRows(rawRows) {
+  if (!Array.isArray(rawRows) || !rawRows.length) return { error: 'items array is required' };
+  const rows = rawRows.map((raw, idx) => {
+    const x = raw || {};
+    const options = Array.isArray(x.options) ? x.options : [x.choiceA, x.choiceB, x.choiceC, x.choiceD];
+    const choiceA = String(options[0] || x.choiceA || '').trim();
+    const choiceB = String(options[1] || x.choiceB || '').trim();
+    const choiceC = String(options[2] || x.choiceC || '').trim();
+    const choiceD = String(options[3] || x.choiceD || '').trim();
+    const stem = String(x.stem || x.questionPrompt || '').trim();
+    const positionRaw = x.position === undefined || x.position === null || x.position === '' ? null : Number(x.position);
+    const correctIndex = Number(
+      x.correctIndex !== undefined && x.correctIndex !== null && x.correctIndex !== ''
+        ? x.correctIndex
+        : x.correct_option !== undefined
+        ? Number(x.correct_option) - 1
+        : 0,
+    );
+    const explanation = String(x.explanation || '').trim();
+    const isPublished = x.isPublished !== false && x.is_published !== false;
+    return {
+      rowNo: idx + 1,
+      position: positionRaw,
+      stem,
+      choiceA,
+      choiceB,
+      choiceC,
+      choiceD,
+      correctIndex,
+      explanation,
+      isPublished,
+    };
+  });
+  const invalid = rows.find(
+    (r) =>
+      !r.stem ||
+      !r.choiceA ||
+      !r.choiceB ||
+      !r.choiceC ||
+      !r.choiceD ||
+      !Number.isInteger(r.correctIndex) ||
+      r.correctIndex < 0 ||
+      r.correctIndex > 3 ||
+      (r.position !== null && (!Number.isInteger(r.position) || r.position <= 0)),
+  );
+  if (invalid) {
+    return { error: `Invalid row at ${invalid.rowNo}. Ensure stem/options/correctIndex (0-3) are valid.` };
+  }
+  return { value: rows };
+}
+
+function normalizeTestAdvancedConfig(rawValue) {
+  const raw = rawValue && typeof rawValue === 'object' ? rawValue : {};
+  const publishAt = String(raw.publishAt || '').trim();
+  const unpublishAt = String(raw.unpublishAt || '').trim();
+  const resultVisibilityRaw = String(raw.resultVisibility || 'immediate').trim().toLowerCase();
+  const resultVisibility = ['immediate', 'after_result_time'].includes(resultVisibilityRaw)
+    ? resultVisibilityRaw
+    : 'immediate';
+  const reattemptCooldownMinutes = Number(raw.reattemptCooldownMinutes || 0);
+  const lateJoinMinutes = Number(raw.lateJoinMinutes || 0);
+  const notifyBeforeMinutes = Number(raw.notifyBeforeMinutes || 0);
+
+  if (publishAt && Number.isNaN(Date.parse(publishAt))) {
+    return { error: 'advancedConfig.publishAt must be a valid datetime' };
+  }
+  if (unpublishAt && Number.isNaN(Date.parse(unpublishAt))) {
+    return { error: 'advancedConfig.unpublishAt must be a valid datetime' };
+  }
+  if (publishAt && unpublishAt && Date.parse(unpublishAt) < Date.parse(publishAt)) {
+    return { error: 'advancedConfig.unpublishAt must be on or after publishAt' };
+  }
+  if (
+    !Number.isFinite(reattemptCooldownMinutes) ||
+    !Number.isInteger(reattemptCooldownMinutes) ||
+    reattemptCooldownMinutes < 0 ||
+    reattemptCooldownMinutes > 10080
+  ) {
+    return { error: 'advancedConfig.reattemptCooldownMinutes must be an integer between 0 and 10080' };
+  }
+  if (!Number.isFinite(lateJoinMinutes) || !Number.isInteger(lateJoinMinutes) || lateJoinMinutes < 0 || lateJoinMinutes > 240) {
+    return { error: 'advancedConfig.lateJoinMinutes must be an integer between 0 and 240' };
+  }
+  if (!Number.isFinite(notifyBeforeMinutes) || !Number.isInteger(notifyBeforeMinutes) || notifyBeforeMinutes < 0 || notifyBeforeMinutes > 10080) {
+    return { error: 'advancedConfig.notifyBeforeMinutes must be an integer between 0 and 10080' };
+  }
+
+  return {
+    value: {
+      publishAt,
+      unpublishAt,
+      resultVisibility,
+      reattemptCooldownMinutes,
+      lateJoinMinutes,
+      notifyBeforeMinutes,
+      resumeEnabled: raw.resumeEnabled !== false,
+      shuffleQuestions: raw.shuffleQuestions === true,
+      shuffleOptions: raw.shuffleOptions === true,
+      fullscreenRequired: raw.fullscreenRequired === true,
+      copyPasteBlocked: raw.copyPasteBlocked === true,
+      notifyOnPublish: raw.notifyOnPublish !== false,
+    },
+  };
+}
+
+function normalizeTestPayload(body) {
+  const payload = body || {};
+  const title = String(payload.title || '').trim().slice(0, 180);
+  const slug = String(payload.slug || '').trim().slice(0, 180).toLowerCase();
+  const subcategory = String(payload.subcategory || '').trim().slice(0, 120);
+  const metaLine = String(payload.metaLine || '').trim().slice(0, 240);
+  const testKind = String(payload.testKind || '').trim().toLowerCase();
+  const durationMinutes = Number(payload.durationMinutes);
+  const questionCount = Number(payload.questionCount);
+  const totalMarks = Number(payload.totalMarks || 0);
+  const slotLabel = String(payload.slotLabel || '').trim().slice(0, 80);
+  const capacityTotal = Number(payload.capacityTotal || 0);
+  const enrolledCount = Number(payload.enrolledCount || 0);
+  const attemptsAllowed = Number(payload.attemptsAllowed || 1);
+  const languageMode = String(payload.languageMode || 'Bilingual').trim().slice(0, 40) || 'Bilingual';
+  const examMode = String(payload.examMode || 'Practice').trim().slice(0, 40) || 'Practice';
+  const negativeMarkingText = String(payload.negativeMarkingText || 'No').trim().slice(0, 40) || 'No';
+  const testTypeLabel = String(payload.testTypeLabel || 'Full Mock').trim().slice(0, 40) || 'Full Mock';
+  const badgeEnabled = payload.badgeEnabled === true;
+  const badgeText = String(payload.badgeText || 'Live').trim().slice(0, 40) || 'Live';
+  const examDate = String(payload.examDate || '').trim();
+  const validUntil = String(payload.validUntil || '').trim();
+  const answerKeyReleaseAt = String(payload.answerKeyReleaseAt || '').trim();
+  const resultReleaseAt = String(payload.resultReleaseAt || '').trim();
+  const dynamicDateEnabled = payload.dynamicDateEnabled === true;
+  const dateCycleDays = Number(payload.dateCycleDays || 0);
+
+  if (!title || !slug || !['mock', 'quiz'].includes(testKind)) {
+    return { error: 'title, slug, and valid testKind are required' };
+  }
+  if (!Number.isFinite(durationMinutes) || !Number.isInteger(durationMinutes) || durationMinutes <= 0 || durationMinutes > 1440) {
+    return { error: 'durationMinutes must be an integer between 1 and 1440' };
+  }
+  if (!Number.isFinite(questionCount) || !Number.isInteger(questionCount) || questionCount <= 0 || questionCount > 500) {
+    return { error: 'questionCount must be an integer between 1 and 500' };
+  }
+  if (!Number.isFinite(totalMarks) || totalMarks < 0 || totalMarks > 10000) {
+    return { error: 'totalMarks must be between 0 and 10000' };
+  }
+  if (!Number.isFinite(capacityTotal) || !Number.isInteger(capacityTotal) || capacityTotal < 0 || capacityTotal > 1000000) {
+    return { error: 'capacityTotal must be an integer between 0 and 1000000' };
+  }
+  if (!Number.isFinite(enrolledCount) || !Number.isInteger(enrolledCount) || enrolledCount < 0 || enrolledCount > 1000000) {
+    return { error: 'enrolledCount must be an integer between 0 and 1000000' };
+  }
+  if (enrolledCount > capacityTotal) {
+    return { error: 'enrolledCount cannot be greater than capacityTotal' };
+  }
+  if (!Number.isFinite(attemptsAllowed) || !Number.isInteger(attemptsAllowed) || attemptsAllowed < 1 || attemptsAllowed > 20) {
+    return { error: 'attemptsAllowed must be an integer between 1 and 20' };
+  }
+  if (!Number.isFinite(dateCycleDays) || !Number.isInteger(dateCycleDays) || dateCycleDays < 0 || dateCycleDays > 3650) {
+    return { error: 'dateCycleDays must be an integer between 0 and 3650' };
+  }
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    return { error: 'slug must use lowercase letters, numbers and hyphen only' };
+  }
+  if (examDate && Number.isNaN(Date.parse(`${examDate}T00:00:00Z`))) {
+    return { error: 'examDate must be a valid date (YYYY-MM-DD)' };
+  }
+  if (validUntil && Number.isNaN(Date.parse(`${validUntil}T00:00:00Z`))) {
+    return { error: 'validUntil must be a valid date (YYYY-MM-DD)' };
+  }
+  if (answerKeyReleaseAt && Number.isNaN(Date.parse(answerKeyReleaseAt))) {
+    return { error: 'answerKeyReleaseAt must be a valid datetime' };
+  }
+  if (resultReleaseAt && Number.isNaN(Date.parse(resultReleaseAt))) {
+    return { error: 'resultReleaseAt must be a valid datetime' };
+  }
+  if (examDate && validUntil) {
+    const examDateMs = Date.parse(`${examDate}T00:00:00Z`);
+    const validUntilMs = Date.parse(`${validUntil}T00:00:00Z`);
+    if (validUntilMs < examDateMs) {
+      return { error: 'validUntil must be on or after examDate' };
+    }
+  }
+  if (answerKeyReleaseAt && resultReleaseAt) {
+    const answerKeyMs = Date.parse(answerKeyReleaseAt);
+    const resultMs = Date.parse(resultReleaseAt);
+    if (resultMs < answerKeyMs) {
+      return { error: 'resultReleaseAt must be on or after answerKeyReleaseAt' };
+    }
+  }
+
+  return {
+    value: {
+      title,
+      slug,
+      subcategory,
+      metaLine,
+      testKind,
+      durationMinutes,
+      questionCount,
+      totalMarks: Math.max(0, totalMarks),
+      slotLabel,
+      capacityTotal: Math.max(0, capacityTotal),
+      enrolledCount: Math.max(0, enrolledCount),
+      attemptsAllowed: Math.max(1, attemptsAllowed),
+      languageMode,
+      examMode,
+      negativeMarkingText,
+      testTypeLabel,
+      badgeEnabled,
+      badgeText,
+      examDate,
+      validUntil,
+      answerKeyReleaseAt,
+      resultReleaseAt,
+      dynamicDateEnabled,
+      dateCycleDays: Math.max(0, dateCycleDays),
+      isPublished: payload.isPublished !== false,
+      dynamicFluctuationOnPublish: payload.dynamicFluctuationOnPublish !== false,
+    },
   };
 }
 
@@ -1228,6 +1503,22 @@ router.patch('/settings', async (req, res) => {
       privacyPolicyContentUpdated: normalizedPrivacyPolicyContent !== null,
       termsOfUseContentUpdated: normalizedTermsOfUseContent !== null,
     });
+    if (normalizedDailyQuizSettings !== null) {
+      await enqueueNotification(req.userId, {
+        title: 'Daily Quiz Rescheduled',
+        message: 'Daily quiz schedule has been updated by admin.',
+        target: 'all',
+        scheduleAt: new Date().toISOString(),
+      });
+    }
+    if (normalizedExamCategories !== null) {
+      await enqueueNotification(req.userId, {
+        title: 'Exam Alerts Updated',
+        message: 'New exam alert categories are available.',
+        target: 'all',
+        scheduleAt: new Date().toISOString(),
+      });
+    }
     const settings = await getSettingsMap();
     return res.json({ settings });
   } catch (e) {
@@ -1256,6 +1547,7 @@ router.get('/audit-logs', async (req, res) => {
 });
 router.get('/tests', async (_req, res) => {
   try {
+    const advancedMap = await getJsonSetting('testAdvancedConfigs', {});
     const { rows } = await pool.query(
       `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
               exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
@@ -1266,7 +1558,14 @@ router.get('/tests', async (_req, res) => {
        FROM tests
        ORDER BY created_at DESC`,
     );
-    return res.json({ items: rows });
+    const mapped = rows.map((row) => ({
+      ...row,
+      advanced_config:
+        advancedMap && typeof advancedMap === 'object' && advancedMap[row.id] && typeof advancedMap[row.id] === 'object'
+          ? advancedMap[row.id]
+          : null,
+    }));
+    return res.json({ items: mapped });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to list tests' });
@@ -1301,38 +1600,12 @@ router.post('/tests/badge/bulk-live', async (req, res) => {
 });
 
 router.post('/tests', async (req, res) => {
-  const body = req.body || {};
-  const title = String(body.title || '').trim();
-  const slug = String(body.slug || '').trim();
-  const testKind = String(body.testKind || '').trim().toLowerCase();
-  const durationMinutes = Number(body.durationMinutes || 12);
-  const questionCount = Number(body.questionCount || 10);
-  const totalMarks = Math.max(0, Number(body.totalMarks || 0));
-  const slotLabel = String(body.slotLabel || '').trim().slice(0, 80);
-  const capacityTotal = Math.max(0, Number(body.capacityTotal || 0));
-  const enrolledCount = Math.max(0, Number(body.enrolledCount || 0));
-  const attemptsAllowed = Math.max(1, Number(body.attemptsAllowed || 1));
-  const languageMode = String(body.languageMode || 'Bilingual').trim().slice(0, 40);
-  const examMode = String(body.examMode || 'Practice').trim().slice(0, 40);
-  const negativeMarkingText = String(body.negativeMarkingText || 'No').trim().slice(0, 40);
-  const testTypeLabel = String(body.testTypeLabel || 'Full Mock').trim().slice(0, 40);
-  const badgeEnabled = body.badgeEnabled === true;
-  const badgeText = String(body.badgeText || 'Live').trim().slice(0, 40) || 'Live';
-  const examDate = String(body.examDate || '').trim();
-  const validUntil = String(body.validUntil || '').trim();
-  const answerKeyReleaseAt = String(body.answerKeyReleaseAt || '').trim();
-  const resultReleaseAt = String(body.resultReleaseAt || '').trim();
-  const dynamicDateEnabled = body.dynamicDateEnabled === true;
-  const dateCycleDays = Math.max(0, Number(body.dateCycleDays || 0));
-  if (!title || !slug || !['mock', 'quiz'].includes(testKind)) {
-    return res.status(400).json({ error: 'title, slug, and valid testKind are required' });
-  }
-  if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
-    return res.status(400).json({ error: 'durationMinutes must be positive' });
-  }
-  if (!Number.isFinite(questionCount) || questionCount <= 0) {
-    return res.status(400).json({ error: 'questionCount must be positive' });
-  }
+  const parsed = normalizeTestPayload(req.body);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const data = parsed.value;
+  const advancedParsed = normalizeTestAdvancedConfig((req.body || {}).advancedConfig);
+  if (advancedParsed.error) return res.status(400).json({ error: advancedParsed.error });
+  const advancedConfig = advancedParsed.value;
   try {
     const { rows } = await pool.query(
       `INSERT INTO tests (
@@ -1346,44 +1619,49 @@ router.post('/tests', async (req, res) => {
                  exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days,
                  COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish`,
       [
-        slug,
-        title,
-        String(body.subcategory || ''),
-        String(body.metaLine || ''),
-        durationMinutes,
-        questionCount,
-        testKind,
-        body.isPublished !== false,
-        body.dynamicFluctuationOnPublish !== false,
-        examDate || null,
-        totalMarks,
-        slotLabel,
-        capacityTotal,
-        enrolledCount,
-        attemptsAllowed,
-        languageMode,
-        examMode,
-        negativeMarkingText,
-        testTypeLabel,
-        badgeEnabled,
-        badgeText,
-        validUntil || null,
-        answerKeyReleaseAt || null,
-        resultReleaseAt || null,
-        dynamicDateEnabled,
-        dateCycleDays,
+        data.slug,
+        data.title,
+        data.subcategory,
+        data.metaLine,
+        data.durationMinutes,
+        data.questionCount,
+        data.testKind,
+        data.isPublished,
+        data.dynamicFluctuationOnPublish,
+        data.examDate || null,
+        data.totalMarks,
+        data.slotLabel,
+        data.capacityTotal,
+        data.enrolledCount,
+        data.attemptsAllowed,
+        data.languageMode,
+        data.examMode,
+        data.negativeMarkingText,
+        data.testTypeLabel,
+        data.badgeEnabled,
+        data.badgeText,
+        data.validUntil || null,
+        data.answerKeyReleaseAt || null,
+        data.resultReleaseAt || null,
+        data.dynamicDateEnabled,
+        data.dateCycleDays,
       ],
     );
-    if (body.isPublished !== false) {
+    if (data.isPublished) {
       await regenerateTestFromSubcategoryPool(rows[0].id);
       await enqueueNotification(req.userId, {
         title: 'New Test Published',
-        message: `${title} is now available.`,
+        message: `${data.title} is now available.`,
         target: 'all',
         scheduleAt: new Date().toISOString(),
       });
     }
-    return res.status(201).json({ item: rows[0] });
+    const currentAdvancedMap = await getJsonSetting('testAdvancedConfigs', {});
+    const nextAdvancedMap =
+      currentAdvancedMap && typeof currentAdvancedMap === 'object' ? { ...currentAdvancedMap } : {};
+    nextAdvancedMap[rows[0].id] = advancedConfig;
+    await setJsonSetting('testAdvancedConfigs', nextAdvancedMap, req.userId);
+    return res.status(201).json({ item: { ...rows[0], advanced_config: advancedConfig } });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'Slug already exists' });
     console.error(e);
@@ -1394,43 +1672,14 @@ router.post('/tests', async (req, res) => {
 router.patch('/tests/:id', async (req, res) => {
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid test id' });
+  const parsed = normalizeTestPayload(req.body);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const data = parsed.value;
+  const advancedParsed = normalizeTestAdvancedConfig((req.body || {}).advancedConfig);
+  if (advancedParsed.error) return res.status(400).json({ error: advancedParsed.error });
+  const advancedConfig = advancedParsed.value;
   const body = req.body || {};
-  const title = String(body.title || '').trim();
-  const slug = String(body.slug || '').trim();
-  const subcategory = String(body.subcategory || '');
-  const metaLine = String(body.metaLine || '');
-  const testKind = String(body.testKind || '').trim().toLowerCase();
-  const durationMinutes = Number(body.durationMinutes || 12);
-  const questionCount = Number(body.questionCount || 10);
-  const totalMarks = Math.max(0, Number(body.totalMarks || 0));
-  const slotLabel = String(body.slotLabel || '').trim().slice(0, 80);
-  const capacityTotal = Math.max(0, Number(body.capacityTotal || 0));
-  const enrolledCount = Math.max(0, Number(body.enrolledCount || 0));
-  const attemptsAllowed = Math.max(1, Number(body.attemptsAllowed || 1));
-  const languageMode = String(body.languageMode || 'Bilingual').trim().slice(0, 40);
-  const examMode = String(body.examMode || 'Practice').trim().slice(0, 40);
-  const negativeMarkingText = String(body.negativeMarkingText || 'No').trim().slice(0, 40);
-  const testTypeLabel = String(body.testTypeLabel || 'Full Mock').trim().slice(0, 40);
-  const badgeEnabled = body.badgeEnabled === true;
-  const badgeText = String(body.badgeText || 'Live').trim().slice(0, 40) || 'Live';
-  const examDate = String(body.examDate || '').trim();
-  const validUntil = String(body.validUntil || '').trim();
-  const answerKeyReleaseAt = String(body.answerKeyReleaseAt || '').trim();
-  const resultReleaseAt = String(body.resultReleaseAt || '').trim();
-  const dynamicDateEnabled = body.dynamicDateEnabled === true;
-  const dateCycleDays = Math.max(0, Number(body.dateCycleDays || 0));
-  const isPublished = body.isPublished !== false;
   const hasDynamicFluctuationValue = Object.prototype.hasOwnProperty.call(body, 'dynamicFluctuationOnPublish');
-
-  if (!title || !slug || !['mock', 'quiz'].includes(testKind)) {
-    return res.status(400).json({ error: 'title, slug, and valid testKind are required' });
-  }
-  if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
-    return res.status(400).json({ error: 'durationMinutes must be positive' });
-  }
-  if (!Number.isFinite(questionCount) || questionCount <= 0) {
-    return res.status(400).json({ error: 'questionCount must be positive' });
-  }
   try {
     const before = await pool.query(
       `SELECT id, title, is_published, COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
@@ -1442,7 +1691,7 @@ router.patch('/tests/:id', async (req, res) => {
     const beforeRow = before.rows[0];
     if (!beforeRow) return res.status(404).json({ error: 'Test not found' });
     const dynamicFluctuationOnPublish = hasDynamicFluctuationValue
-      ? body.dynamicFluctuationOnPublish !== false
+      ? data.dynamicFluctuationOnPublish
       : beforeRow.dynamic_fluctuation_on_publish !== false;
     const { rows } = await pool.query(
       `UPDATE tests
@@ -1457,32 +1706,32 @@ router.patch('/tests/:id', async (req, res) => {
                  exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days,
                  COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish`,
       [
-        slug,
-        title,
-        subcategory,
-        metaLine,
-        durationMinutes,
-        questionCount,
-        testKind,
-        isPublished,
+        data.slug,
+        data.title,
+        data.subcategory,
+        data.metaLine,
+        data.durationMinutes,
+        data.questionCount,
+        data.testKind,
+        data.isPublished,
         dynamicFluctuationOnPublish,
-        examDate || null,
-        totalMarks,
-        slotLabel,
-        capacityTotal,
-        enrolledCount,
-        attemptsAllowed,
-        languageMode,
-        examMode,
-        negativeMarkingText,
-        testTypeLabel,
-        badgeEnabled,
-        badgeText,
-        validUntil || null,
-        answerKeyReleaseAt || null,
-        resultReleaseAt || null,
-        dynamicDateEnabled,
-        dateCycleDays,
+        data.examDate || null,
+        data.totalMarks,
+        data.slotLabel,
+        data.capacityTotal,
+        data.enrolledCount,
+        data.attemptsAllowed,
+        data.languageMode,
+        data.examMode,
+        data.negativeMarkingText,
+        data.testTypeLabel,
+        data.badgeEnabled,
+        data.badgeText,
+        data.validUntil || null,
+        data.answerKeyReleaseAt || null,
+        data.resultReleaseAt || null,
+        data.dynamicDateEnabled,
+        data.dateCycleDays,
         id,
       ],
     );
@@ -1496,7 +1745,12 @@ router.patch('/tests/:id', async (req, res) => {
         scheduleAt: new Date().toISOString(),
       });
     }
-    return res.json({ item: rows[0] });
+    const currentAdvancedMap = await getJsonSetting('testAdvancedConfigs', {});
+    const nextAdvancedMap =
+      currentAdvancedMap && typeof currentAdvancedMap === 'object' ? { ...currentAdvancedMap } : {};
+    nextAdvancedMap[id] = advancedConfig;
+    await setJsonSetting('testAdvancedConfigs', nextAdvancedMap, req.userId);
+    return res.json({ item: { ...rows[0], advanced_config: advancedConfig } });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'Slug already exists' });
     console.error(e);
@@ -1510,6 +1764,12 @@ router.delete('/tests/:id', async (req, res) => {
   try {
     const del = await pool.query(`DELETE FROM tests WHERE id = $1::uuid`, [id]);
     if (!del.rowCount) return res.status(404).json({ error: 'Test not found' });
+    const currentAdvancedMap = await getJsonSetting('testAdvancedConfigs', {});
+    if (currentAdvancedMap && typeof currentAdvancedMap === 'object' && currentAdvancedMap[id]) {
+      const nextAdvancedMap = { ...currentAdvancedMap };
+      delete nextAdvancedMap[id];
+      await setJsonSetting('testAdvancedConfigs', nextAdvancedMap, req.userId);
+    }
     return res.status(204).send();
   } catch (e) {
     console.error(e);
@@ -1522,7 +1782,7 @@ router.get('/tests/:id/questions', async (req, res) => {
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid test id' });
   try {
     const { rows } = await pool.query(
-      `SELECT id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation
+      `SELECT id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published
        FROM questions
        WHERE test_id = $1::uuid
        ORDER BY position ASC`,
@@ -1542,12 +1802,15 @@ router.post('/tests/:id/questions', async (req, res) => {
   if (parsed.error) return res.status(400).json({ error: parsed.error });
   const q = parsed.value;
   try {
+    if (await hasDuplicateStemInTest(id, q.stem)) {
+      return res.status(409).json({ error: 'Duplicate question detected for this test' });
+    }
     const { rows } = await pool.query(
       `INSERT INTO questions (
-         test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation
-       ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation`,
-      [id, q.position, q.stem, q.choiceA, q.choiceB, q.choiceC, q.choiceD, q.correctIndex, q.explanation],
+         test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published
+       ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published`,
+      [id, q.position, q.stem, q.choiceA, q.choiceB, q.choiceC, q.choiceD, q.correctIndex, q.explanation, q.isPublished],
     );
     return res.status(201).json({ item: rows[0] });
   } catch (e) {
@@ -1556,6 +1819,86 @@ router.post('/tests/:id/questions', async (req, res) => {
     }
     console.error(e);
     return res.status(500).json({ error: 'Failed to create question' });
+  }
+});
+
+router.post('/tests/:id/questions/import', async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(id)) return res.status(400).json({ error: 'Invalid test id' });
+  const mode = String((req.body || {}).mode || 'append').trim().toLowerCase();
+  if (!['append', 'replace'].includes(mode)) {
+    return res.status(400).json({ error: 'mode must be append or replace' });
+  }
+  const parsedRows = parseBulkQuestionRows((req.body || {}).items);
+  if (parsedRows.error) return res.status(400).json({ error: parsedRows.error });
+  const rows = parsedRows.value;
+  try {
+    const existingRes = await pool.query(`SELECT id, stem, position FROM questions WHERE test_id = $1::uuid`, [id]);
+    const existingStemSet = new Set(existingRes.rows.map((r) => normalizeStemKey(r.stem)).filter(Boolean));
+    const incomingStemSet = new Set();
+    for (const row of rows) {
+      const key = normalizeStemKey(row.stem);
+      if (!key) return res.status(400).json({ error: `Invalid stem at row ${row.rowNo}` });
+      if (incomingStemSet.has(key)) {
+        return res.status(409).json({ error: `Duplicate stem inside import file at row ${row.rowNo}` });
+      }
+      incomingStemSet.add(key);
+      if (mode === 'append' && existingStemSet.has(key)) {
+        return res.status(409).json({ error: `Duplicate question exists in this test at row ${row.rowNo}` });
+      }
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      if (mode === 'replace') {
+        await client.query(`DELETE FROM questions WHERE test_id = $1::uuid`, [id]);
+      }
+      const basePosRes = await client.query(`SELECT COALESCE(MAX(position), 0) AS max_pos FROM questions WHERE test_id = $1::uuid`, [id]);
+      let nextPosition = Number(basePosRes.rows[0]?.max_pos || 0) + 1;
+      const usedPositions = new Set(
+        (mode === 'replace' ? [] : existingRes.rows)
+          .map((r) => Number(r.position || 0))
+          .filter((p) => Number.isInteger(p) && p > 0),
+      );
+      let inserted = 0;
+      for (const row of rows) {
+        let finalPosition = row.position;
+        if (!Number.isInteger(finalPosition) || finalPosition <= 0 || usedPositions.has(finalPosition)) {
+          while (usedPositions.has(nextPosition)) nextPosition += 1;
+          finalPosition = nextPosition;
+          nextPosition += 1;
+        }
+        usedPositions.add(finalPosition);
+        await client.query(
+          `INSERT INTO questions (
+             test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published
+           ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            id,
+            finalPosition,
+            row.stem,
+            row.choiceA,
+            row.choiceB,
+            row.choiceC,
+            row.choiceD,
+            row.correctIndex,
+            row.explanation,
+            row.isPublished,
+          ],
+        );
+        inserted += 1;
+      }
+      await client.query('COMMIT');
+      return res.status(201).json({ ok: true, inserted, mode });
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to import questions' });
   }
 });
 
@@ -1568,12 +1911,15 @@ router.patch('/tests/:id/questions/:questionId', async (req, res) => {
   if (parsed.error) return res.status(400).json({ error: parsed.error });
   const q = parsed.value;
   try {
+    if (await hasDuplicateStemInTest(id, q.stem, qid)) {
+      return res.status(409).json({ error: 'Duplicate question detected for this test' });
+    }
     const { rows } = await pool.query(
       `UPDATE questions
-       SET position = $1, stem = $2, choice_a = $3, choice_b = $4, choice_c = $5, choice_d = $6, correct_index = $7, explanation = $8
-       WHERE id = $9 AND test_id = $10::uuid
-       RETURNING id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation`,
-      [q.position, q.stem, q.choiceA, q.choiceB, q.choiceC, q.choiceD, q.correctIndex, q.explanation, qid, id],
+       SET position = $1, stem = $2, choice_a = $3, choice_b = $4, choice_c = $5, choice_d = $6, correct_index = $7, explanation = $8, is_published = $9
+       WHERE id = $10 AND test_id = $11::uuid
+       RETURNING id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published`,
+      [q.position, q.stem, q.choiceA, q.choiceB, q.choiceC, q.choiceD, q.correctIndex, q.explanation, q.isPublished, qid, id],
     );
     if (!rows[0]) return res.status(404).json({ error: 'Question not found' });
     return res.json({ item: rows[0] });
@@ -1642,6 +1988,14 @@ router.post('/digest', async (req, res) => {
        RETURNING id, question_prompt, option_a, option_b, option_c, option_d, correct_index, fact_text, is_published, created_at`,
       [questionPrompt, optionA, optionB, optionC, optionD, correctIndex, factText, isPublished],
     );
+    if (isPublished) {
+      await enqueueNotification(req.userId, {
+        title: 'Daily Digest Updated',
+        message: 'A new daily digest has been published.',
+        target: 'all',
+        scheduleAt: new Date().toISOString(),
+      });
+    }
     return res.status(201).json({ item: rows[0] });
   } catch (e) {
     console.error(e);
@@ -1679,6 +2033,14 @@ router.patch('/digest/:id', async (req, res) => {
       [questionPrompt, optionA, optionB, optionC, optionD, correctIndex, factText, isPublished, id],
     );
     if (!rows[0]) return res.status(404).json({ error: 'Daily digest item not found' });
+    if (isPublished) {
+      await enqueueNotification(req.userId, {
+        title: 'Daily Digest Updated',
+        message: 'Daily digest has been refreshed by admin.',
+        target: 'all',
+        scheduleAt: new Date().toISOString(),
+      });
+    }
     return res.json({ item: rows[0] });
   } catch (e) {
     console.error(e);
@@ -1721,6 +2083,14 @@ router.post('/daily-quiz', async (req, res) => {
     const items = Array.isArray(current.items) ? current.items : [];
     const next = { items: [normalized, ...items].slice(0, 500) };
     await setJsonSetting('dailyQuizItems', next, req.userId);
+    if (normalized.isPublished) {
+      await enqueueNotification(req.userId, {
+        title: 'Daily Quiz Updated',
+        message: 'Today\'s daily quiz is now available.',
+        target: 'all',
+        scheduleAt: new Date().toISOString(),
+      });
+    }
     return res.status(201).json({ item: normalized });
   } catch (e) {
     console.error(e);
@@ -1751,6 +2121,14 @@ router.patch('/daily-quiz/:id', async (req, res) => {
     const nextItems = [...items];
     nextItems[idx] = normalized;
     await setJsonSetting('dailyQuizItems', { items: nextItems }, req.userId);
+    if (normalized.isPublished) {
+      await enqueueNotification(req.userId, {
+        title: 'Daily Quiz Updated',
+        message: 'Daily quiz has been refreshed by admin.',
+        target: 'all',
+        scheduleAt: new Date().toISOString(),
+      });
+    }
     return res.json({ item: normalized });
   } catch (e) {
     console.error(e);

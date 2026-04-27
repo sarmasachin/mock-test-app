@@ -14,7 +14,7 @@ type PollItem = {
   enabled: boolean;
   createdAt: string;
 };
-type PollSettings = { items: PollItem[] };
+type PollSettings = { showHomePopup: boolean; items: PollItem[] };
 type PushItem = {
   id: string;
   title: string;
@@ -56,8 +56,8 @@ type InstructionContent = {
 
 export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const POLLS_PER_PAGE = 20;
-  const [settings, setSettings] = useState<PollSettings>({ items: [] });
-  const [newItem, setNewItem] = useState({ question: '', options: '', allowMultiple: false, durationMinutes: '1440' });
+  const [settings, setSettings] = useState<PollSettings>({ showHomePopup: true, items: [] });
+  const [newItem, setNewItem] = useState({ question: '', options: ['', '', '', ''], allowMultiple: false, durationMinutes: '1440' });
   const [page, setPage] = useState(1);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -68,6 +68,7 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
       const s = res.data?.settings?.pollSettings || {};
       const itemsRaw = Array.isArray(s.items) ? s.items : s.question ? [s] : [];
       setSettings({
+        showHomePopup: s.showHomePopup !== false,
         items: itemsRaw.map((x: any, idx: number) => ({
           id: String(x.id || `poll-${idx + 1}`),
           question: String(x.question || ''),
@@ -88,12 +89,88 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
       await apiClient.patch('/admin/settings', { pollSettings: settings });
     } catch (err: any) { setError(err?.response?.data?.error || 'Failed to save poll settings'); } finally { setSaving(false); }
   }
+  function normalizeOptions(list: string[]) {
+    return list.map((x) => x.trim()).filter(Boolean);
+  }
   function addPoll() {
     const question = newItem.question.trim();
-    if (!question) return;
-    const options = newItem.options.split(',').map((x) => x.trim()).filter(Boolean);
+    if (!question) {
+      setError('Poll question is required');
+      return;
+    }
+    const options = normalizeOptions(newItem.options);
+    if (options.length < 2) {
+      setError('At least 2 poll options are required');
+      return;
+    }
+    if (options.length > 8) {
+      setError('Maximum 8 poll options are allowed');
+      return;
+    }
     setSettings((p) => ({ ...p, items: [...p.items, { id: `poll-${Date.now()}`, question, options, allowMultiple: newItem.allowMultiple, durationMinutes: Number(newItem.durationMinutes || '1440'), enabled: true, createdAt: new Date().toISOString() }] }));
-    setNewItem({ question: '', options: '', allowMultiple: false, durationMinutes: '1440' });
+    setNewItem({ question: '', options: ['', '', '', ''], allowMultiple: false, durationMinutes: '1440' });
+    setError('');
+  }
+  function setNewOptionAt(index: number, value: string) {
+    setNewItem((p) => ({ ...p, options: p.options.map((x, i) => (i === index ? value : x)) }));
+  }
+  function addNewOptionField() {
+    setNewItem((p) => (p.options.length >= 8 ? p : { ...p, options: [...p.options, ''] }));
+  }
+  function removeNewOptionField(index: number) {
+    setNewItem((p) => {
+      if (p.options.length <= 2) return p;
+      return { ...p, options: p.options.filter((_, i) => i !== index) };
+    });
+  }
+  function addExistingOption(itemId: string) {
+    setSettings((p) => ({
+      ...p,
+      items: p.items.map((x) => (x.id === itemId ? { ...x, options: x.options.length >= 8 ? x.options : [...x.options, ''] } : x)),
+    }));
+  }
+  function updateExistingOption(itemId: string, optionIndex: number, value: string) {
+    setSettings((p) => ({
+      ...p,
+      items: p.items.map((x) =>
+        x.id === itemId ? { ...x, options: x.options.map((opt, idx) => (idx === optionIndex ? value : opt)) } : x,
+      ),
+    }));
+  }
+  function removeExistingOption(itemId: string, optionIndex: number) {
+    setSettings((p) => ({
+      ...p,
+      items: p.items.map((x) =>
+        x.id === itemId && x.options.length > 2
+          ? { ...x, options: x.options.filter((_, idx) => idx !== optionIndex) }
+          : x,
+      ),
+    }));
+  }
+  async function saveSinglePoll(item: PollItem) {
+    const normalized = normalizeOptions(item.options);
+    if (normalized.length < 2) {
+      setError('Each poll must have at least 2 options');
+      return;
+    }
+    if (normalized.length > 8) {
+      setError('Each poll can have maximum 8 options');
+      return;
+    }
+    const next = {
+      ...settings,
+      items: settings.items.map((x) => (x.id === item.id ? { ...x, options: normalized } : x)),
+    };
+    setSettings(next);
+    try {
+      setError('');
+      setSaving(true);
+      await apiClient.patch('/admin/settings', { pollSettings: next });
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to save poll settings');
+    } finally {
+      setSaving(false);
+    }
   }
   const totalPages = Math.max(1, Math.ceil(settings.items.length / POLLS_PER_PAGE));
   const safePage = Math.min(page, totalPages);
@@ -101,22 +178,84 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
   return (
     <section className="panel-card">
       <div className="panel-head"><h3>Poll Settings</h3></div>
-      <div className="inline-form">
-        <input value={newItem.question} onChange={(e) => setNewItem((p) => ({ ...p, question: e.target.value }))} placeholder="Poll question" />
-        <input value={newItem.options} onChange={(e) => setNewItem((p) => ({ ...p, options: e.target.value }))} placeholder="Options comma separated" />
-        <input value={newItem.durationMinutes} onChange={(e) => setNewItem((p) => ({ ...p, durationMinutes: e.target.value }))} placeholder="Duration minutes" type="number" min={1} />
+      <div className="inline-form" style={{ marginBottom: 8 }}>
+        <label className="check-wrap">
+          <input
+            type="checkbox"
+            checked={settings.showHomePopup !== false}
+            onChange={(e) => setSettings((p) => ({ ...p, showHomePopup: e.target.checked }))}
+          />
+          Show premium poll popup on app home
+        </label>
+      </div>
+      <div className="panel-card" style={{ marginBottom: 10, padding: 12 }}>
+        <div className="inline-form">
+          <textarea
+            value={newItem.question}
+            onChange={(e) => setNewItem((p) => ({ ...p, question: e.target.value }))}
+            placeholder="Poll question"
+            rows={2}
+            style={{ minWidth: 340, flex: '1 1 340px', resize: 'vertical' }}
+          />
+          <input
+            value={newItem.durationMinutes}
+            onChange={(e) => setNewItem((p) => ({ ...p, durationMinutes: e.target.value }))}
+            placeholder="Duration minutes"
+            type="number"
+            min={1}
+            style={{ width: 120, minWidth: 120, flex: '0 0 120px', height: 36, padding: '6px 10px' }}
+          />
+        </div>
+        <div style={{ display: 'grid', gap: 8, marginTop: 8, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+          {newItem.options.map((opt, idx) => (
+            <div key={`new-opt-${idx}`} className="inline-form">
+              <input value={opt} onChange={(e) => setNewOptionAt(idx, e.target.value)} placeholder={`Option ${idx + 1}`} />
+              <button type="button" className="ghost" onClick={() => removeNewOptionField(idx)} disabled={newItem.options.length <= 2}>
+                Remove
+              </button>
+            </div>
+          ))}
+          <div className="inline-form" style={{ gridColumn: '1 / -1' }}>
+            <button type="button" className="ghost" onClick={addNewOptionField} disabled={newItem.options.length >= 8}>+ Add Option</button>
+          </div>
+        </div>
+        <div className="inline-form" style={{ marginTop: 8 }}>
         <label className="check-wrap"><input type="checkbox" checked={newItem.allowMultiple} onChange={(e) => setNewItem((p) => ({ ...p, allowMultiple: e.target.checked }))} />Multiple</label>
-        <button type="button" onClick={addPoll}>Add Poll</button>
+          <button type="button" onClick={addPoll}>Add Poll</button>
+        </div>
       </div>
       <div className="list table">
-        <div className="row row-head" style={{ gridTemplateColumns: '2fr 2fr 120px 110px 90px 90px' }}><span>Question</span><span>Options</span><span>Duration (min)</span><span>Multiple</span><span>Update</span><span>Delete</span></div>
+        <div className="row row-head" style={{ gridTemplateColumns: '2fr 2fr 120px 110px 90px 90px' }}><span>Question</span><span>Options (Dynamic)</span><span>Duration (min)</span><span>Multiple</span><span>Update</span><span>Delete</span></div>
         {visibleItems.map((item) => (
           <div key={item.id} className="row" style={{ gridTemplateColumns: '2fr 2fr 120px 110px 90px 90px' }}>
-            <input value={item.question} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, question: e.target.value } : x)) }))} />
-            <input value={item.options.join(', ')} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, options: e.target.value.split(',').map((v) => v.trim()).filter(Boolean) } : x)) }))} />
-            <input type="number" min={1} value={item.durationMinutes} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, durationMinutes: Number(e.target.value || '1') } : x)) }))} />
+            <textarea
+              value={item.question}
+              onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, question: e.target.value } : x)) }))}
+              rows={2}
+              style={{ resize: 'vertical' }}
+            />
+            <div style={{ display: 'grid', gap: 6, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+              {item.options.map((opt, optIdx) => (
+                <div key={`${item.id}-opt-${optIdx}`} className="inline-form">
+                  <input value={opt} onChange={(e) => updateExistingOption(item.id, optIdx, e.target.value)} placeholder={`Option ${optIdx + 1}`} />
+                  <button type="button" className="ghost" onClick={() => removeExistingOption(item.id, optIdx)} disabled={item.options.length <= 2}>
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <button type="button" className="ghost" style={{ gridColumn: '1 / -1' }} onClick={() => addExistingOption(item.id)} disabled={item.options.length >= 8}>
+                + Add Option
+              </button>
+            </div>
+            <input
+              type="number"
+              min={1}
+              value={item.durationMinutes}
+              onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, durationMinutes: Number(e.target.value || '1') } : x)) }))}
+              style={{ width: 100, minWidth: 100, justifySelf: 'start', alignSelf: 'center', height: 34, padding: '6px 8px' }}
+            />
             <label className="check-wrap"><input type="checkbox" checked={item.allowMultiple} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, allowMultiple: e.target.checked } : x)) }))} />yes</label>
-            <button type="button" onClick={save}>Save</button>
+            <button type="button" onClick={() => saveSinglePoll(item)}>Save</button>
             <button type="button" className="danger" onClick={() => setSettings((p) => ({ ...p, items: p.items.filter((x) => x.id !== item.id) }))}>Delete</button>
           </div>
         ))}

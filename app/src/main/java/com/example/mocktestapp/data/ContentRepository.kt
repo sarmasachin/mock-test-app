@@ -25,6 +25,8 @@ object ContentRepository {
     private val articleMemory = ConcurrentHashMap<String, ManualNewsItem>()
     private val testCardMemory = ConcurrentHashMap<String, TestCardNew>()
     @Volatile
+    private var homeContentMemory: HomeContentRemote? = null
+    @Volatile
     private var instructionContentMemory: InstructionContentRemote? = null
 
     data class DailyDigestRemote(
@@ -44,6 +46,20 @@ object ContentRepository {
         val options: List<String>,
         val correctIndex: Int,
         val explanation: String,
+    )
+    data class TestAdvancedConfigRemote(
+        val publishAt: String?,
+        val unpublishAt: String?,
+        val resultVisibility: String,
+        val reattemptCooldownMinutes: Int,
+        val lateJoinMinutes: Int,
+        val notifyBeforeMinutes: Int,
+        val resumeEnabled: Boolean,
+        val shuffleQuestions: Boolean,
+        val shuffleOptions: Boolean,
+        val fullscreenRequired: Boolean,
+        val copyPasteBlocked: Boolean,
+        val notifyOnPublish: Boolean,
     )
     data class HomeSectionRemote(
         val id: String,
@@ -129,6 +145,16 @@ object ContentRepository {
         val options: List<String>,
         val allowMultiple: Boolean,
     )
+    data class PollModalSettingsRemote(
+        val showHomePopup: Boolean,
+        val items: List<PollItemRemote>,
+    )
+    data class PollVoteResultRemote(
+        val ok: Boolean,
+        val pollId: String,
+        val optionIndexes: List<Int>,
+        val counts: List<Int>,
+    )
     data class PushNotificationItemRemote(
         val id: String,
         val title: String,
@@ -159,6 +185,21 @@ object ContentRepository {
         val tests: List<LeaderboardFilterTestRemote>,
         val cities: List<String>,
         val states: List<String>,
+    )
+
+    private fun TestCardNew.toAdvancedConfigRemote() = TestAdvancedConfigRemote(
+        publishAt = publishAt,
+        unpublishAt = unpublishAt,
+        resultVisibility = resultVisibility ?: "immediate",
+        reattemptCooldownMinutes = reattemptCooldownMinutes.coerceAtLeast(0),
+        lateJoinMinutes = lateJoinMinutes.coerceAtLeast(0),
+        notifyBeforeMinutes = notifyBeforeMinutes.coerceAtLeast(0),
+        resumeEnabled = resumeEnabled,
+        shuffleQuestions = shuffleQuestions,
+        shuffleOptions = shuffleOptions,
+        fullscreenRequired = fullscreenRequired,
+        copyPasteBlocked = copyPasteBlocked,
+        notifyOnPublish = notifyOnPublish,
     )
 
     suspend fun loadNewsFeed(feedKind: String): List<ManualNewsItem> = withContext(Dispatchers.IO) {
@@ -265,6 +306,10 @@ object ContentRepository {
         }
     }
 
+    suspend fun loadTestAdvancedConfigByTitle(testName: String): TestAdvancedConfigRemote? = withContext(Dispatchers.IO) {
+        loadTestByTitle(testName)?.toAdvancedConfigRemote()
+    }
+
     suspend fun loadDailyDigestItem(): DailyDigestRemote? = withContext(Dispatchers.IO) {
         try {
             val row = RetrofitProvider.publicApi.getDailyDigestToday().item
@@ -296,6 +341,7 @@ object ContentRepository {
     }
 
     suspend fun loadHomeContent(): HomeContentRemote? = withContext(Dispatchers.IO) {
+        homeContentMemory?.let { return@withContext it }
         try {
             val content = RetrofitProvider.publicApi.getHomeContent().content ?: return@withContext null
             HomeContentRemote(
@@ -342,7 +388,7 @@ object ContentRepository {
                     },
                 startSeriesLockSeconds = (content.startSeriesLockSeconds ?: 20).coerceIn(0, 86_400),
                 startSeriesActiveWindowMinutes = (content.startSeriesActiveWindowMinutes ?: 30).coerceIn(1, 10_080),
-            )
+            ).also { homeContentMemory = it }
         } catch (e: Exception) {
             Log.w(TAG, "loadHomeContent", e)
             null
@@ -428,10 +474,11 @@ object ContentRepository {
         }
     }
 
-    suspend fun loadPollItems(): List<PollItemRemote> = withContext(Dispatchers.IO) {
+    suspend fun loadPollModalSettings(): PollModalSettingsRemote = withContext(Dispatchers.IO) {
         try {
-            val items = RetrofitProvider.publicApi.getHomeContent().pollSettings?.items ?: emptyList()
-            items
+            val pollSettings = RetrofitProvider.publicApi.getHomeContent().pollSettings
+            val items = pollSettings?.items ?: emptyList()
+            val mappedItems = items
                 .filter { it.enabled && it.question.isNotBlank() && it.options.isNotEmpty() }
                 .map {
                     PollItemRemote(
@@ -441,28 +488,42 @@ object ContentRepository {
                         allowMultiple = it.allowMultiple,
                     )
                 }
+            PollModalSettingsRemote(
+                showHomePopup = pollSettings?.showHomePopup != false,
+                items = mappedItems,
+            )
         } catch (e: Exception) {
-            Log.w(TAG, "loadPollItems", e)
-            emptyList()
+            Log.w(TAG, "loadPollModalSettings", e)
+            PollModalSettingsRemote(showHomePopup = true, items = emptyList())
         }
+    }
+
+    suspend fun loadPollItems(): List<PollItemRemote> = withContext(Dispatchers.IO) {
+        loadPollModalSettings().items
     }
 
     suspend fun submitPollVote(
         pollId: String,
         optionIndexes: List<Int>,
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): PollVoteResultRemote? = withContext(Dispatchers.IO) {
         val id = pollId.trim()
-        if (id.isBlank()) return@withContext false
+        if (id.isBlank()) return@withContext null
         val normalized = optionIndexes.distinct().filter { it >= 0 }
-        if (normalized.isEmpty()) return@withContext false
+        if (normalized.isEmpty()) return@withContext null
         try {
-            RetrofitProvider.appApi.postPollVote(
+            val response = RetrofitProvider.appApi.postPollVote(
                 pollId = id,
                 body = com.example.mocktestapp.data.remote.PollVoteRequest(normalized),
-            ).ok
+            )
+            PollVoteResultRemote(
+                ok = response.ok,
+                pollId = response.pollId,
+                optionIndexes = response.optionIndexes,
+                counts = response.counts,
+            )
         } catch (e: Exception) {
             Log.w(TAG, "submitPollVote", e)
-            false
+            null
         }
     }
 
@@ -486,6 +547,8 @@ object ContentRepository {
                         createdAt = it.createdAt,
                     )
                 }
+                .sortedByDescending { it.createdAt.orEmpty() }
+                .take(30)
         } catch (e: Exception) {
             Log.w(TAG, "loadNotifications", e)
             emptyList()
@@ -662,6 +725,18 @@ object ContentRepository {
             capacityTotal = capacity,
             enrolledCount = enrolled,
             remainingSeats = remaining,
+            publishAt = advancedConfig?.publishAt,
+            unpublishAt = advancedConfig?.unpublishAt,
+            resultVisibility = advancedConfig?.resultVisibility,
+            reattemptCooldownMinutes = (advancedConfig?.reattemptCooldownMinutes ?: 0).coerceAtLeast(0),
+            lateJoinMinutes = (advancedConfig?.lateJoinMinutes ?: 0).coerceAtLeast(0),
+            notifyBeforeMinutes = (advancedConfig?.notifyBeforeMinutes ?: 0).coerceAtLeast(0),
+            resumeEnabled = advancedConfig?.resumeEnabled != false,
+            shuffleQuestions = advancedConfig?.shuffleQuestions == true,
+            shuffleOptions = advancedConfig?.shuffleOptions == true,
+            fullscreenRequired = advancedConfig?.fullscreenRequired == true,
+            copyPasteBlocked = advancedConfig?.copyPasteBlocked == true,
+            notifyOnPublish = advancedConfig?.notifyOnPublish != false,
         )
     }
 

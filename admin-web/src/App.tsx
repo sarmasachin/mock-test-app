@@ -45,6 +45,20 @@ type Tab =
   | 'users';
 type TestKind = 'mock' | 'quiz';
 type RangeKind = 'weekly' | 'monthly' | 'all';
+type TestAdvancedConfig = {
+  publishAt: string;
+  unpublishAt: string;
+  resultVisibility: 'immediate' | 'after_result_time';
+  reattemptCooldownMinutes: number;
+  lateJoinMinutes: number;
+  notifyBeforeMinutes: number;
+  resumeEnabled: boolean;
+  shuffleQuestions: boolean;
+  shuffleOptions: boolean;
+  fullscreenRequired: boolean;
+  copyPasteBlocked: boolean;
+  notifyOnPublish: boolean;
+};
 
 type TestItem = {
   id: string;
@@ -74,6 +88,7 @@ type TestItem = {
   test_kind: TestKind;
   is_published: boolean;
   dynamic_fluctuation_on_publish: boolean;
+  advanced_config?: Partial<TestAdvancedConfig> | null;
 };
 
 type QuestionItem = {
@@ -87,6 +102,7 @@ type QuestionItem = {
   choice_d: string;
   correct_index: number;
   explanation: string;
+  is_published?: boolean;
 };
 
 type DailyDigestItem = {
@@ -334,6 +350,72 @@ function toDateTimeLocal(value?: string | null) {
   return local.toISOString().slice(0, 16);
 }
 
+function splitDelimitedLine(line: string, delimiter: string) {
+  const out: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === delimiter && !inQuotes) {
+      out.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  out.push(current.trim());
+  return out;
+}
+
+function parseQuestionImportText(format: 'csv' | 'excel' | 'json', rawText: string) {
+  const text = rawText.trim();
+  if (!text) return { error: 'Import text is required' };
+  if (format === 'json') {
+    try {
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed) || !parsed.length) return { error: 'JSON must be a non-empty array' };
+      return { value: parsed };
+    } catch (_e) {
+      return { error: 'Invalid JSON format' };
+    }
+  }
+  const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  if (lines.length < 2) return { error: 'Provide header and at least one row' };
+  const delimiter = format === 'excel' ? '\t' : ',';
+  const header = splitDelimitedLine(lines[0], delimiter).map((x) => x.trim().toLowerCase());
+  const required = ['stem', 'choicea', 'choiceb', 'choicec', 'choiced', 'correctindex'];
+  const missing = required.filter((key) => !header.includes(key));
+  if (missing.length) return { error: `Missing headers: ${missing.join(', ')}` };
+  const items = lines.slice(1).map((line) => {
+    const cols = splitDelimitedLine(line, delimiter);
+    const row: Record<string, string> = {};
+    header.forEach((h, idx) => {
+      row[h] = cols[idx] ?? '';
+    });
+    return {
+      position: row.position,
+      stem: row.stem,
+      choiceA: row.choicea,
+      choiceB: row.choiceb,
+      choiceC: row.choicec,
+      choiceD: row.choiced,
+      correctIndex: row.correctindex,
+      explanation: row.explanation || '',
+      isPublished: row.ispublished === undefined ? true : !['false', '0', 'no'].includes(String(row.ispublished).trim().toLowerCase()),
+    };
+  });
+  return { value: items };
+}
+
 function App() {
   const [token, setToken] = useState<string>('');
   const [isAdmin, setIsAdmin] = useState(false);
@@ -462,7 +544,7 @@ function App() {
             <h2 className="brand-title">Admin Panel</h2>
           </div>
           <nav ref={sideNavRef} className="side-nav">
-            {(['dashboard', 'analyticsInsights', 'leaderboard', 'allTests', 'questionBuilder', 'profile', 'feedback', 'helpSupport', 'reportIssue', 'achievement', 'privacyPolicy', 'termsOfUse', 'dailyDigest', 'dailyQuiz', 'articles', 'homeContent', 'pollSettings', 'pushNotificationSettings', 'notificationScheduling', 'publishScheduling', 'submitApplicationContent', 'instructionContent', 'examCategories', 'settings', 'auditLogs', 'users', 'userManagementAdvanced'] as Tab[]).map(
+            {(['dashboard', 'analyticsInsights', 'allTests', 'questionBuilder', 'pollSettings', 'pushNotificationSettings', 'leaderboard', 'profile', 'feedback', 'helpSupport', 'reportIssue', 'achievement', 'privacyPolicy', 'termsOfUse', 'dailyDigest', 'dailyQuiz', 'articles', 'homeContent', 'notificationScheduling', 'publishScheduling', 'submitApplicationContent', 'instructionContent', 'examCategories', 'settings', 'auditLogs', 'users', 'userManagementAdvanced'] as Tab[]).map(
               (name) => (
               <button key={name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>
                 <span>{TAB_ICONS[name]}</span>
@@ -499,6 +581,7 @@ function App() {
               apiClient={authedApi}
               mode="allTests"
               selectedQuestionTestId={selectedQuestionTestId}
+              onNavigateTab={setTab}
               onSelectQuestionTest={(testId) => {
                 setSelectedQuestionTestId(testId);
                 setTab('questionBuilder');
@@ -510,6 +593,7 @@ function App() {
               apiClient={authedApi}
               mode="questionBuilder"
               selectedQuestionTestId={selectedQuestionTestId}
+              onNavigateTab={setTab}
               onSelectQuestionTest={setSelectedQuestionTestId}
             />
           )}
@@ -676,11 +760,13 @@ function TestsTab({
   apiClient,
   mode,
   selectedQuestionTestId,
+  onNavigateTab,
   onSelectQuestionTest,
 }: {
   apiClient: typeof api;
   mode: 'allTests' | 'questionBuilder';
   selectedQuestionTestId: string;
+  onNavigateTab?: (tab: Tab) => void;
   onSelectQuestionTest: (testId: string) => void;
 }) {
   const TESTS_PER_PAGE = 20;
@@ -689,31 +775,47 @@ function TestsTab({
   const [title, setTitle] = useState('');
   const [slug, setSlug] = useState('');
   const [subcategory, setSubcategory] = useState('');
-  const [durationMinutes, setDurationMinutes] = useState('180');
-  const [questionCount, setQuestionCount] = useState('100');
-  const [totalMarks, setTotalMarks] = useState('400');
+  const [durationMinutes, setDurationMinutes] = useState('');
+  const [questionCount, setQuestionCount] = useState('');
+  const [totalMarks, setTotalMarks] = useState('');
   const [examDate, setExamDate] = useState('');
   const [slotLabel, setSlotLabel] = useState('');
-  const [capacityTotal, setCapacityTotal] = useState('500');
+  const [capacityTotal, setCapacityTotal] = useState('');
   const [enrolledCount, setEnrolledCount] = useState('0');
-  const [attemptsAllowed, setAttemptsAllowed] = useState('1');
-  const [languageMode, setLanguageMode] = useState('Bilingual');
-  const [examMode, setExamMode] = useState('Online CBT');
-  const [negativeMarkingText, setNegativeMarkingText] = useState('Yes (-1)');
-  const [testTypeLabel, setTestTypeLabel] = useState('Full Mock');
+  const [attemptsAllowed, setAttemptsAllowed] = useState('');
+  const [languageMode, setLanguageMode] = useState('');
+  const [examMode, setExamMode] = useState('');
+  const [negativeMarkingText, setNegativeMarkingText] = useState('');
+  const [testTypeLabel, setTestTypeLabel] = useState('');
   const [badgeEnabled, setBadgeEnabled] = useState(true);
-  const [badgeText, setBadgeText] = useState('Live');
+  const [badgeText, setBadgeText] = useState('');
   const [validUntil, setValidUntil] = useState('');
   const [answerKeyReleaseAt, setAnswerKeyReleaseAt] = useState('');
   const [resultReleaseAt, setResultReleaseAt] = useState('');
   const [dynamicDateEnabled, setDynamicDateEnabled] = useState(false);
   const [dateCycleDays, setDateCycleDays] = useState('0');
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [publishAt, setPublishAt] = useState('');
+  const [unpublishAt, setUnpublishAt] = useState('');
+  const [resultVisibility, setResultVisibility] = useState<'immediate' | 'after_result_time'>('immediate');
+  const [reattemptCooldownMinutes, setReattemptCooldownMinutes] = useState('0');
+  const [lateJoinMinutes, setLateJoinMinutes] = useState('0');
+  const [notifyBeforeMinutes, setNotifyBeforeMinutes] = useState('0');
+  const [resumeEnabled, setResumeEnabled] = useState(true);
+  const [shuffleQuestions, setShuffleQuestions] = useState(false);
+  const [shuffleOptions, setShuffleOptions] = useState(false);
+  const [fullscreenRequired, setFullscreenRequired] = useState(false);
+  const [copyPasteBlocked, setCopyPasteBlocked] = useState(false);
+  const [notifyOnPublish, setNotifyOnPublish] = useState(true);
+  const [opsTestId, setOpsTestId] = useState('');
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState('');
   const [kind, setKind] = useState<TestKind>('mock');
   const [isPublished, setIsPublished] = useState(true);
   const [dynamicFluctuationOnPublish, setDynamicFluctuationOnPublish] = useState(true);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [isRefreshingTests, setIsRefreshingTests] = useState(false);
   const [selectedTest, setSelectedTest] = useState<TestItem | null>(null);
   const [questions, setQuestions] = useState<QuestionItem[]>([]);
   const [showQuestionForm, setShowQuestionForm] = useState(false);
@@ -726,10 +828,213 @@ function TestsTab({
     choiceD: '',
     correctIndex: '0',
     explanation: '',
+    isPublished: true,
   });
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
+  const [bulkImportFormat, setBulkImportFormat] = useState<'csv' | 'excel' | 'json'>('csv');
+  const [bulkImportMode, setBulkImportMode] = useState<'append' | 'replace'>('append');
+  const [bulkImportText, setBulkImportText] = useState('');
+  const [bulkImportError, setBulkImportError] = useState('');
+  const [isImportingQuestions, setIsImportingQuestions] = useState(false);
+  const [qbMessage, setQbMessage] = useState('');
+  const [qbMessageType, setQbMessageType] = useState<'success' | 'error'>('success');
   const [editingQuestionId, setEditingQuestionId] = useState<number | null>(null);
   const [testsPage, setTestsPage] = useState(1);
   const [questionsPage, setQuestionsPage] = useState(1);
+  const TEST_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+  function normalizeAndValidateTestPayload(input: {
+    title: string;
+    slug: string;
+    subcategory?: string;
+    metaLine?: string;
+    durationMinutes: string | number;
+    questionCount: string | number;
+    totalMarks: string | number;
+    examDate?: string;
+    slotLabel?: string;
+    capacityTotal: string | number;
+    enrolledCount: string | number;
+    attemptsAllowed: string | number;
+    languageMode?: string;
+    examMode?: string;
+    negativeMarkingText?: string;
+    testTypeLabel?: string;
+    badgeEnabled: boolean;
+    badgeText?: string;
+    validUntil?: string;
+    answerKeyReleaseAt?: string;
+    resultReleaseAt?: string;
+    dynamicDateEnabled: boolean;
+    dateCycleDays: string | number;
+    publishAt?: string;
+    unpublishAt?: string;
+    resultVisibility?: string;
+    reattemptCooldownMinutes?: string | number;
+    lateJoinMinutes?: string | number;
+    notifyBeforeMinutes?: string | number;
+    resumeEnabled?: boolean;
+    shuffleQuestions?: boolean;
+    shuffleOptions?: boolean;
+    fullscreenRequired?: boolean;
+    copyPasteBlocked?: boolean;
+    notifyOnPublish?: boolean;
+    testKind: string;
+    isPublished: boolean;
+    dynamicFluctuationOnPublish: boolean;
+  }) {
+    const titleValue = String(input.title || '').trim().slice(0, 180);
+    const slugValue = String(input.slug || '').trim().slice(0, 180).toLowerCase();
+    const subcategoryValue = String(input.subcategory || '').trim().slice(0, 120);
+    const metaLineValue = String(input.metaLine || '').trim().slice(0, 240);
+    const testKindValue = String(input.testKind || '').trim().toLowerCase();
+    const durationValue = Number(input.durationMinutes);
+    const questionCountValue = Number(input.questionCount);
+    const totalMarksValue = Number(input.totalMarks || 0);
+    const examDateValue = String(input.examDate || '').trim();
+    const slotLabelValue = String(input.slotLabel || '').trim().slice(0, 80);
+    const capacityValue = Number(input.capacityTotal || 0);
+    const enrolledValue = Number(input.enrolledCount || 0);
+    const attemptsValue = Number(input.attemptsAllowed || 1);
+    const languageModeValue = String(input.languageMode || 'Bilingual').trim().slice(0, 40) || 'Bilingual';
+    const examModeValue = String(input.examMode || 'Practice').trim().slice(0, 40) || 'Practice';
+    const negativeMarkingValue = String(input.negativeMarkingText || 'No').trim().slice(0, 40) || 'No';
+    const testTypeValue = String(input.testTypeLabel || 'Full Mock').trim().slice(0, 40) || 'Full Mock';
+    const badgeTextValue = String(input.badgeText || 'Live').trim().slice(0, 40) || 'Live';
+    const validUntilValue = String(input.validUntil || '').trim();
+    const answerKeyValue = String(input.answerKeyReleaseAt || '').trim();
+    const resultReleaseValue = String(input.resultReleaseAt || '').trim();
+    const dateCycleDaysValue = Number(input.dateCycleDays || 0);
+    const publishAtValue = String(input.publishAt || '').trim();
+    const unpublishAtValue = String(input.unpublishAt || '').trim();
+    const resultVisibilityValue = String(input.resultVisibility || 'immediate').trim().toLowerCase();
+    const reattemptCooldownValue = Number(input.reattemptCooldownMinutes || 0);
+    const lateJoinValue = Number(input.lateJoinMinutes || 0);
+    const notifyBeforeValue = Number(input.notifyBeforeMinutes || 0);
+
+    if (!titleValue || !slugValue || !['mock', 'quiz'].includes(testKindValue)) {
+      return { error: 'title, slug, and valid testKind are required' };
+    }
+    if (!TEST_SLUG_RE.test(slugValue)) {
+      return { error: 'slug must use lowercase letters, numbers and hyphen only' };
+    }
+    if (!Number.isFinite(durationValue) || !Number.isInteger(durationValue) || durationValue <= 0 || durationValue > 1440) {
+      return { error: 'durationMinutes must be an integer between 1 and 1440' };
+    }
+    if (!Number.isFinite(questionCountValue) || !Number.isInteger(questionCountValue) || questionCountValue <= 0 || questionCountValue > 500) {
+      return { error: 'questionCount must be an integer between 1 and 500' };
+    }
+    if (!Number.isFinite(totalMarksValue) || totalMarksValue < 0 || totalMarksValue > 10000) {
+      return { error: 'totalMarks must be between 0 and 10000' };
+    }
+    if (!Number.isFinite(capacityValue) || !Number.isInteger(capacityValue) || capacityValue < 0 || capacityValue > 1000000) {
+      return { error: 'capacityTotal must be an integer between 0 and 1000000' };
+    }
+    if (!Number.isFinite(enrolledValue) || !Number.isInteger(enrolledValue) || enrolledValue < 0 || enrolledValue > 1000000) {
+      return { error: 'enrolledCount must be an integer between 0 and 1000000' };
+    }
+    if (enrolledValue > capacityValue) {
+      return { error: 'enrolledCount cannot be greater than capacityTotal' };
+    }
+    if (!Number.isFinite(attemptsValue) || !Number.isInteger(attemptsValue) || attemptsValue < 1 || attemptsValue > 20) {
+      return { error: 'attemptsAllowed must be an integer between 1 and 20' };
+    }
+    if (!Number.isFinite(dateCycleDaysValue) || !Number.isInteger(dateCycleDaysValue) || dateCycleDaysValue < 0 || dateCycleDaysValue > 3650) {
+      return { error: 'dateCycleDays must be an integer between 0 and 3650' };
+    }
+    if (examDateValue && Number.isNaN(Date.parse(`${examDateValue}T00:00:00Z`))) {
+      return { error: 'examDate must be a valid date (YYYY-MM-DD)' };
+    }
+    if (validUntilValue && Number.isNaN(Date.parse(`${validUntilValue}T00:00:00Z`))) {
+      return { error: 'validUntil must be a valid date (YYYY-MM-DD)' };
+    }
+    if (answerKeyValue && Number.isNaN(Date.parse(answerKeyValue))) {
+      return { error: 'answerKeyReleaseAt must be a valid datetime' };
+    }
+    if (resultReleaseValue && Number.isNaN(Date.parse(resultReleaseValue))) {
+      return { error: 'resultReleaseAt must be a valid datetime' };
+    }
+    if (examDateValue && validUntilValue) {
+      const examDateMs = Date.parse(`${examDateValue}T00:00:00Z`);
+      const validUntilMs = Date.parse(`${validUntilValue}T00:00:00Z`);
+      if (validUntilMs < examDateMs) {
+        return { error: 'validUntil must be on or after examDate' };
+      }
+    }
+    if (answerKeyValue && resultReleaseValue) {
+      const answerKeyMs = Date.parse(answerKeyValue);
+      const resultReleaseMs = Date.parse(resultReleaseValue);
+      if (resultReleaseMs < answerKeyMs) {
+        return { error: 'resultReleaseAt must be on or after answerKeyReleaseAt' };
+      }
+    }
+    if (publishAtValue && Number.isNaN(Date.parse(publishAtValue))) {
+      return { error: 'advancedConfig.publishAt must be a valid datetime' };
+    }
+    if (unpublishAtValue && Number.isNaN(Date.parse(unpublishAtValue))) {
+      return { error: 'advancedConfig.unpublishAt must be a valid datetime' };
+    }
+    if (publishAtValue && unpublishAtValue && Date.parse(unpublishAtValue) < Date.parse(publishAtValue)) {
+      return { error: 'advancedConfig.unpublishAt must be on or after publishAt' };
+    }
+    if (!['immediate', 'after_result_time'].includes(resultVisibilityValue)) {
+      return { error: 'advancedConfig.resultVisibility must be immediate or after_result_time' };
+    }
+    if (!Number.isFinite(reattemptCooldownValue) || !Number.isInteger(reattemptCooldownValue) || reattemptCooldownValue < 0 || reattemptCooldownValue > 10080) {
+      return { error: 'advancedConfig.reattemptCooldownMinutes must be an integer between 0 and 10080' };
+    }
+    if (!Number.isFinite(lateJoinValue) || !Number.isInteger(lateJoinValue) || lateJoinValue < 0 || lateJoinValue > 240) {
+      return { error: 'advancedConfig.lateJoinMinutes must be an integer between 0 and 240' };
+    }
+    if (!Number.isFinite(notifyBeforeValue) || !Number.isInteger(notifyBeforeValue) || notifyBeforeValue < 0 || notifyBeforeValue > 10080) {
+      return { error: 'advancedConfig.notifyBeforeMinutes must be an integer between 0 and 10080' };
+    }
+
+    return {
+      value: {
+        title: titleValue,
+        slug: slugValue,
+        subcategory: subcategoryValue,
+        metaLine: metaLineValue,
+        durationMinutes: durationValue,
+        questionCount: questionCountValue,
+        totalMarks: Math.max(0, totalMarksValue),
+        examDate: examDateValue,
+        slotLabel: slotLabelValue,
+        capacityTotal: Math.max(0, capacityValue),
+        enrolledCount: Math.max(0, enrolledValue),
+        attemptsAllowed: Math.max(1, attemptsValue),
+        languageMode: languageModeValue,
+        examMode: examModeValue,
+        negativeMarkingText: negativeMarkingValue,
+        testTypeLabel: testTypeValue,
+        badgeEnabled: input.badgeEnabled === true,
+        badgeText: badgeTextValue,
+        validUntil: validUntilValue,
+        answerKeyReleaseAt: answerKeyValue,
+        resultReleaseAt: resultReleaseValue,
+        dynamicDateEnabled: input.dynamicDateEnabled === true,
+        dateCycleDays: Math.max(0, dateCycleDaysValue),
+        advancedConfig: {
+          publishAt: publishAtValue,
+          unpublishAt: unpublishAtValue,
+          resultVisibility: resultVisibilityValue as 'immediate' | 'after_result_time',
+          reattemptCooldownMinutes: Math.max(0, reattemptCooldownValue),
+          lateJoinMinutes: Math.max(0, lateJoinValue),
+          notifyBeforeMinutes: Math.max(0, notifyBeforeValue),
+          resumeEnabled: input.resumeEnabled !== false,
+          shuffleQuestions: input.shuffleQuestions === true,
+          shuffleOptions: input.shuffleOptions === true,
+          fullscreenRequired: input.fullscreenRequired === true,
+          copyPasteBlocked: input.copyPasteBlocked === true,
+          notifyOnPublish: input.notifyOnPublish !== false,
+        },
+        testKind: testKindValue as TestKind,
+        isPublished: input.isPublished !== false,
+        dynamicFluctuationOnPublish: input.dynamicFluctuationOnPublish !== false,
+      },
+    };
+  }
 
   useEffect(() => {
     load();
@@ -744,8 +1049,27 @@ function TestsTab({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedQuestionTestId, items.length]);
+
+  useEffect(() => {
+    if (!success && !error) return;
+    const timer = window.setTimeout(() => {
+      setSuccess('');
+      setError('');
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [success, error]);
+
+  useEffect(() => {
+    if (!qbMessage) return;
+    const timer = window.setTimeout(() => {
+      setQbMessage('');
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [qbMessage]);
+
   async function load() {
     try {
+      setIsRefreshingTests(true);
       setError('');
       const res = await apiClient.get('/admin/tests');
       const mapped = Array.isArray(res.data?.items)
@@ -769,75 +1093,130 @@ function TestsTab({
             result_release_at: x.result_release_at || '',
             dynamic_date_enabled: normalizeBoolean(x.dynamic_date_enabled, false),
             date_cycle_days: Number(x.date_cycle_days || 0),
+            advanced_config:
+              x.advanced_config && typeof x.advanced_config === 'object'
+                ? {
+                    publishAt: String(x.advanced_config.publishAt || ''),
+                    unpublishAt: String(x.advanced_config.unpublishAt || ''),
+                    resultVisibility:
+                      String(x.advanced_config.resultVisibility || 'immediate') === 'after_result_time'
+                        ? 'after_result_time'
+                        : 'immediate',
+                    reattemptCooldownMinutes: Number(x.advanced_config.reattemptCooldownMinutes || 0),
+                    lateJoinMinutes: Number(x.advanced_config.lateJoinMinutes || 0),
+                    notifyBeforeMinutes: Number(x.advanced_config.notifyBeforeMinutes || 0),
+                    resumeEnabled: normalizeBoolean(x.advanced_config.resumeEnabled, true),
+                    shuffleQuestions: normalizeBoolean(x.advanced_config.shuffleQuestions, false),
+                    shuffleOptions: normalizeBoolean(x.advanced_config.shuffleOptions, false),
+                    fullscreenRequired: normalizeBoolean(x.advanced_config.fullscreenRequired, false),
+                    copyPasteBlocked: normalizeBoolean(x.advanced_config.copyPasteBlocked, false),
+                    notifyOnPublish: normalizeBoolean(x.advanced_config.notifyOnPublish, true),
+                  }
+                : null,
           }))
         : [];
       setItems(mapped);
       setTestsPage(1);
     } catch (err: any) {
+      setSuccess('');
       setError(err?.response?.data?.error || 'Failed to load tests');
+    } finally {
+      setIsRefreshingTests(false);
     }
   }
   async function createTest(e: FormEvent) {
     e.preventDefault();
-    const cleanTitle = title.trim();
-    const cleanSlug = slug.trim();
-    if (!cleanTitle || !cleanSlug) {
-      setError('Title and slug are required');
+    const parsed = normalizeAndValidateTestPayload({
+      title,
+      slug,
+      subcategory,
+      durationMinutes,
+      questionCount,
+      totalMarks,
+      examDate,
+      slotLabel,
+      capacityTotal,
+      enrolledCount,
+      attemptsAllowed,
+      languageMode,
+      examMode,
+      negativeMarkingText,
+      testTypeLabel,
+      badgeEnabled,
+      badgeText,
+      validUntil,
+      answerKeyReleaseAt,
+      resultReleaseAt,
+      dynamicDateEnabled,
+      dateCycleDays,
+      publishAt,
+      unpublishAt,
+      resultVisibility,
+      reattemptCooldownMinutes,
+      lateJoinMinutes,
+      notifyBeforeMinutes,
+      resumeEnabled,
+      shuffleQuestions,
+      shuffleOptions,
+      fullscreenRequired,
+      copyPasteBlocked,
+      notifyOnPublish,
+      testKind: kind,
+      isPublished,
+      dynamicFluctuationOnPublish,
+    });
+    if (parsed.error) {
+      setSuccess('');
+      setError(parsed.error);
       return;
     }
+    if (!parsed.value) {
+      setSuccess('');
+      setError('Failed to prepare test payload');
+      return;
+    }
+    const data = parsed.value;
     try {
       setError('');
-      await apiClient.post('/admin/tests', {
-        title: cleanTitle,
-        slug: cleanSlug,
-        subcategory: subcategory.trim(),
-        durationMinutes: Number(durationMinutes || '180'),
-        questionCount: Number(questionCount || '100'),
-        totalMarks: Number(totalMarks || '0'),
-        examDate: examDate.trim(),
-        slotLabel: slotLabel.trim(),
-        capacityTotal: Number(capacityTotal || '0'),
-        enrolledCount: Number(enrolledCount || '0'),
-        attemptsAllowed: Number(attemptsAllowed || '1'),
-        languageMode: languageMode.trim() || 'Bilingual',
-        examMode: examMode.trim() || 'Practice',
-        negativeMarkingText: negativeMarkingText.trim() || 'No',
-        testTypeLabel: testTypeLabel.trim() || 'Full Mock',
-        badgeEnabled,
-        badgeText: badgeText.trim() || 'Live',
-        validUntil: validUntil.trim(),
-        answerKeyReleaseAt: answerKeyReleaseAt || null,
-        resultReleaseAt: resultReleaseAt || null,
-        dynamicDateEnabled,
-        dateCycleDays: Number(dateCycleDays || '0'),
-        testKind: kind,
-        isPublished,
-        dynamicFluctuationOnPublish,
-      });
+      await apiClient.post('/admin/tests', data);
       setTitle('');
       setSlug('');
       setSubcategory('');
-      setDurationMinutes('180');
-      setQuestionCount('100');
-      setTotalMarks('400');
+      setDurationMinutes('');
+      setQuestionCount('');
+      setTotalMarks('');
       setExamDate('');
       setSlotLabel('');
-      setCapacityTotal('500');
+      setCapacityTotal('');
       setEnrolledCount('0');
-      setAttemptsAllowed('1');
-      setLanguageMode('Bilingual');
-      setExamMode('Online CBT');
-      setNegativeMarkingText('Yes (-1)');
-      setTestTypeLabel('Full Mock');
+      setAttemptsAllowed('');
+      setLanguageMode('');
+      setExamMode('');
+      setNegativeMarkingText('');
+      setTestTypeLabel('');
       setBadgeEnabled(true);
-      setBadgeText('Live');
+      setBadgeText('');
       setValidUntil('');
       setAnswerKeyReleaseAt('');
       setResultReleaseAt('');
       setDynamicDateEnabled(false);
       setDateCycleDays('0');
+      setSuccess(`Test "${data.title}" created successfully.`);
+      setPublishAt('');
+      setUnpublishAt('');
+      setResultVisibility('immediate');
+      setReattemptCooldownMinutes('0');
+      setLateJoinMinutes('0');
+      setNotifyBeforeMinutes('0');
+      setResumeEnabled(true);
+      setShuffleQuestions(false);
+      setShuffleOptions(false);
+      setFullscreenRequired(false);
+      setCopyPasteBlocked(false);
+      setNotifyOnPublish(true);
       await load();
     } catch (err: any) {
+      setSuccess('');
       setError(err?.response?.data?.error || 'Failed to create test');
     }
   }
@@ -846,18 +1225,19 @@ function TestsTab({
       setError('');
       const current = items.find((x) => x.id === testId);
       if (!current) {
+        setSuccess('');
         setError('Selected test not found');
         return;
       }
-      await apiClient.patch(`/admin/tests/${current.id}`, {
+      const parsed = normalizeAndValidateTestPayload({
         title: current.title,
         slug: current.slug,
         subcategory: current.subcategory,
         metaLine: current.meta_line,
         durationMinutes: current.duration_minutes,
         questionCount: current.question_count,
-        examDate: current.exam_date || '',
         totalMarks: current.total_marks || 0,
+        examDate: current.exam_date || '',
         slotLabel: current.slot_label || '',
         capacityTotal: current.capacity_total || 0,
         enrolledCount: current.enrolled_count || 0,
@@ -869,17 +1249,42 @@ function TestsTab({
         badgeEnabled: normalizeBoolean(current.badge_enabled, false),
         badgeText: current.badge_text || 'Live',
         validUntil: current.valid_until || '',
-        answerKeyReleaseAt: current.answer_key_release_at || null,
-        resultReleaseAt: current.result_release_at || null,
+        answerKeyReleaseAt: current.answer_key_release_at || '',
+        resultReleaseAt: current.result_release_at || '',
         dynamicDateEnabled: normalizeBoolean(current.dynamic_date_enabled, false),
         dateCycleDays: current.date_cycle_days || 0,
+        publishAt: current.advanced_config?.publishAt || '',
+        unpublishAt: current.advanced_config?.unpublishAt || '',
+        resultVisibility: current.advanced_config?.resultVisibility || 'immediate',
+        reattemptCooldownMinutes: current.advanced_config?.reattemptCooldownMinutes ?? 0,
+        lateJoinMinutes: current.advanced_config?.lateJoinMinutes ?? 0,
+        notifyBeforeMinutes: current.advanced_config?.notifyBeforeMinutes ?? 0,
+        resumeEnabled: normalizeBoolean(current.advanced_config?.resumeEnabled, true),
+        shuffleQuestions: normalizeBoolean(current.advanced_config?.shuffleQuestions, false),
+        shuffleOptions: normalizeBoolean(current.advanced_config?.shuffleOptions, false),
+        fullscreenRequired: normalizeBoolean(current.advanced_config?.fullscreenRequired, false),
+        copyPasteBlocked: normalizeBoolean(current.advanced_config?.copyPasteBlocked, false),
+        notifyOnPublish: normalizeBoolean(current.advanced_config?.notifyOnPublish, true),
         testKind: current.test_kind,
         isPublished: current.is_published,
         dynamicFluctuationOnPublish: normalizeBoolean(current.dynamic_fluctuation_on_publish, true),
       });
+      if (parsed.error) {
+        setSuccess('');
+        setError(parsed.error);
+        return;
+      }
+      if (!parsed.value) {
+        setSuccess('');
+        setError('Failed to prepare test payload');
+        return;
+      }
+      await apiClient.patch(`/admin/tests/${current.id}`, parsed.value);
       setEditingId('');
+      setSuccess(`Test "${parsed.value.title}" updated successfully.`);
       await load();
     } catch (err: any) {
+      setSuccess('');
       setError(err?.response?.data?.error || 'Failed to update test');
     }
   }
@@ -888,9 +1293,12 @@ function TestsTab({
     if (!window.confirm('Delete this test?')) return;
     try {
       setError('');
+      const target = items.find((x) => x.id === id);
       await apiClient.delete(`/admin/tests/${id}`);
+      setSuccess(`Test "${target?.title || id}" deleted successfully.`);
       await load();
     } catch (err: any) {
+      setSuccess('');
       setError(err?.response?.data?.error || 'Failed to delete test');
     }
   }
@@ -909,8 +1317,9 @@ function TestsTab({
       setBadgeEnabled(true);
       setBadgeText(finalText);
       await load();
-      window.alert(`Live badge applied to ${updatedCount} published test(s).`);
+      setSuccess(`Live badge applied to ${updatedCount} published test(s).`);
     } catch (err: any) {
+      setSuccess('');
       setError(err?.response?.data?.error || 'Failed to apply live badge to published tests');
     }
   }
@@ -933,6 +1342,7 @@ function TestsTab({
         choiceD: '',
         correctIndex: '0',
         explanation: '',
+        isPublished: true,
       });
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Failed to load questions');
@@ -942,6 +1352,8 @@ function TestsTab({
   async function submitQuestion(e: FormEvent) {
     e.preventDefault();
     if (!selectedTest) {
+      setQbMessageType('error');
+      setQbMessage('Select a test first');
       setError('Select a test first');
       return;
     }
@@ -954,18 +1366,26 @@ function TestsTab({
     const correctIndex = Number(questionForm.correctIndex);
     const explanation = questionForm.explanation.trim();
     if (!Number.isInteger(position) || position <= 0) {
+      setQbMessageType('error');
+      setQbMessage('Position must be a positive integer');
       setError('Position must be a positive integer');
       return;
     }
     if (!stem) {
+      setQbMessageType('error');
+      setQbMessage('Question statement is required');
       setError('Question statement is required');
       return;
     }
     if (!choiceA || !choiceB || !choiceC || !choiceD) {
+      setQbMessageType('error');
+      setQbMessage('All four options are required');
       setError('All four options are required');
       return;
     }
     if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3) {
+      setQbMessageType('error');
+      setQbMessage('Please select a valid correct answer');
       setError('Please select a valid correct answer');
       return;
     }
@@ -978,16 +1398,22 @@ function TestsTab({
       choiceD,
       correctIndex,
       explanation,
+      isPublished: questionForm.isPublished,
     };
     try {
       setError('');
+      setQbMessage('');
       if (editingQuestionId) {
         await apiClient.patch(`/admin/tests/${selectedTest.id}/questions/${editingQuestionId}`, payload);
       } else {
         await apiClient.post(`/admin/tests/${selectedTest.id}/questions`, payload);
       }
       await loadQuestions(selectedTest);
+      setQbMessageType('success');
+      setQbMessage(editingQuestionId ? 'Question updated successfully.' : 'Question added to bank successfully.');
     } catch (err: any) {
+      setQbMessageType('error');
+      setQbMessage(err?.response?.data?.error || 'Failed to save question');
       setError(err?.response?.data?.error || 'Failed to save question');
     }
   }
@@ -1005,7 +1431,58 @@ function TestsTab({
       choiceD: item.choice_d,
       correctIndex: String(item.correct_index),
       explanation: item.explanation || '',
+      isPublished: normalizeBoolean(item.is_published, true),
     });
+  }
+
+  async function importQuestionsBulk() {
+    if (!selectedTest) {
+      setBulkImportError('Please select a test first.');
+      setQbMessageType('error');
+      setQbMessage('Select a test first');
+      setError('Select a test first');
+      return;
+    }
+    if (!bulkImportText.trim()) {
+      const msg = 'Please paste CSV/Excel/JSON data before importing.';
+      setBulkImportError(msg);
+      setQbMessageType('error');
+      setQbMessage(msg);
+      setError(msg);
+      return;
+    }
+    const parsed = parseQuestionImportText(bulkImportFormat, bulkImportText);
+    if (parsed.error) {
+      setBulkImportError(parsed.error);
+      setQbMessageType('error');
+      setQbMessage(parsed.error);
+      setError(parsed.error);
+      return;
+    }
+    try {
+      setBulkImportError('');
+      setError('');
+      setIsImportingQuestions(true);
+      const res = await apiClient.post(`/admin/tests/${selectedTest.id}/questions/import`, {
+        mode: bulkImportMode,
+        items: parsed.value,
+      });
+      const inserted = Number(res.data?.inserted || 0);
+      setBulkImportText('');
+      setBulkImportOpen(false);
+      setSuccess(`Imported ${inserted} question(s) successfully.`);
+      setQbMessageType('success');
+      setQbMessage(`Imported ${inserted} question(s) successfully.`);
+      await loadQuestions(selectedTest);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || 'Failed to import questions';
+      setBulkImportError(msg);
+      setQbMessageType('error');
+      setQbMessage(msg);
+      setError(msg);
+    } finally {
+      setIsImportingQuestions(false);
+    }
   }
 
   async function deleteQuestion(questionId: number) {
@@ -1016,7 +1493,11 @@ function TestsTab({
       setError('');
       await apiClient.delete(`/admin/tests/${selectedTest.id}/questions/${questionId}`);
       await loadQuestions(selectedTest);
+      setQbMessageType('success');
+      setQbMessage('Question deleted successfully.');
     } catch (err: any) {
+      setQbMessageType('error');
+      setQbMessage(err?.response?.data?.error || 'Failed to delete question');
       setError(err?.response?.data?.error || 'Failed to delete question');
     }
   }
@@ -1040,11 +1521,23 @@ function TestsTab({
     const start = (safeQuestionsPage - 1) * QUESTIONS_PER_PAGE;
     return displayedQuestions.slice(start, start + QUESTIONS_PER_PAGE);
   }, [displayedQuestions, safeQuestionsPage]);
+  const selectedOpsTest = useMemo(() => items.find((x) => x.id === opsTestId) || null, [items, opsTestId]);
 
   return (
     <section className={`panel-card ${mode === 'allTests' ? 'all-tests-panel' : ''}`}>
       <div className="panel-head">
         <h3>{mode === 'allTests' ? 'Manage All Tests' : 'Manage Questions'}</h3>
+        {mode === 'allTests' && (
+          <button
+            type="button"
+            className="all-tests-plus-btn"
+            onClick={() => setAdvancedOpen((p) => !p)}
+            title={advancedOpen ? 'Hide advanced test settings' : 'Show advanced test settings'}
+            aria-label={advancedOpen ? 'Hide advanced test settings' : 'Show advanced test settings'}
+          >
+            {advancedOpen ? '−' : '+'}
+          </button>
+        )}
       </div>
       {mode === 'allTests' && (
         <>
@@ -1069,20 +1562,14 @@ function TestsTab({
             <div className="all-tests-section">
               <h4>Schedule & Stats</h4>
               <div className="all-tests-grid">
-                <input type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} />
-                <input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} />
-                <input
-                  type="datetime-local"
-                  value={answerKeyReleaseAt}
-                  onChange={(e) => setAnswerKeyReleaseAt(e.target.value)}
-                  placeholder="Answer key release"
-                />
-                <input
-                  type="datetime-local"
-                  value={resultReleaseAt}
-                  onChange={(e) => setResultReleaseAt(e.target.value)}
-                  placeholder="Result release"
-                />
+                <label className="all-tests-field">
+                  <span>Exam Date</span>
+                  <input type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} />
+                </label>
+                <label className="all-tests-field">
+                  <span>Valid Until</span>
+                  <input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} />
+                </label>
                 <input value={slotLabel} onChange={(e) => setSlotLabel(e.target.value)} placeholder="Slot label (e.g. Morning)" />
                 <input type="number" value={durationMinutes} onChange={(e) => setDurationMinutes(e.target.value)} placeholder="Duration (minutes)" />
                 <input type="number" value={questionCount} onChange={(e) => setQuestionCount(e.target.value)} placeholder="Question count" />
@@ -1111,6 +1598,75 @@ function TestsTab({
               </div>
             </div>
 
+            {advancedOpen && (
+              <div className="all-tests-section">
+                <h4>Advanced Controls</h4>
+                <div className="all-tests-grid all-tests-advanced-grid">
+                  <input type="datetime-local" value={publishAt} onChange={(e) => setPublishAt(e.target.value)} placeholder="Publish at" />
+                  <input type="datetime-local" value={unpublishAt} onChange={(e) => setUnpublishAt(e.target.value)} placeholder="Unpublish at" />
+                  <select value={resultVisibility} onChange={(e) => setResultVisibility(e.target.value as 'immediate' | 'after_result_time')}>
+                    <option value="immediate">Result visibility: immediate</option>
+                    <option value="after_result_time">Result visibility: after result time</option>
+                  </select>
+                  <input
+                    type="number"
+                    value={reattemptCooldownMinutes}
+                    onChange={(e) => setReattemptCooldownMinutes(e.target.value)}
+                    placeholder="Reattempt cooldown (minutes)"
+                  />
+                  <input type="number" value={lateJoinMinutes} onChange={(e) => setLateJoinMinutes(e.target.value)} placeholder="Late join window (minutes)" />
+                  <input
+                    type="number"
+                    value={notifyBeforeMinutes}
+                    onChange={(e) => setNotifyBeforeMinutes(e.target.value)}
+                    placeholder="Notify before exam (minutes)"
+                  />
+                  <label className="all-tests-field">
+                    <span>Answer Key Release At</span>
+                    <input
+                      type="datetime-local"
+                      value={answerKeyReleaseAt}
+                      onChange={(e) => setAnswerKeyReleaseAt(e.target.value)}
+                      placeholder="Answer key release"
+                    />
+                  </label>
+                  <label className="all-tests-field">
+                    <span>Result Release At</span>
+                    <input
+                      type="datetime-local"
+                      value={resultReleaseAt}
+                      onChange={(e) => setResultReleaseAt(e.target.value)}
+                      placeholder="Result release"
+                    />
+                  </label>
+                  <label className="check-wrap">
+                    <input type="checkbox" checked={resumeEnabled} onChange={(e) => setResumeEnabled(e.target.checked)} />
+                    resume enabled
+                  </label>
+                  <label className="check-wrap">
+                    <input type="checkbox" checked={shuffleQuestions} onChange={(e) => setShuffleQuestions(e.target.checked)} />
+                    shuffle questions
+                  </label>
+                  <label className="check-wrap">
+                    <input type="checkbox" checked={shuffleOptions} onChange={(e) => setShuffleOptions(e.target.checked)} />
+                    shuffle options
+                  </label>
+                  <label className="check-wrap">
+                    <input type="checkbox" checked={fullscreenRequired} onChange={(e) => setFullscreenRequired(e.target.checked)} />
+                    fullscreen required
+                  </label>
+                  <label className="check-wrap">
+                    <input type="checkbox" checked={copyPasteBlocked} onChange={(e) => setCopyPasteBlocked(e.target.checked)} />
+                    block copy/paste
+                  </label>
+                  <label className="check-wrap">
+                    <input type="checkbox" checked={notifyOnPublish} onChange={(e) => setNotifyOnPublish(e.target.checked)} />
+                    notify on publish
+                  </label>
+                </div>
+              </div>
+            )}
+
             <div className="all-tests-actions">
               <label className="check-wrap">
                 <input type="checkbox" checked={dynamicDateEnabled} onChange={(e) => setDynamicDateEnabled(e.target.checked)} />
@@ -1138,7 +1694,14 @@ function TestsTab({
           </form>
           <div className="inline-form all-tests-tools">
             <button type="button" className="all-tests-refresh" onClick={load}>
-              Refresh Tests
+              {isRefreshingTests ? (
+                <>
+                  <span className="btn-spinner" aria-hidden="true" />
+                  Refreshing...
+                </>
+              ) : (
+                'Refresh Tests'
+              )}
             </button>
             <button type="button" className="ghost" onClick={applyLiveBadgeToPublishedTests}>
               Apply Live Badge (Published)
@@ -1151,6 +1714,51 @@ function TestsTab({
               }}
               placeholder="Search tests..."
             />
+          </div>
+          <div className="all-tests-ops">
+            <div className="all-tests-ops-head">
+              <h4>Test Operations</h4>
+              <p>Use these shortcuts for scheduling, notifications, and reporting workflows.</p>
+            </div>
+            <div className="all-tests-ops-grid">
+              <select value={opsTestId} onChange={(e) => setOpsTestId(e.target.value)}>
+                <option value="">Select test context (optional)</option>
+                {items.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.title} ({item.slug})
+                  </option>
+                ))}
+              </select>
+              <button type="button" className="ghost" onClick={() => onNavigateTab?.('publishScheduling')}>
+                Open Publish Scheduling
+              </button>
+              <button type="button" className="ghost" onClick={() => onNavigateTab?.('notificationScheduling')}>
+                Open Notification Scheduling
+              </button>
+              <button type="button" className="ghost" onClick={() => onNavigateTab?.('analyticsInsights')}>
+                Open Test Insights
+              </button>
+              <button type="button" className="ghost" onClick={() => onNavigateTab?.('userManagementAdvanced')}>
+                Open User Reports
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={!selectedOpsTest}
+                onClick={() => {
+                  if (!selectedOpsTest) return;
+                  onSelectQuestionTest(selectedOpsTest.id);
+                  onNavigateTab?.('questionBuilder');
+                }}
+              >
+                Open Selected In Question Builder
+              </button>
+            </div>
+            <p className="muted all-tests-ops-note">
+              {selectedOpsTest
+                ? `Selected: ${selectedOpsTest.title} (${selectedOpsTest.slug}) - use this context while scheduling or reviewing reports.`
+                : 'Tip: choose a test above so admins know exactly which test they are operating on.'}
+            </p>
           </div>
         </>
       )}
@@ -1176,6 +1784,7 @@ function TestsTab({
       )}
 
       {error && <p className="error">{error}</p>}
+      {success && <p className="success-msg">{success}</p>}
       {mode === 'allTests' && (
         <>
           <div className="list table tests-table">
@@ -1435,6 +2044,11 @@ function TestsTab({
               <span>{selectedTest ? `Selected: ${selectedTest.title}` : ''}</span>
             </div>
           </div>
+          {qbMessage && (
+            <p className={qbMessageType === 'error' ? 'error qb-inline-msg' : 'success-msg qb-inline-msg'}>
+              {qbMessage}
+            </p>
+          )}
           <div className="qb-create-card">
             <button
               type="button"
@@ -1546,6 +2160,14 @@ function TestsTab({
                       placeholder="Explanation"
                     />
                   </label>
+                  <label className="check-wrap qb-publish-toggle">
+                    <input
+                      type="checkbox"
+                      checked={questionForm.isPublished}
+                      onChange={(e) => setQuestionForm((p) => ({ ...p, isPublished: e.target.checked }))}
+                    />
+                    publish this question
+                  </label>
                   <div className="inline-form">
                     <button type="submit" disabled={!selectedTest}>
                       {editingQuestionId ? 'Update Question' : 'Add to Question Bank'}
@@ -1564,6 +2186,7 @@ function TestsTab({
                           choiceD: '',
                           correctIndex: '0',
                           explanation: '',
+                          isPublished: true,
                         });
                       }}
                     >
@@ -1575,10 +2198,54 @@ function TestsTab({
             )}
           </div>
 
+          <div className="qb-create-card">
+            <button type="button" className="qb-create-toggle" onClick={() => setBulkImportOpen((p) => !p)}>
+              <span className="qb-create-label">Bulk Upload / Import</span>
+              <span className="qb-toggle-icon" aria-hidden="true">
+                {bulkImportOpen ? 'x' : '+'}
+              </span>
+            </button>
+            {bulkImportOpen && (
+              <div className="question-form">
+                <div className="inline-form">
+                  <select value={bulkImportFormat} onChange={(e) => setBulkImportFormat(e.target.value as 'csv' | 'excel' | 'json')}>
+                    <option value="csv">CSV</option>
+                    <option value="excel">Excel (tab separated paste)</option>
+                    <option value="json">JSON array</option>
+                  </select>
+                  <select value={bulkImportMode} onChange={(e) => setBulkImportMode(e.target.value as 'append' | 'replace')}>
+                    <option value="append">Append</option>
+                    <option value="replace">Replace Existing</option>
+                  </select>
+                </div>
+                <textarea
+                  value={bulkImportText}
+                  onChange={(e) => {
+                    setBulkImportText(e.target.value);
+                    if (bulkImportError) setBulkImportError('');
+                  }}
+                  placeholder={
+                    bulkImportFormat === 'json'
+                      ? '[{"position":1,"stem":"Q?","choiceA":"A","choiceB":"B","choiceC":"C","choiceD":"D","correctIndex":0,"isPublished":true}]'
+                      : 'Headers: position,stem,choiceA,choiceB,choiceC,choiceD,correctIndex,explanation,isPublished'
+                  }
+                  className="qb-import-textarea"
+                />
+                {bulkImportError && <p className="error qb-import-error">{bulkImportError}</p>}
+                <div className="inline-form">
+                  <button type="button" disabled={!selectedTest || isImportingQuestions} onClick={importQuestionsBulk}>
+                    {isImportingQuestions ? 'Importing...' : 'Import Questions'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
         <div className="list table questions-table">
           <div className="row row-head">
             <span>Pos</span>
             <span>Question</span>
+            <span>Status</span>
             <span>Answer</span>
             <span>Option A</span>
             <span>Option B</span>
@@ -1590,6 +2257,7 @@ function TestsTab({
             <div key={q.id} className="row">
               <span>{q.position}</span>
               <span>{q.stem}</span>
+              <span>{normalizeBoolean(q.is_published, true) ? 'Published' : 'Draft'}</span>
               <span>{['A', 'B', 'C', 'D'][q.correct_index] || '-'}</span>
               <span>{q.choice_a}</span>
               <span>{q.choice_b}</span>
@@ -1609,6 +2277,7 @@ function TestsTab({
             <div className="row">
               <span>-</span>
               <span>{selectedTest ? 'No questions found for this test yet.' : 'Select a test to view questions.'}</span>
+              <span>-</span>
               <span>-</span>
               <span>-</span>
               <span>-</span>
@@ -2944,7 +3613,7 @@ function SupportInboxSettingsTab({
 
 function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   const [settings, setSettings] = useState<HomeContentSettings>({
-    welcomeText: 'Welcome Rahul',
+    welcomeText: 'Welcome {name}',
     quickActionsTitle: 'Quick actions',
     autoSaveEnabled: false,
     themePreset: 'premium',
@@ -3009,6 +3678,36 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
     const silent = opts?.silent === true;
     try {
       if (!silent) setError('');
+      const normalizedSections = currentSettings.sections
+        .map((section, idx) => ({
+          id: String(section.id || `section-${idx + 1}`),
+          title: String(section.title || '').trim(),
+          items: (Array.isArray(section.items) ? section.items : [])
+            .map((item) => String(item || '').trim())
+            .filter(Boolean),
+        }))
+        .filter((section) => section.title && section.items.length > 0);
+      const normalizedQuickActionSections = currentSettings.quickActionSections
+        .map((section, idx) => ({
+          id: String(section.id || `qa-section-${idx + 1}`),
+          title: String(section.title || '').trim(),
+          items: (Array.isArray(section.items) ? section.items : [])
+            .map((item) => ({
+              title: String(item?.title || '').trim(),
+              actionKey: String(item?.actionKey || '').trim(),
+              iconKey: String(item?.iconKey || '').trim(),
+            }))
+            .filter((item) => item.title && item.actionKey),
+        }))
+        .filter((section) => section.title && section.items.length > 0);
+      if (normalizedSections.length === 0) {
+        if (!silent) setError('At least one Category section with one or more items is required');
+        return;
+      }
+      if (normalizedQuickActionSections.length === 0) {
+        if (!silent) setError('At least one Quick actions section with valid actions is required');
+        return;
+      }
       setSaving(true);
       const enabledChips = currentSettings.promoWidgetChips.filter((x) => x.enabled && x.title.trim());
       const enabledCards = currentSettings.promoWidgetCards.filter((x) => x.enabled && x.title.trim());
@@ -3078,6 +3777,8 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
       await apiClient.patch('/admin/settings', {
         homeContent: {
           ...currentSettings,
+          sections: normalizedSections,
+          quickActionSections: normalizedQuickActionSections,
           promoWidgetHtml: generatedPromoHtml,
           studentUpdateWidgetHtml: generatedStudentUpdateHtml,
         },
@@ -3099,7 +3800,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
       setNewsItems(allArticles.filter((item) => item.feed_kind === 'news' && item.is_published));
       if (home && typeof home === 'object') {
         setSettings({
-          welcomeText: String(home.welcomeText || 'Welcome Rahul'),
+          welcomeText: String(home.welcomeText || 'Welcome {name}'),
           quickActionsTitle: String(home.quickActionsTitle || 'Quick actions'),
           autoSaveEnabled: home.autoSaveEnabled === true,
           themePreset:
@@ -3475,8 +4176,9 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
       </div>
       <div className="settings-form">
         <input
-          value={settings.welcomeText}
-          onChange={(e) => setSettings((p) => ({ ...p, welcomeText: e.target.value }))}
+          value={'Welcome {name}'}
+          readOnly
+          disabled
           placeholder="Welcome text"
         />
         <input

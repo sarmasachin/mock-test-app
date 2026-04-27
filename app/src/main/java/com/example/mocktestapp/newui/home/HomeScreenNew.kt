@@ -4,6 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -30,6 +36,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Scaffold
@@ -37,13 +45,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -101,6 +113,8 @@ import java.util.Date
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 
 /**
  * Admin/CMS: add another [HomeCategorySection] to this list — layout scrolls and a divider is
@@ -118,6 +132,23 @@ private data class HomeQuickActionItem(
 private data class HomeQuickActionSection(
     val title: String,
     val items: List<HomeQuickActionItem>,
+)
+private val defaultHomeCategorySections = listOf(
+    HomeCategorySection(
+        title = "Category",
+        items = listOf("Math", "Reasoning", "English", "GK", "Science", "Computer", "Hindi"),
+    ),
+)
+private val defaultHomeQuickActionSections = listOf(
+    HomeQuickActionSection(
+        title = "Quick actions",
+        items = listOf(
+            HomeQuickActionItem(title = "Start test", actionKey = "startTest"),
+            HomeQuickActionItem(title = "Leaderboard", actionKey = "leaderboard"),
+            HomeQuickActionItem(title = "Results", actionKey = "results"),
+            HomeQuickActionItem(title = "Tool", actionKey = "bookmarks"),
+        ),
+    ),
 )
 private data class StartSeriesCardState(
     val isLocked: Boolean,
@@ -151,6 +182,7 @@ fun HomeScreenNew(
 ) {
     val p = mockTestPalette()
     val context = LocalContext.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val profile by AppPreferencesRepository.drawerUserProfile.collectAsState(
         initial = AppPreferencesRepository.DrawerUserProfile(
             displayName = "",
@@ -197,29 +229,14 @@ fun HomeScreenNew(
 
     var categorySections by remember {
         mutableStateOf(
-        listOf(
-            HomeCategorySection(
-                title = "Category",
-                items = listOf("Math", "Reasoning", "English", "GK", "Science", "Computer", "Hindi"),
-            ),
-        ),
+        defaultHomeCategorySections,
         )
     }
     var homeWelcomeTemplate by remember { mutableStateOf("Welcome {name}") }
     var homeQuickActionsTitle by remember { mutableStateOf("Quick actions") }
     var quickActionSections by remember {
         mutableStateOf(
-            listOf(
-                HomeQuickActionSection(
-                    title = "Quick actions",
-                    items = listOf(
-                        HomeQuickActionItem(title = "Start test", actionKey = "startTest"),
-                        HomeQuickActionItem(title = "Leaderboard", actionKey = "leaderboard"),
-                        HomeQuickActionItem(title = "Results", actionKey = "results"),
-                        HomeQuickActionItem(title = "Tool", actionKey = "bookmarks"),
-                    ),
-                ),
-            ),
+            defaultHomeQuickActionSections,
         )
     }
     var bannerSlides by remember { mutableStateOf<List<HomeCarouselSlide>>(emptyList()) }
@@ -234,12 +251,22 @@ fun HomeScreenNew(
     var promoWidgetHtml by remember { mutableStateOf("") }
     var studentUpdateWidgetEnabled by remember { mutableStateOf(false) }
     var studentUpdateWidgetHtml by remember { mutableStateOf("") }
+    var pollCount by remember { mutableIntStateOf(0) }
+    var notificationCount by remember { mutableIntStateOf(0) }
+    var homePollPopupEnabled by remember { mutableStateOf(false) }
+    var homePollPopupVisible by rememberSaveable { mutableStateOf(false) }
+    var homePollPopupDismissedPollId by rememberSaveable { mutableStateOf("") }
+    var homePollActive by remember { mutableStateOf<ContentRepository.PollItemRemote?>(null) }
+    val homePollSelections = remember { mutableStateMapOf<String, Set<Int>>() }
+    val homePollResults = remember { mutableStateMapOf<String, List<Int>>() }
+    var homePollSubmitting by remember { mutableStateOf(false) }
+    var homePollMessage by remember { mutableStateOf<String?>(null) }
     val homeScroll = rememberScrollState()
     val visitPrefs = remember(context) {
         context.getSharedPreferences("home_last_visit", Context.MODE_PRIVATE)
     }
     var lastVisitMillis by remember { mutableStateOf(0L) }
-    var showLastVisit by remember { mutableStateOf(false) }
+    var showLastVisit by rememberSaveable { mutableStateOf(false) }
     val pendingResult by AppPreferencesRepository.pendingResultState.collectAsState(initial = null)
     val appliedSeries by AppPreferencesRepository.appliedTestSeries.collectAsState(initial = emptyList())
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -278,8 +305,6 @@ fun HomeScreenNew(
             showLastVisit = false
         } else {
             showLastVisit = true
-            delay(20_000L)
-            showLastVisit = false
         }
         visitPrefs.edit()
             .putLong("last_home_visit_shown_for_launch_ts", appLaunchTs)
@@ -304,23 +329,49 @@ fun HomeScreenNew(
         if (!remote.quickActionsTitle.isNullOrBlank()) {
             homeQuickActionsTitle = remote.quickActionsTitle
         }
-        categorySections = remote.sections.map {
-            HomeCategorySection(
-                title = it.title,
-                items = it.items,
-            )
-        }
-        quickActionSections = remote.quickActionSections.map { section ->
-            HomeQuickActionSection(
-                title = section.title,
-                items = section.items.map { item ->
-                    HomeQuickActionItem(
-                        title = item.title,
-                        actionKey = item.actionKey,
-                        iconKey = item.iconKey?.takeIf { it.isNotBlank() },
+        val mappedCategorySections = remote.sections
+            .mapNotNull { section ->
+                val title = section.title.trim()
+                val items = section.items.map { it.trim() }.filter { it.isNotBlank() }
+                if (title.isBlank() || items.isEmpty()) {
+                    null
+                } else {
+                    HomeCategorySection(
+                        title = title,
+                        items = items,
                     )
-                },
-            )
+                }
+            }
+        if (mappedCategorySections.isNotEmpty()) {
+            categorySections = mappedCategorySections
+        }
+        val mappedQuickActionSections = remote.quickActionSections
+            .mapNotNull { section ->
+                val title = section.title.trim()
+                val items = section.items.mapNotNull { item ->
+                    val itemTitle = item.title.trim()
+                    val actionKey = item.actionKey.trim()
+                    if (itemTitle.isBlank() || actionKey.isBlank()) {
+                        null
+                    } else {
+                        HomeQuickActionItem(
+                            title = itemTitle,
+                            actionKey = actionKey,
+                            iconKey = item.iconKey?.trim()?.takeIf { it.isNotBlank() },
+                        )
+                    }
+                }
+                if (title.isBlank() || items.isEmpty()) {
+                    null
+                } else {
+                    HomeQuickActionSection(
+                        title = title,
+                        items = items,
+                    )
+                }
+            }
+        if (mappedQuickActionSections.isNotEmpty()) {
+            quickActionSections = mappedQuickActionSections
         }
         promoWidgetEnabled = remote.promoWidgetEnabled
         promoWidgetHtml = remote.promoWidgetHtml.orEmpty()
@@ -340,6 +391,19 @@ fun HomeScreenNew(
         bannerSlides = mixedSlides
     }
     LaunchedEffect(Unit) {
+        val pollSettings = ContentRepository.loadPollModalSettings()
+        homePollPopupEnabled = pollSettings.showHomePopup
+        val activePoll = pollSettings.items.firstOrNull()
+        homePollActive = activePoll
+        if (
+            pollSettings.showHomePopup &&
+            activePoll != null &&
+            !activePoll.id.equals(homePollPopupDismissedPollId, ignoreCase = true)
+        ) {
+            homePollPopupVisible = true
+        }
+    }
+    LaunchedEffect(Unit) {
         val instruction = ContentRepository.loadInstructionContent() ?: return@LaunchedEffect
         postSubmitCardTitle = instruction.postSubmitCardTitle?.ifBlank { postSubmitCardTitle } ?: postSubmitCardTitle
         postSubmitCardReadyTitle = instruction.postSubmitCardReadyTitle?.ifBlank { postSubmitCardReadyTitle } ?: postSubmitCardReadyTitle
@@ -349,6 +413,40 @@ fun HomeScreenNew(
         postSubmitCardButtonLabel = instruction.postSubmitCardButtonLabel?.ifBlank { postSubmitCardButtonLabel } ?: postSubmitCardButtonLabel
         if (instruction.postSubmitCardLines.isNotEmpty()) {
             postSubmitCardLines = instruction.postSubmitCardLines
+        }
+    }
+    suspend fun refreshUnreadCounts() {
+        runCatching {
+            val polls = ContentRepository.loadPollItems()
+            val seenPollIds = AppPreferencesRepository.getSeenPollIdsNow().map { it.trim() }.toSet()
+            polls.count { poll ->
+                val id = poll.id.trim()
+                id.isNotBlank() && !seenPollIds.contains(id)
+            }
+        }.onSuccess { pollCount = it }
+            .onFailure { pollCount = 0 }
+        runCatching {
+            val notifications = ContentRepository.loadNotifications()
+            val seenNotificationIds = AppPreferencesRepository.getSeenNotificationIdsNow().map { it.trim() }.toSet()
+            notifications.count { item ->
+                val id = item.id.trim()
+                id.isNotBlank() && !seenNotificationIds.contains(id)
+            }
+        }.onSuccess { notificationCount = it }
+            .onFailure { notificationCount = 0 }
+    }
+    LaunchedEffect(Unit) {
+        refreshUnreadCounts()
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                scope.launch { refreshUnreadCounts() }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -438,6 +536,8 @@ fun HomeScreenNew(
                     },
                     onOpenPoll = onOpenPoll,
                     onOpenNotifications = onOpenNotifications,
+                    pollCount = pollCount,
+                    notificationCount = notificationCount,
                 )
 
                 Column(
@@ -529,12 +629,17 @@ fun HomeScreenNew(
                         )
                     }
 
-                    if (categorySections.isNotEmpty()) {
+                    val visibleCategorySections = if (categorySections.isNotEmpty()) {
+                        categorySections
+                    } else {
+                        defaultHomeCategorySections
+                    }
+                    if (visibleCategorySections.isNotEmpty()) {
                         Spacer(Modifier.height(18.dp))
                         Divider(color = p.systemBlue.copy(alpha = 0.25f))
                         Spacer(Modifier.height(12.dp))
 
-                        categorySections.forEachIndexed { index, section ->
+                        visibleCategorySections.forEachIndexed { index, section ->
                             if (index > 0) {
                                 Spacer(Modifier.height(18.dp))
                                 Divider(color = p.systemBlue.copy(alpha = 0.25f))
@@ -554,12 +659,17 @@ fun HomeScreenNew(
                         }
                     }
 
-                    if (quickActionSections.isNotEmpty()) {
+                    val visibleQuickActionSections = if (quickActionSections.isNotEmpty()) {
+                        quickActionSections
+                    } else {
+                        defaultHomeQuickActionSections
+                    }
+                    if (visibleQuickActionSections.isNotEmpty()) {
                         Spacer(Modifier.height(18.dp))
                         Divider(color = p.systemBlue.copy(alpha = 0.25f))
                         Spacer(Modifier.height(12.dp))
 
-                        quickActionSections.forEachIndexed { index, section ->
+                        visibleQuickActionSections.forEachIndexed { index, section ->
                             if (index > 0) {
                                 Spacer(Modifier.height(18.dp))
                                 Divider(color = p.systemBlue.copy(alpha = 0.25f))
@@ -611,6 +721,53 @@ fun HomeScreenNew(
                 }
             }
         }
+        }
+        AnimatedVisibility(
+            visible = homePollPopupEnabled && homePollPopupVisible && homePollActive != null,
+            enter = fadeIn() + scaleIn(initialScale = 0.94f),
+            exit = fadeOut() + scaleOut(targetScale = 0.96f),
+        ) {
+            if (homePollActive != null) {
+                HomePollPopupModal(
+                    poll = homePollActive!!,
+                    selectedIndexes = homePollSelections[homePollActive!!.id] ?: emptySet(),
+                    counts = homePollResults[homePollActive!!.id] ?: emptyList(),
+                    submitting = homePollSubmitting,
+                    message = homePollMessage,
+                    onSelectOption = { pollId, optionIndex, allowMultiple ->
+                        val current = homePollSelections[pollId] ?: emptySet()
+                        val checked = current.contains(optionIndex)
+                        homePollSelections[pollId] = if (allowMultiple) {
+                            if (checked) current - optionIndex else current + optionIndex
+                        } else {
+                            setOf(optionIndex)
+                        }
+                    },
+                    onClose = {
+                        homePollPopupDismissedPollId = homePollActive!!.id
+                        homePollPopupVisible = false
+                    },
+                    onMaybeLater = {
+                        homePollPopupDismissedPollId = homePollActive!!.id
+                        homePollPopupVisible = false
+                    },
+                    onSubmit = { pollId, optionIndexes ->
+                        scope.launch {
+                            homePollSubmitting = true
+                            homePollMessage = null
+                            val result = ContentRepository.submitPollVote(pollId, optionIndexes.toList())
+                            if (result?.ok == true) {
+                                homePollResults[pollId] = result.counts
+                                homePollMessage = "Vote submitted successfully."
+                                refreshUnreadCounts()
+                            } else {
+                                homePollMessage = "Failed to submit vote."
+                            }
+                            homePollSubmitting = false
+                        }
+                    },
+                )
+            }
         }
 
     }
@@ -851,6 +1008,177 @@ private fun PendingResultCard(
 }
 
 @Composable
+private fun HomePollPopupModal(
+    poll: ContentRepository.PollItemRemote,
+    selectedIndexes: Set<Int>,
+    counts: List<Int>,
+    submitting: Boolean,
+    message: String?,
+    onSelectOption: (pollId: String, optionIndex: Int, allowMultiple: Boolean) -> Unit,
+    onClose: () -> Unit,
+    onMaybeLater: () -> Unit,
+    onSubmit: (pollId: String, optionIndexes: Set<Int>) -> Unit,
+) {
+    val p = mockTestPalette()
+    val normalizedCounts = poll.options.mapIndexed { idx, _ -> counts.getOrElse(idx) { 0 } }
+    val totalVotes = normalizedCounts.sum().coerceAtLeast(0)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.46f))
+            .padding(horizontal = 18.dp, vertical = 24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column {
+                        Text(
+                            text = "Live Community Poll",
+                            color = Color(0xFF0F172A),
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 17.sp,
+                        )
+                        Text(
+                            text = "Share your opinion in one tap",
+                            color = p.textSecondary,
+                            fontSize = 12.sp,
+                        )
+                    }
+                    IconButton(onClick = onClose, modifier = Modifier.size(24.dp)) {
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = "Close poll popup",
+                            tint = p.textSecondary,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = poll.question,
+                    color = p.textPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                )
+                Spacer(Modifier.height(12.dp))
+                poll.options.forEachIndexed { idx, option ->
+                    val checked = selectedIndexes.contains(idx)
+                    val votes = normalizedCounts.getOrElse(idx) { 0 }
+                    val ratio = if (totalVotes > 0) votes.toFloat() / totalVotes.toFloat() else 0f
+                    val pct = (ratio * 100f).toInt()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(if (checked) p.systemBlue.copy(alpha = 0.14f) else p.surface)
+                            .border(1.dp, p.border.copy(alpha = 0.22f), RoundedCornerShape(14.dp))
+                            .clickable {
+                                onSelectOption(poll.id, idx, poll.allowMultiple)
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (checked) p.systemBlue else p.surfaceElevated),
+                            )
+                            Spacer(Modifier.width(9.dp))
+                            Text(
+                                text = option,
+                                color = p.textPrimary,
+                                fontSize = 14.sp,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (counts.isNotEmpty()) {
+                                Text(
+                                    text = "$pct% • $votes",
+                                    color = p.textSecondary,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                        if (counts.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(7.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(p.border.copy(alpha = 0.35f)),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(ratio.coerceIn(0f, 1f))
+                                        .height(7.dp)
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(if (checked) p.systemBlue else p.systemBlue.copy(alpha = 0.65f)),
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (counts.isNotEmpty()) {
+                    Text(
+                        text = "Total votes: $totalVotes",
+                        color = p.textSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (!message.isNullOrBlank()) {
+                    Text(
+                        text = message,
+                        color = if (message.contains("success", ignoreCase = true)) Color(0xFF0F766E) else p.error,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    TextButton(
+                        onClick = onMaybeLater,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Maybe Later")
+                    }
+                    Button(
+                        onClick = { onSubmit(poll.id, selectedIndexes) },
+                        enabled = selectedIndexes.isNotEmpty() && !submitting,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = p.primaryButton,
+                            contentColor = p.onPrimaryButton,
+                        ),
+                    ) {
+                        Text(if (submitting) "Submitting..." else "Submit Vote", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ShareAppDialog(
     onDismiss: () -> Unit,
 ) {
@@ -927,6 +1255,8 @@ private fun TopRow(
     onOpenDrawer: () -> Unit,
     onOpenPoll: () -> Unit,
     onOpenNotifications: () -> Unit,
+    pollCount: Int,
+    notificationCount: Int,
 ) {
     val p = mockTestPalette()
     val headerBrush = Brush.horizontalGradient(
@@ -967,18 +1297,57 @@ private fun TopRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            IconButton(onClick = onOpenPoll) {
-                Icon(
-                    imageVector = Icons.Outlined.PieChart,
-                    contentDescription = "Poll",
-                    tint = p.homeHeaderOn,
-                )
-            }
-            IconButton(onClick = onOpenNotifications) {
-                Icon(
-                    imageVector = Icons.Outlined.Notifications,
-                    contentDescription = "Notifications",
-                    tint = p.homeHeaderOn,
+            HeaderIconWithCount(
+                count = pollCount,
+                onClick = onOpenPoll,
+                icon = {
+                    Icon(
+                        imageVector = Icons.Outlined.PieChart,
+                        contentDescription = "Poll",
+                        tint = p.homeHeaderOn,
+                    )
+                },
+            )
+            HeaderIconWithCount(
+                count = notificationCount,
+                onClick = onOpenNotifications,
+                icon = {
+                    Icon(
+                        imageVector = Icons.Outlined.Notifications,
+                        contentDescription = "Notifications",
+                        tint = p.homeHeaderOn,
+                    )
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun HeaderIconWithCount(
+    count: Int,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit,
+) {
+    Box {
+        IconButton(onClick = onClick) {
+            icon()
+        }
+        if (count > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = (-2).dp, y = 4.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color(0xFFDC2626))
+                    .padding(horizontal = 5.dp, vertical = 1.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = if (count > 99) "99+" else count.toString(),
+                    color = Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
                 )
             }
         }

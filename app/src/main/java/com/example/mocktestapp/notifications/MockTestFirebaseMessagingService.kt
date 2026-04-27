@@ -19,7 +19,7 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        // TODO: POST token to your backend for this user/device.
+        PushTokenRegistrar.sync(token)
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
@@ -48,6 +48,10 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
                 .setStyle(NotificationCompat.BigTextStyle().bigText(body))
                 .setContentIntent(pending)
                 .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .build()
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             if (nm == null) {

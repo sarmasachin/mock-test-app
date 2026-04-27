@@ -19,19 +19,20 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.Calculate
 import androidx.compose.material.icons.outlined.Gavel
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Memory
-import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
@@ -100,7 +101,8 @@ fun SeeAllCategoriesScreenNew(
             ),
         ),
     )
-    var hierarchy by remember { mutableStateOf(fallbackHierarchy) }
+    var hierarchy by remember { mutableStateOf<List<ExamHierarchyNode>>(emptyList()) }
+    var hierarchyLoaded by remember { mutableStateOf(false) }
     var level1 by remember { mutableStateOf<String?>(null) }
     var level2 by remember { mutableStateOf<String?>(null) }
 
@@ -126,7 +128,10 @@ fun SeeAllCategoriesScreenNew(
                     iconKey = level1Rows.firstNotNullOfOrNull { it.iconKey?.trim()?.takeIf(String::isNotEmpty) },
                 )
             }.sortedBy { it.label }
+        } else {
+            hierarchy = fallbackHierarchy
         }
+        hierarchyLoaded = true
     }
 
     val shownItems = when {
@@ -169,28 +174,39 @@ fun SeeAllCategoriesScreenNew(
             }
             Spacer(Modifier.height(16.dp))
 
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                itemsIndexed(rows) { _, rowCats ->
-                    AllCategoryRow(
-                        left = rowCats.getOrNull(0)?.label.orEmpty(),
-                        leftIconKey = rowCats.getOrNull(0)?.iconKey,
-                        right = rowCats.getOrNull(1)?.label,
-                        rightIconKey = rowCats.getOrNull(1)?.iconKey,
-                        onOpenCategory = { picked ->
-                            if (level1 == null) {
-                                level1 = picked
-                                return@AllCategoryRow
-                            }
-                            if (level2 == null) {
-                                level2 = picked
-                                return@AllCategoryRow
-                            }
-                            onOpenCategory(picked)
-                        },
-                    )
+            if (!hierarchyLoaded) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(color = p.accent)
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    itemsIndexed(rows) { _, rowCats ->
+                        AllCategoryRow(
+                            left = rowCats.getOrNull(0)?.label.orEmpty(),
+                            leftIconKey = rowCats.getOrNull(0)?.iconKey,
+                            right = rowCats.getOrNull(1)?.label,
+                            rightIconKey = rowCats.getOrNull(1)?.iconKey,
+                            onOpenCategory = { picked ->
+                                if (level1 == null) {
+                                    level1 = picked
+                                    return@AllCategoryRow
+                                }
+                                if (level2 == null) {
+                                    level2 = picked
+                                    return@AllCategoryRow
+                                }
+                                onOpenCategory(picked)
+                            },
+                        )
+                    }
                 }
             }
             if (level1 != null || level2 != null) {
@@ -226,7 +242,7 @@ private fun TopBar(
         if (showBack) {
             IconButton(onClick = onBack) {
                 Icon(
-                    imageVector = Icons.Rounded.ArrowBack,
+                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                     contentDescription = "Back",
                     tint = p.textPrimary,
                 )
@@ -273,11 +289,11 @@ private fun CategorySquare(
     modifier: Modifier = Modifier,
 ) {
     val p = mockTestPalette()
-    val shape = RoundedCornerShape(18.dp)
-    val icon = remember(iconKey) { resolveCategoryIcon(iconKey) }
+    val shape = RoundedCornerShape(14.dp)
+    val icon = remember(iconKey, text) { resolveCategoryIcon(iconKey = iconKey, label = text) }
     Card(
         modifier = modifier
-            .height(92.dp)
+            .height(76.dp)
             .clip(shape)
             .background(p.surface)
             .border(
@@ -288,46 +304,73 @@ private fun CategorySquare(
             .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = p.surface),
     ) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier.padding(horizontal = 8.dp),
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(p.border.copy(alpha = 0.12f))
+                    .border(1.dp, p.border.copy(alpha = 0.2f), RoundedCornerShape(999.dp)),
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
                     tint = p.accent,
-                    modifier = Modifier.size(24.dp),
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = text,
-                    color = p.textPrimary,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 15.sp,
+                    modifier = Modifier.size(18.dp),
                 )
             }
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = text,
+                color = p.textPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+                lineHeight = 16.sp,
+                maxLines = 2,
+            )
         }
     }
 }
 
-private fun resolveCategoryIcon(iconKey: String?): androidx.compose.ui.graphics.vector.ImageVector {
-    return when (iconKey?.trim()?.lowercase()) {
-        "math", "calculate" -> Icons.Outlined.Calculate
-        "reasoning", "logic", "mind" -> Icons.Outlined.Memory
-        "english", "language" -> Icons.Outlined.Language
-        "gk", "general", "public" -> Icons.Outlined.Public
-        "science" -> Icons.Outlined.Science
-        "computer", "tech" -> Icons.Outlined.Memory
-        "history" -> Icons.Outlined.MenuBook
-        "law", "legal" -> Icons.Outlined.Gavel
-        "book", "study" -> Icons.Outlined.Book
-        "school", "exam" -> Icons.Outlined.School
-        null, "" -> Icons.Outlined.Star
+private fun resolveCategoryIcon(
+    iconKey: String?,
+    label: String,
+): androidx.compose.ui.graphics.vector.ImageVector {
+    val key = iconKey?.trim()?.lowercase().orEmpty()
+    val text = label.trim().lowercase()
+    return when {
+        listOf("math", "calculate", "quant", "arithmetic", "algebra")
+            .any { key.contains(it) || text.contains(it) } -> Icons.Outlined.Calculate
+        listOf("reasoning", "logic", "mind", "computer", "tech", "software", "coding", "startup")
+            .any { key.contains(it) || text.contains(it) } -> Icons.Outlined.Memory
+        listOf("it", "developer", "data", "ai", "ml")
+            .any { key.contains(it) || text.contains(it) } -> Icons.Outlined.Memory
+        listOf("english", "language", "ctet", "ugc", "net")
+            .any { key.contains(it) || text.contains(it) } -> Icons.Outlined.Language
+        listOf("verbal", "typing", "steno")
+            .any { key.contains(it) || text.contains(it) } -> Icons.Outlined.Language
+        listOf("gk", "general", "public", "state", "govt", "ssc", "upsc", "bank", "railway", "defence", "police")
+            .any { key.contains(it) || text.contains(it) } -> Icons.Outlined.Public
+        listOf("government", "central", "ministerial", "clerical", "groupd", "ntpc", "patwari", "constable", "subinspector", "nda", "army", "airforce", "navy", "pcs")
+            .any { key.contains(it) || text.contains(it) } -> Icons.Outlined.Public
+        listOf("science", "neet", "gate", "csir")
+            .any { key.contains(it) || text.contains(it) } -> Icons.Outlined.Science
+        listOf("hospital", "pharma", "lab", "nursing", "medical")
+            .any { key.contains(it) || text.contains(it) } -> Icons.Outlined.Science
+        listOf("law", "legal", "judiciary", "pcs", "clat")
+            .any { key.contains(it) || text.contains(it) } -> Icons.Outlined.Gavel
+        listOf("book", "study", "interview", "preparation", "skill", "certification", "diploma")
+            .any { key.contains(it) || text.contains(it) } -> Icons.Outlined.Book
+        listOf("school", "exam", "entrance", "class", "cat", "jee", "cuet", "iit", "jam", "gmat", "ca", "cs", "jaib", "jaiib", "teacher", "commerce", "accounts", "management", "b com", "bcom", "cma")
+            .any { key.contains(it) || text.contains(it) } -> Icons.Outlined.School
+        listOf("history", "menu", "syllabus")
+            .any { key.contains(it) || text.contains(it) } -> Icons.AutoMirrored.Outlined.MenuBook
         else -> Icons.Outlined.Star
     }
 }

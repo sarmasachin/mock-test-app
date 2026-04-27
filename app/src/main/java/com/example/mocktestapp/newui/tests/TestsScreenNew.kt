@@ -65,6 +65,18 @@ data class TestCardNew(
     val capacityTotal: Int? = null,
     val enrolledCount: Int? = null,
     val remainingSeats: Int? = null,
+    val publishAt: String? = null,
+    val unpublishAt: String? = null,
+    val resultVisibility: String? = null,
+    val reattemptCooldownMinutes: Int = 0,
+    val lateJoinMinutes: Int = 0,
+    val notifyBeforeMinutes: Int = 0,
+    val resumeEnabled: Boolean = true,
+    val shuffleQuestions: Boolean = false,
+    val shuffleOptions: Boolean = false,
+    val fullscreenRequired: Boolean = false,
+    val copyPasteBlocked: Boolean = false,
+    val notifyOnPublish: Boolean = true,
 )
 
 @Composable
