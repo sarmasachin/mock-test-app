@@ -1362,8 +1362,7 @@ private fun HeaderIconWithCount(
                 fontSize = 11.sp,
                 fontWeight = FontWeight.ExtraBold,
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset(x = (-2).dp, y = 4.dp),
+                    .align(Alignment.Center),
             )
         }
     }

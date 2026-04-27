@@ -144,6 +144,7 @@ object ContentRepository {
         val question: String,
         val options: List<String>,
         val allowMultiple: Boolean,
+        val createdAt: String?,
     )
     data class PollModalSettingsRemote(
         val showHomePopup: Boolean,
@@ -487,8 +488,10 @@ object ContentRepository {
                         question = it.question,
                         options = it.options.filter { option -> option.isNotBlank() },
                         allowMultiple = it.allowMultiple,
+                        createdAt = it.createdAt,
                     )
                 }
+                .sortedByDescending { it.createdAt.orEmpty() }
             PollModalSettingsRemote(
                 showHomePopup = pollSettings?.showHomePopup != false,
                 items = mappedItems,

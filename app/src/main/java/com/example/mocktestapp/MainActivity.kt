@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import com.example.mocktestapp.newui.navigation.AppNavGraphNew
 import com.example.mocktestapp.notifications.PushTokenRegistrar
+import com.example.mocktestapp.notifications.PushNavigationBridge
 import com.example.mocktestapp.newui.theme.MockTestThemeNew
 import com.google.firebase.messaging.FirebaseMessaging
 
@@ -25,6 +26,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handlePushIntent(intent)
         if (Build.VERSION.SDK_INT >= 33) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -37,6 +39,19 @@ class MainActivity : ComponentActivity() {
             MockTestThemeNew {
                 AppNavGraphNew()
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handlePushIntent(intent)
+    }
+
+    private fun handlePushIntent(intent: Intent?) {
+        val route = intent?.getStringExtra("push_deep_link")?.trim().orEmpty()
+        if (route.isNotBlank()) {
+            PushNavigationBridge.publish(route)
         }
     }
 }

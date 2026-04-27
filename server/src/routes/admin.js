@@ -637,9 +637,17 @@ async function enqueueNotification(userId, payload) {
       message: payload.message,
       target: payload.target || 'all',
       scheduleAt: payload.scheduleAt,
+      deepLink: payload.deepLink || '',
     },
     userId || null,
-  ).catch((e) => {
+  ).then((result) => {
+    if (!result || result.ok !== true) {
+      console.warn('publish_app_notification_skipped', {
+        reason: result?.reason || 'unknown',
+        detail: result?.detail || '',
+      });
+    }
+  }).catch((e) => {
     console.error('publish_app_notification_error', e);
   });
 }
@@ -1508,6 +1516,7 @@ router.patch('/settings', async (req, res) => {
         title: 'Daily Quiz Rescheduled',
         message: 'Daily quiz schedule has been updated by admin.',
         target: 'all',
+        deepLink: 'menu_quiz',
         scheduleAt: new Date().toISOString(),
       });
     }
@@ -1523,6 +1532,7 @@ router.patch('/settings', async (req, res) => {
             ? 'A new poll is available. Share your opinion now.'
             : `${activeCount} active polls are available. Share your opinion now.`,
           target: 'all',
+          deepLink: 'poll',
           scheduleAt: new Date().toISOString(),
         });
       }
@@ -1532,6 +1542,7 @@ router.patch('/settings', async (req, res) => {
         title: 'Exam Alerts Updated',
         message: 'New exam alert categories are available.',
         target: 'all',
+        deepLink: 'exam_alert',
         scheduleAt: new Date().toISOString(),
       });
     }
@@ -1758,6 +1769,7 @@ router.patch('/tests/:id', async (req, res) => {
         title: 'Test Published',
         message: `${rows[0].title} is now live.`,
         target: 'all',
+        deepLink: 'main/tests',
         scheduleAt: new Date().toISOString(),
       });
     }
@@ -2104,6 +2116,7 @@ router.post('/daily-quiz', async (req, res) => {
         title: 'Daily Quiz Updated',
         message: 'Today\'s daily quiz is now available.',
         target: 'all',
+        deepLink: 'menu_quiz',
         scheduleAt: new Date().toISOString(),
       });
     }
@@ -2142,6 +2155,7 @@ router.patch('/daily-quiz/:id', async (req, res) => {
         title: 'Daily Quiz Updated',
         message: 'Daily quiz has been refreshed by admin.',
         target: 'all',
+        deepLink: 'menu_quiz',
         scheduleAt: new Date().toISOString(),
       });
     }
@@ -2268,6 +2282,7 @@ router.patch('/articles/:id', async (req, res) => {
         title: 'News Published',
         message: `${rows[0].headline} is now available.`,
         target: 'all',
+        deepLink: 'main/news',
         scheduleAt: new Date().toISOString(),
       });
     }

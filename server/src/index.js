@@ -253,10 +253,18 @@ async function processPublishSchedules() {
             title: item.entityType === 'test' ? 'Test Published' : 'News Published',
             message: item.entityType === 'test' ? 'A scheduled test is now live.' : 'A scheduled news update is now live.',
             target: 'all',
+            deepLink: item.entityType === 'test' ? 'main/tests' : 'main/news',
             scheduleAt: new Date().toISOString(),
           },
           null,
-        ).catch((e) => {
+        ).then((result) => {
+          if (!result || result.ok !== true) {
+            console.warn('scheduled_publish_notification_skipped', {
+              reason: result?.reason || 'unknown',
+              detail: result?.detail || '',
+            });
+          }
+        }).catch((e) => {
           console.error('scheduled_publish_notification_error', e);
         });
       }

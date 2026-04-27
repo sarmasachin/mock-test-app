@@ -77,6 +77,7 @@ import com.example.mocktestapp.newui.result.ReviewSolutionScreenNew
 import com.example.mocktestapp.newui.tests.StartTestPreviewScreenNew
 import com.example.mocktestapp.newui.tests.TestsScreenNew
 import com.example.mocktestapp.newui.theme.palette.mockTestPalette
+import com.example.mocktestapp.notifications.PushNavigationBridge
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -171,6 +172,7 @@ fun MainBottomNavHost(
     val navBackStackEntry by mainNavController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
     val isOnHomeRoot = currentDestination?.route == MainTabRoutes.Home
+    val pendingPushRoute by PushNavigationBridge.pendingRoute.collectAsState()
     val showPendingSubmissionMessage = {
         val pending = pendingResult
         if (pending != null) {
@@ -202,6 +204,23 @@ fun MainBottomNavHost(
             lastBackPressAtMs = now
             Toast.makeText(context, "Press back again to close app", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    LaunchedEffect(pendingPushRoute) {
+        val route = pendingPushRoute?.trim().orEmpty()
+        if (route.isBlank()) return@LaunchedEffect
+        when (route.lowercase()) {
+            "poll" -> mainNavController.navigate(RoutesNew.POLL) { launchSingleTop = true }
+            "notifications", "notification" -> mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
+            "menu_quiz", "daily", "daily_quiz" -> mainNavController.navigate(RoutesNew.MENU_QUIZ) { launchSingleTop = true }
+            "job_alert", "jobs" -> mainNavController.navigate(RoutesNew.JOB_ALERT) { launchSingleTop = true }
+            "exam_alert", "exams" -> mainNavController.navigate(RoutesNew.EXAM_ALERT) { launchSingleTop = true }
+            MainTabRoutes.News, "news" -> mainNavController.navigateMainTab(MainTabRoutes.News)
+            MainTabRoutes.Tests, "tests" -> mainNavController.navigateMainTab(MainTabRoutes.Tests)
+            MainTabRoutes.Home, "home" -> mainNavController.goToHomeTab()
+            else -> mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
+        }
+        PushNavigationBridge.consume()
     }
 
     Scaffold(

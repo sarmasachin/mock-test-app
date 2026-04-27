@@ -79,6 +79,7 @@ async function sendFcmBroadcast(payload) {
       title: String(payload.title || 'MockTestApp'),
       body: String(payload.message || 'New update'),
       target: String(payload.target || 'all'),
+      deepLink: String(payload.deepLink || '').trim(),
     },
   };
   const resp = await fetch('https://fcm.googleapis.com/fcm/send', {

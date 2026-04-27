@@ -333,6 +333,7 @@ data class PollItemDto(
     val options: List<String> = emptyList(),
     @SerializedName("allowMultiple") val allowMultiple: Boolean = false,
     val enabled: Boolean = true,
+    @SerializedName("createdAt") val createdAt: String? = null,
 )
 
 data class PollSettingsDto(

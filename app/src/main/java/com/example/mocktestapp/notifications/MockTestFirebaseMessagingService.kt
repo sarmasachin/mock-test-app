@@ -32,8 +32,11 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
             }
             val title = message.notification?.title ?: message.data["title"] ?: "MockTestApp"
             val body = message.notification?.body ?: message.data["body"] ?: "New update"
+            val route = message.data["deepLink"]
+                ?: inferRouteFromContent(title = title, body = body)
             val open = Intent(this, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("push_deep_link", route)
             }
             val pending = PendingIntent.getActivity(
                 this,
@@ -66,5 +69,18 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
 
     private companion object {
         private const val TAG = "MockTestFCM"
+
+        private fun inferRouteFromContent(title: String, body: String): String {
+            val haystack = "${title.lowercase()} ${body.lowercase()}"
+            return when {
+                "poll" in haystack -> "poll"
+                "daily quiz" in haystack || "quiz" in haystack -> "menu_quiz"
+                "job" in haystack -> "job_alert"
+                "exam" in haystack -> "exam_alert"
+                "news" in haystack || "article" in haystack -> "main/news"
+                "test" in haystack || "mock" in haystack -> "main/tests"
+                else -> "notifications"
+            }
+        }
     }
 }
