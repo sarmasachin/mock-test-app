@@ -690,7 +690,7 @@ object AppPreferencesRepository {
         }.onFailure { Log.e(TAG, "markPollVoted failed", it) }
     }
 
-    /** Clears sign-in profile fields; keeps streak, digest, and cached feed URLs. */
+    /** Clears sign-in profile fields; keeps streak, digest, feed URLs, and seen/voted notification state. */
     suspend fun clearAuthSessionPrefs() {
         if (!::appContext.isInitialized) return
         runCatching {
@@ -712,9 +712,6 @@ object AppPreferencesRepository {
                 prefs[keyPendingResultViewed] = 1
                 prefs[keyAppliedTestSeries] = "[]"
                 prefs[keyAuthBootstrapState] = RestoreSessionStatus.LoggedOut.name
-                prefs[keySeenNotificationIds] = "[]"
-                prefs[keySeenPollIds] = "[]"
-                prefs[keyVotedPollIds] = "[]"
             }
         }.onFailure { Log.e(TAG, "clearAuthSessionPrefs failed", it) }
     }

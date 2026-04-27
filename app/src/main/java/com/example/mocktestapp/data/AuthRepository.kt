@@ -18,6 +18,8 @@ import com.example.mocktestapp.data.remote.AuthUserDto
 import com.example.mocktestapp.data.remote.RetrofitProvider
 import com.example.mocktestapp.data.remote.TextMessageBody
 import com.example.mocktestapp.data.remote.ApplyTestResponse
+import com.example.mocktestapp.notifications.PushTokenRegistrar
+import com.google.firebase.messaging.FirebaseMessaging
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -145,6 +147,10 @@ object AuthRepository {
                     RestoreSessionStatus.Ready
                 },
             )
+            runCatching {
+                FirebaseMessaging.getInstance().token
+                    .addOnSuccessListener { token -> PushTokenRegistrar.sync(token) }
+            }.onFailure { e -> Log.w(TAG, "login token fetch failed", e) }
             Result.success(resp.user)
         } catch (e: HttpException) {
             Result.failure(Exception(parseHttpError(e)))
@@ -172,6 +178,10 @@ object AuthRepository {
                     RestoreSessionStatus.Ready
                 },
             )
+            runCatching {
+                FirebaseMessaging.getInstance().token
+                    .addOnSuccessListener { token -> PushTokenRegistrar.sync(token) }
+            }.onFailure { e -> Log.w(TAG, "google login token fetch failed", e) }
             Result.success(resp.user)
         } catch (e: HttpException) {
             Result.failure(Exception(parseHttpError(e)))
@@ -215,6 +225,10 @@ object AuthRepository {
                     RestoreSessionStatus.Ready
                 },
             )
+            runCatching {
+                FirebaseMessaging.getInstance().token
+                    .addOnSuccessListener { token -> PushTokenRegistrar.sync(token) }
+            }.onFailure { e -> Log.w(TAG, "register token fetch failed", e) }
             Result.success(resp.user)
         } catch (e: HttpException) {
             Result.failure(Exception(parseHttpError(e)))
