@@ -18,10 +18,14 @@ import com.google.firebase.messaging.FirebaseMessaging
  * App entry activity (declared in AndroidManifest.xml).
  */
 class MainActivity : ComponentActivity() {
+    private companion object {
+        private const val TAG = "MainActivity"
+    }
+
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (!granted) {
-                Log.i("MainActivity", "POST_NOTIFICATIONS denied — exam/job push may be limited")
+                Log.i(TAG, "POST_NOTIFICATIONS denied — exam/job push may be limited")
             }
         }
 
@@ -33,7 +37,13 @@ class MainActivity : ComponentActivity() {
         }
         runCatching {
             FirebaseMessaging.getInstance().token
-                .addOnSuccessListener { token -> PushTokenRegistrar.sync(token) }
+                .addOnSuccessListener { token ->
+                    Log.d(TAG, "FCM token fetch success (len=${token.length})")
+                    PushTokenRegistrar.sync(token)
+                }
+                .addOnFailureListener { e ->
+                    Log.e(TAG, "FCM token fetch failed", e)
+                }
         }
         setContent {
             // Follows system light/dark; UI colors come from theme palettes.

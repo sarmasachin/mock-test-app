@@ -19,6 +19,7 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
+        Log.d(TAG, "onNewToken called (len=${token.length})")
         PushTokenRegistrar.sync(token)
     }
 

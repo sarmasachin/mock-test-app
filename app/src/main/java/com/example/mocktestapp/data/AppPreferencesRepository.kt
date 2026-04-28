@@ -69,8 +69,13 @@ object AppPreferencesRepository {
     private val keyAppliedTestSeries = stringPreferencesKey("applied_test_series")
     private val keyAuthBootstrapState = stringPreferencesKey("auth_bootstrap_state")
     private val keySeenNotificationIds = stringPreferencesKey("seen_notification_ids")
+    // Keep "seen" state user-scoped. If a different user signs in on the same device,
+    // old ids must not affect unread badges for the new account.
+    private val keySeenNotificationIdsOwner = stringPreferencesKey("seen_notification_ids_owner")
     private val keySeenPollIds = stringPreferencesKey("seen_poll_ids")
+    private val keySeenPollIdsOwner = stringPreferencesKey("seen_poll_ids_owner")
     private val keyVotedPollIds = stringPreferencesKey("voted_poll_ids")
+    private val keyVotedPollIdsOwner = stringPreferencesKey("voted_poll_ids_owner")
 
     private const val DefaultStartSeriesLockMs = 20_000L
     private const val DefaultStartSeriesActiveWindowMs = 30 * 60 * 1000L
@@ -633,61 +638,115 @@ object AppPreferencesRepository {
         return arr.toString()
     }
 
-    suspend fun getSeenNotificationIdsNow(): Set<String> {
+    private fun currentContentStateOwnerId(prefs: Preferences): String {
+        val email = prefs[keyProfileEmail].orEmpty().trim()
+        val contact = prefs[keyProfileContact].orEmpty().trim()
+        val userCode = (prefs[keyProfileUserCode] ?: 0)
+            .takeIf { it in 10_000_000..99_999_999 }
+            ?.let { String.format(Locale.US, "%08d", it) }
+            .orEmpty()
+        return when {
+            email.isNotBlank() -> email.lowercase(Locale.US)
+            contact.isNotBlank() -> contact.lowercase(Locale.US)
+            userCode.isNotBlank() -> "uid:$userCode"
+            else -> "guest"
+        }
+    }
+
+    private suspend fun readUserScopedIdSet(
+        setKey: Preferences.Key<String>,
+        ownerKey: Preferences.Key<String>,
+    ): Set<String> {
         if (!::appContext.isInitialized) return emptySet()
         return runCatching {
-            parseStringSet(store().data.first()[keySeenNotificationIds])
+            val prefs = store().data.first()
+            val ownerNow = currentContentStateOwnerId(prefs)
+            val ownerStored = prefs[ownerKey].orEmpty().trim()
+            if (ownerStored.isNotBlank() && !ownerStored.equals(ownerNow, ignoreCase = true)) {
+                // Different signed-in user: discard previous user's state.
+                store().edit { next ->
+                    next[ownerKey] = ownerNow
+                    next[setKey] = "[]"
+                }
+                return@runCatching emptySet()
+            }
+            // First-time read after install / migration: pin owner.
+            if (ownerStored.isBlank()) {
+                store().edit { next -> next[ownerKey] = ownerNow }
+            }
+            parseStringSet(prefs[setKey])
         }.getOrDefault(emptySet())
+    }
+
+    private suspend fun writeUserScopedIdSet(
+        setKey: Preferences.Key<String>,
+        ownerKey: Preferences.Key<String>,
+        addValues: Set<String>,
+    ) {
+        if (!::appContext.isInitialized) return
+        if (addValues.isEmpty()) return
+        runCatching {
+            store().edit { prefs ->
+                val ownerNow = currentContentStateOwnerId(prefs)
+                val ownerStored = prefs[ownerKey].orEmpty().trim()
+                val base =
+                    if (ownerStored.isNotBlank() && !ownerStored.equals(ownerNow, ignoreCase = true)) {
+                        emptySet()
+                    } else {
+                        parseStringSet(prefs[setKey])
+                    }
+                prefs[ownerKey] = ownerNow
+                prefs[setKey] = encodeStringSet(base + addValues)
+            }
+        }.onFailure { Log.e(TAG, "writeUserScopedIdSet failed", it) }
+    }
+
+    suspend fun getSeenNotificationIdsNow(): Set<String> {
+        return readUserScopedIdSet(
+            setKey = keySeenNotificationIds,
+            ownerKey = keySeenNotificationIdsOwner,
+        )
     }
 
     suspend fun getSeenPollIdsNow(): Set<String> {
-        if (!::appContext.isInitialized) return emptySet()
-        return runCatching {
-            parseStringSet(store().data.first()[keySeenPollIds])
-        }.getOrDefault(emptySet())
+        return readUserScopedIdSet(
+            setKey = keySeenPollIds,
+            ownerKey = keySeenPollIdsOwner,
+        )
     }
 
     suspend fun getVotedPollIdsNow(): Set<String> {
-        if (!::appContext.isInitialized) return emptySet()
-        return runCatching {
-            parseStringSet(store().data.first()[keyVotedPollIds])
-        }.getOrDefault(emptySet())
+        return readUserScopedIdSet(
+            setKey = keyVotedPollIds,
+            ownerKey = keyVotedPollIdsOwner,
+        )
     }
 
     suspend fun markNotificationsSeen(ids: Collection<String>) {
-        if (!::appContext.isInitialized) return
         val normalized = ids.map { it.trim() }.filter { it.isNotBlank() }.toSet()
-        if (normalized.isEmpty()) return
-        runCatching {
-            store().edit { prefs ->
-                val existing = parseStringSet(prefs[keySeenNotificationIds])
-                prefs[keySeenNotificationIds] = encodeStringSet(existing + normalized)
-            }
-        }.onFailure { Log.e(TAG, "markNotificationsSeen failed", it) }
+        writeUserScopedIdSet(
+            setKey = keySeenNotificationIds,
+            ownerKey = keySeenNotificationIdsOwner,
+            addValues = normalized,
+        )
     }
 
     suspend fun markPollsSeen(ids: Collection<String>) {
-        if (!::appContext.isInitialized) return
         val normalized = ids.map { it.trim() }.filter { it.isNotBlank() }.toSet()
-        if (normalized.isEmpty()) return
-        runCatching {
-            store().edit { prefs ->
-                val existing = parseStringSet(prefs[keySeenPollIds])
-                prefs[keySeenPollIds] = encodeStringSet(existing + normalized)
-            }
-        }.onFailure { Log.e(TAG, "markPollsSeen failed", it) }
+        writeUserScopedIdSet(
+            setKey = keySeenPollIds,
+            ownerKey = keySeenPollIdsOwner,
+            addValues = normalized,
+        )
     }
 
     suspend fun markPollVoted(pollId: String) {
-        if (!::appContext.isInitialized) return
-        val normalized = pollId.trim()
-        if (normalized.isBlank()) return
-        runCatching {
-            store().edit { prefs ->
-                val existing = parseStringSet(prefs[keyVotedPollIds])
-                prefs[keyVotedPollIds] = encodeStringSet(existing + normalized)
-            }
-        }.onFailure { Log.e(TAG, "markPollVoted failed", it) }
+        val normalized = pollId.trim().takeIf { it.isNotBlank() } ?: return
+        writeUserScopedIdSet(
+            setKey = keyVotedPollIds,
+            ownerKey = keyVotedPollIdsOwner,
+            addValues = setOf(normalized),
+        )
     }
 
     /** Clears sign-in profile fields; keeps streak, digest, feed URLs, and seen/voted notification state. */
@@ -712,6 +771,10 @@ object AppPreferencesRepository {
                 prefs[keyPendingResultViewed] = 1
                 prefs[keyAppliedTestSeries] = "[]"
                 prefs[keyAuthBootstrapState] = RestoreSessionStatus.LoggedOut.name
+                // Reset ownership so the next signed-in user starts fresh for unread badges.
+                prefs[keySeenNotificationIdsOwner] = ""
+                prefs[keySeenPollIdsOwner] = ""
+                prefs[keyVotedPollIdsOwner] = ""
             }
         }.onFailure { Log.e(TAG, "clearAuthSessionPrefs failed", it) }
     }

@@ -87,6 +87,8 @@ async function sendFcmBroadcast(payload) {
       title: String(payload.title || 'MockTestApp'),
       body: String(payload.message || 'New update'),
       sound: 'default',
+      // Ensure Android uses our high-importance channel for heads-up/popup.
+      android_channel_id: 'exams_jobs_alerts_v2',
     },
     data: {
       title: String(payload.title || 'MockTestApp'),

@@ -15,9 +15,15 @@ object PushTokenRegistrar {
 
     fun sync(token: String) {
         val normalized = token.trim()
-        if (normalized.length < 20) return
+        if (normalized.length < 20) {
+            Log.w(TAG, "Skip device token sync: token too short (len=${normalized.length})")
+            return
+        }
         val hasSession = !AuthRepository.peekAccessToken().isNullOrBlank()
-        if (!hasSession) return
+        if (!hasSession) {
+            Log.d(TAG, "Skip device token sync: no auth session yet")
+            return
+        }
         CoroutineScope(Dispatchers.IO).launch {
             var done = false
             repeat(3) { attempt ->

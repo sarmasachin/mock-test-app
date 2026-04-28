@@ -21,6 +21,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MockTestApp">
 
+        <!-- Used when FCM displays notification payloads while app is backgrounded. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="exams_jobs_alerts_v2" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
