@@ -119,6 +119,7 @@ async function sendFcmBroadcast(payload) {
     const url = `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(v1ProjectId)}/messages:send`;
     const invalid = [];
     let sent = 0;
+    let firstFailure = null;
 
     // Limit concurrency to avoid rate limits.
     const CONCURRENCY = 20;
@@ -166,6 +167,12 @@ async function sendFcmBroadcast(payload) {
         txt.includes('registration-token-not-registered') ||
         txt.includes('Requested entity was not found');
       if (isUnregistered) invalid.push(token);
+      if (!isUnregistered && !firstFailure) {
+        firstFailure = {
+          status: resp.status,
+          body: String(txt || '').slice(0, 500),
+        };
+      }
     }
 
     async function worker() {
@@ -198,7 +205,16 @@ async function sendFcmBroadcast(payload) {
       await pool.query(`DELETE FROM user_device_tokens WHERE updated_at < now() - interval '30 days'`);
     } catch (_e) {}
 
-    return { ok: sent > 0, sent, invalidDeleted: invalid.length };
+    if (sent <= 0) {
+      return {
+        ok: false,
+        reason: 'fcm_v1_send_failed',
+        detail: firstFailure ? JSON.stringify(firstFailure) : 'No successful sends; check FCM credentials/project id and token validity',
+        sent,
+        invalidDeleted: invalid.length,
+      };
+    }
+    return { ok: true, sent, invalidDeleted: invalid.length };
   }
 
   // --- Legacy HTTP path (may be disabled) ---
