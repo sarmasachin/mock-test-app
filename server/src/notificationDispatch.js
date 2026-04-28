@@ -166,7 +166,11 @@ async function sendFcmBroadcast(payload) {
         txt.includes('UNREGISTERED') ||
         txt.includes('registration-token-not-registered') ||
         txt.includes('Requested entity was not found');
-      if (isUnregistered) invalid.push(token);
+      const isInvalidTokenFormat =
+        resp.status === 400 &&
+        (txt.includes('not a valid FCM registration token') ||
+          (txt.includes('INVALID_ARGUMENT') && txt.toLowerCase().includes('registration token')));
+      if (isUnregistered || isInvalidTokenFormat) invalid.push(token);
       if (!isUnregistered && !firstFailure) {
         firstFailure = {
           status: resp.status,
