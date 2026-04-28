@@ -2594,40 +2594,68 @@ router.post('/notifications/send', async (req, res) => {
         WHERE ta.user_id = u.id AND ta.completed_at >= now() - interval '30 days'
       )`;
     }
-    let tokenRows;
-    let tokenColumn = 'device_token';
-    try {
-      tokenRows = await pool.query(
-        `SELECT udt.device_token
-         FROM user_device_tokens udt
-         INNER JOIN users u ON u.id = udt.user_id
-         WHERE udt.is_active = true AND ${whereClause}
-         ORDER BY udt.updated_at DESC
-         LIMIT 10000`,
-      );
-    } catch (colErr) {
-      // Backward compatibility: older deployments may still use "token" column.
-      if (colErr && colErr.code === '42703') {
-        tokenColumn = 'token';
-        tokenRows = await pool.query(
-          `SELECT udt.token
-           FROM user_device_tokens udt
-           INNER JOIN users u ON u.id = udt.user_id
-           WHERE udt.is_active = true AND ${whereClause}
-           ORDER BY udt.updated_at DESC
-           LIMIT 10000`,
-        );
-      } else {
-        throw colErr;
-      }
+    const tableColsRes = await pool.query(
+      `SELECT table_name, column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name IN ('user_device_tokens', 'user_devices')`,
+    );
+    const tableCols = {};
+    for (const row of tableColsRes.rows || []) {
+      const table = String(row.table_name || '');
+      const col = String(row.column_name || '');
+      if (!table || !col) continue;
+      if (!tableCols[table]) tableCols[table] = new Set();
+      tableCols[table].add(col);
     }
+    const hasUdt = tableCols.user_device_tokens && tableCols.user_device_tokens.size > 0;
+    const hasUd = tableCols.user_devices && tableCols.user_devices.size > 0;
+    if (!hasUdt && !hasUd) {
+      return res.json({ ok: true, total: 0, sent: 0, failed: 0, deactivated: 0 });
+    }
+    const sourceTable = hasUdt ? 'user_device_tokens' : 'user_devices';
+    const cols = tableCols[sourceTable];
+    const tokenColumn = cols.has('device_token')
+      ? 'device_token'
+      : cols.has('token')
+        ? 'token'
+        : cols.has('fcm_token')
+          ? 'fcm_token'
+          : null;
+    if (!tokenColumn) {
+      return res.status(500).json({ error: 'Device token column not found in database schema' });
+    }
+    const activeColumn = cols.has('is_active')
+      ? 'is_active'
+      : cols.has('active')
+        ? 'active'
+        : cols.has('enabled')
+          ? 'enabled'
+          : null;
+    const orderColumn = cols.has('updated_at')
+      ? 'updated_at'
+      : cols.has('last_seen_at')
+        ? 'last_seen_at'
+        : cols.has('created_at')
+          ? 'created_at'
+          : null;
+    const activeClause = activeColumn ? `src.${activeColumn} = true AND ` : '';
+    const orderClause = orderColumn ? `ORDER BY src.${orderColumn} DESC` : '';
+    const tokenRows = await pool.query(
+      `SELECT src.${tokenColumn} AS token
+       FROM ${sourceTable} src
+       INNER JOIN users u ON u.id = src.user_id
+       WHERE ${activeClause}${whereClause}
+       ${orderClause}
+       LIMIT 10000`,
+    );
     const rows = tokenRows.rows || [];
     let sent = 0;
     let failed = 0;
     let deactivated = 0;
     for (const row of rows) {
       try {
-        const currentToken = String(row.device_token || row.token || '').trim();
+        const currentToken = String(row.token || '').trim();
         if (!currentToken) {
           failed += 1;
           continue;
@@ -2638,13 +2666,21 @@ router.post('/notifications/send', async (req, res) => {
         } else {
           failed += 1;
           if (result.code === 'UNREGISTERED') {
-            const whereExpr = tokenColumn === 'token' ? 'token = $1' : 'device_token = $1';
-            await pool.query(
-              `UPDATE user_device_tokens
-               SET is_active = false, updated_at = now()
-               WHERE ${whereExpr}`,
-              [currentToken],
-            );
+            if (activeColumn) {
+              const updateTs = cols.has('updated_at') ? ', updated_at = now()' : '';
+              await pool.query(
+                `UPDATE ${sourceTable}
+                 SET ${activeColumn} = false${updateTs}
+                 WHERE ${tokenColumn} = $1`,
+                [currentToken],
+              );
+            } else {
+              await pool.query(
+                `DELETE FROM ${sourceTable}
+                 WHERE ${tokenColumn} = $1`,
+                [currentToken],
+              );
+            }
             deactivated += 1;
           }
         }
