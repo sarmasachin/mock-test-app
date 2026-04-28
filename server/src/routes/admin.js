@@ -2594,31 +2594,56 @@ router.post('/notifications/send', async (req, res) => {
         WHERE ta.user_id = u.id AND ta.completed_at >= now() - interval '30 days'
       )`;
     }
-    const tokenRows = await pool.query(
-      `SELECT udt.device_token
-       FROM user_device_tokens udt
-       INNER JOIN users u ON u.id = udt.user_id
-       WHERE udt.is_active = true AND ${whereClause}
-       ORDER BY udt.updated_at DESC
-       LIMIT 10000`,
-    );
+    let tokenRows;
+    let tokenColumn = 'device_token';
+    try {
+      tokenRows = await pool.query(
+        `SELECT udt.device_token
+         FROM user_device_tokens udt
+         INNER JOIN users u ON u.id = udt.user_id
+         WHERE udt.is_active = true AND ${whereClause}
+         ORDER BY udt.updated_at DESC
+         LIMIT 10000`,
+      );
+    } catch (colErr) {
+      // Backward compatibility: older deployments may still use "token" column.
+      if (colErr && colErr.code === '42703') {
+        tokenColumn = 'token';
+        tokenRows = await pool.query(
+          `SELECT udt.token
+           FROM user_device_tokens udt
+           INNER JOIN users u ON u.id = udt.user_id
+           WHERE udt.is_active = true AND ${whereClause}
+           ORDER BY udt.updated_at DESC
+           LIMIT 10000`,
+        );
+      } else {
+        throw colErr;
+      }
+    }
     const rows = tokenRows.rows || [];
     let sent = 0;
     let failed = 0;
     let deactivated = 0;
     for (const row of rows) {
       try {
-        const result = await sendPushToToken(row.device_token, { title, message, deepLink });
+        const currentToken = String(row.device_token || row.token || '').trim();
+        if (!currentToken) {
+          failed += 1;
+          continue;
+        }
+        const result = await sendPushToToken(currentToken, { title, message, deepLink });
         if (result.ok) {
           sent += 1;
         } else {
           failed += 1;
           if (result.code === 'UNREGISTERED') {
+            const whereExpr = tokenColumn === 'token' ? 'token = $1' : 'device_token = $1';
             await pool.query(
               `UPDATE user_device_tokens
                SET is_active = false, updated_at = now()
-               WHERE device_token = $1`,
-              [row.device_token],
+               WHERE ${whereExpr}`,
+              [currentToken],
             );
             deactivated += 1;
           }
