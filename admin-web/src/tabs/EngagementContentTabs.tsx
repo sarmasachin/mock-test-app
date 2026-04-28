@@ -318,7 +318,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       const sent = Number(res.data?.sent || 0);
       const failed = Number(res.data?.failed || 0);
       const total = Number(res.data?.total || sent + failed);
-      setSendResult(`Push delivered: ${sent}/${total}, failed: ${failed}`);
+      setSendResult(`Push delivered: ${sent}/${total}, failed: ${failed} (matched tokens: ${total})`);
       resend(item);
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Failed to send push notification');
@@ -340,7 +340,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
         <button type="button" onClick={addPush}>Add Push</button>
       </div>
       <div className="list table">
-        <div className="row row-head" style={{ gridTemplateColumns: '1fr 2fr 120px 120px 90px 90px 90px 90px 110px' }}><span>Title</span><span>Message</span><span>Target</span><span>Status</span><span>Resend</span><span>Update</span><span>Delete</span><span>Count</span><span>Send Now</span></div>
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr 2fr 120px 120px 90px 90px 90px 90px 110px' }}><span>Title</span><span>Message</span><span>Target</span><span>Status</span><span>Resend</span><span>Update</span><span>Delete</span><span>Resend Count</span><span>Send Now</span></div>
         {visibleItems.map((item) => <div key={item.id} className="row" style={{ gridTemplateColumns: '1fr 2fr 120px 120px 90px 90px 90px 90px 110px' }}><input value={item.title} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, title: e.target.value } : x)) }))} /><input value={item.message} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, message: e.target.value } : x)) }))} /><select value={item.target} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, target: e.target.value as PushItem['target'] } : x)) }))}><option value="all">All users</option><option value="new_users">New users</option><option value="active_users">Active users</option></select><span>{item.status}</span><button type="button" className="ghost" onClick={() => resend(item)}>Resend</button><button type="button" onClick={save}>Save</button><button type="button" className="danger" onClick={() => setSettings((p) => ({ ...p, items: p.items.filter((x) => x.id !== item.id) }))}>Delete</button><span>{item.resendCount || 0}</span><button type="button" onClick={() => sendNow(item)}>Send</button></div>)}
       </div>
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
