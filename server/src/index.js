@@ -16,7 +16,6 @@ const leaderboardRouter = require('./routes/leaderboard');
 const homeRouter = require('./routes/home');
 const adminRouter = require('./routes/admin');
 const pollsRouter = require('./routes/polls');
-const { publishAppNotification } = require('./notificationDispatch');
 const { pool } = require('./db');
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
@@ -32,18 +31,6 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '8mb' }));
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
-app.use((req, _res, next) => {
-  if (req.method === 'POST' && String(req.path || '') === '/v1/me/device-token') {
-    const authHeader = String(req.headers.authorization || '');
-    console.info('device_token_request_entry', {
-      method: req.method,
-      path: req.path,
-      hasAuthHeader: authHeader.toLowerCase().startsWith('bearer '),
-      authLen: authHeader.length,
-    });
-  }
-  next();
-});
 app.use(async (req, res, next) => {
   const path = String(req.path || '');
   if (
@@ -260,33 +247,7 @@ async function processPublishSchedules() {
         await pool.query(`UPDATE news_articles SET is_published = true WHERE id = $1::uuid`, [String(item.entityId || '')]);
       }
       if (item.notifyOnPublish) {
-        console.info('push_target_user_context', {
-          source: 'publish_scheduler',
-          actorUserId: null,
-          entityType: String(item.entityType || ''),
-          entityId: String(item.entityId || ''),
-          target: 'all',
-          deepLink: item.entityType === 'test' ? 'main/tests' : 'main/news',
-        });
-        await publishAppNotification(
-          {
-            title: item.entityType === 'test' ? 'Test Published' : 'News Published',
-            message: item.entityType === 'test' ? 'A scheduled test is now live.' : 'A scheduled news update is now live.',
-            target: 'all',
-            deepLink: item.entityType === 'test' ? 'main/tests' : 'main/news',
-            scheduleAt: new Date().toISOString(),
-          },
-          null,
-        ).then((result) => {
-          if (!result || result.ok !== true) {
-            console.warn('scheduled_publish_notification_skipped', {
-              reason: result?.reason || 'unknown',
-              detail: result?.detail || '',
-            });
-          }
-        }).catch((e) => {
-          console.error('scheduled_publish_notification_error', e);
-        });
+        // Push notification dispatch removed.
       }
       nextItems.push({
         ...item,

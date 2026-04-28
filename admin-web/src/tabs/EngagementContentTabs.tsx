@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 type ApiClient = {
   get: (url: string, config?: any) => Promise<any>;
   patch: (url: string, data?: any, config?: any) => Promise<any>;
+  post: (url: string, data?: any, config?: any) => Promise<any>;
 };
 
 type PollItem = {
@@ -273,6 +274,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   const [newItem, setNewItem] = useState({ title: '', message: '', target: 'all' as PushItem['target'], deepLink: '', scheduledAt: '', enabled: true });
   const [page, setPage] = useState(1);
   const [error, setError] = useState('');
+  const [sendResult, setSendResult] = useState('');
   const [saving, setSaving] = useState(false);
   async function load() {
     try {
@@ -299,6 +301,29 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   function resend(item: PushItem) {
     setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, status: 'sent', resendCount: (x.resendCount || 0) + 1, lastSentAt: new Date().toISOString() } : x)) }));
   }
+  async function sendNow(item: PushItem) {
+    if (!item.title.trim() || !item.message.trim()) {
+      setError('Title and message are required to send push');
+      return;
+    }
+    try {
+      setError('');
+      setSendResult('');
+      const res = await apiClient.post('/admin/notifications/send', {
+        title: item.title.trim(),
+        message: item.message.trim(),
+        target: item.target,
+        deepLink: item.deepLink.trim(),
+      });
+      const sent = Number(res.data?.sent || 0);
+      const failed = Number(res.data?.failed || 0);
+      const total = Number(res.data?.total || sent + failed);
+      setSendResult(`Push delivered: ${sent}/${total}, failed: ${failed}`);
+      resend(item);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to send push notification');
+    }
+  }
   const totalPages = Math.max(1, Math.ceil(settings.items.length / PUSH_PER_PAGE));
   const safePage = Math.min(page, totalPages);
   const visibleItems = useMemo(() => settings.items.slice((safePage - 1) * PUSH_PER_PAGE, (safePage - 1) * PUSH_PER_PAGE + PUSH_PER_PAGE), [settings.items, safePage]);
@@ -315,11 +340,12 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
         <button type="button" onClick={addPush}>Add Push</button>
       </div>
       <div className="list table">
-        <div className="row row-head" style={{ gridTemplateColumns: '1fr 2fr 120px 120px 90px 90px 90px 90px' }}><span>Title</span><span>Message</span><span>Target</span><span>Status</span><span>Resend</span><span>Update</span><span>Delete</span><span>Count</span></div>
-        {visibleItems.map((item) => <div key={item.id} className="row" style={{ gridTemplateColumns: '1fr 2fr 120px 120px 90px 90px 90px 90px' }}><input value={item.title} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, title: e.target.value } : x)) }))} /><input value={item.message} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, message: e.target.value } : x)) }))} /><select value={item.target} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, target: e.target.value as PushItem['target'] } : x)) }))}><option value="all">All users</option><option value="new_users">New users</option><option value="active_users">Active users</option></select><span>{item.status}</span><button type="button" className="ghost" onClick={() => resend(item)}>Resend</button><button type="button" onClick={save}>Save</button><button type="button" className="danger" onClick={() => setSettings((p) => ({ ...p, items: p.items.filter((x) => x.id !== item.id) }))}>Delete</button><span>{item.resendCount || 0}</span></div>)}
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr 2fr 120px 120px 90px 90px 90px 90px 110px' }}><span>Title</span><span>Message</span><span>Target</span><span>Status</span><span>Resend</span><span>Update</span><span>Delete</span><span>Count</span><span>Send Now</span></div>
+        {visibleItems.map((item) => <div key={item.id} className="row" style={{ gridTemplateColumns: '1fr 2fr 120px 120px 90px 90px 90px 90px 110px' }}><input value={item.title} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, title: e.target.value } : x)) }))} /><input value={item.message} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, message: e.target.value } : x)) }))} /><select value={item.target} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, target: e.target.value as PushItem['target'] } : x)) }))}><option value="all">All users</option><option value="new_users">New users</option><option value="active_users">Active users</option></select><span>{item.status}</span><button type="button" className="ghost" onClick={() => resend(item)}>Resend</button><button type="button" onClick={save}>Save</button><button type="button" className="danger" onClick={() => setSettings((p) => ({ ...p, items: p.items.filter((x) => x.id !== item.id) }))}>Delete</button><span>{item.resendCount || 0}</span><button type="button" onClick={() => sendNow(item)}>Send</button></div>)}
       </div>
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
       <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button><button type="button" onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save Push Settings'}</button></div>
+      {sendResult && <p className="success">{sendResult}</p>}
       {error && <p className="error">{error}</p>}
     </section>
   );

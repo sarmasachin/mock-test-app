@@ -11,57 +11,25 @@ const router = express.Router();
 const EMAIL_VERIFY_OTP_MINUTES = () =>
   parseInt(process.env.EMAIL_VERIFY_OTP_MINUTES || '15', 10);
 
-function normalizeDeviceToken(raw) {
-  let value = String(raw || '').trim();
-  // Some clients accidentally wrap token as a JSON string literal, e.g. "\"abc...\"".
-  for (let i = 0; i < 3; i += 1) {
-    if (
-      value.length >= 2 &&
-      ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
-    ) {
-      value = value.slice(1, -1).trim();
-      continue;
-    }
-    break;
-  }
-  return value;
-}
-
-function isLikelyValidFcmToken(token) {
-  // FCM registration tokens are typically long and contain URL-safe-ish characters.
-  return (
-    token.length >= 20 &&
-    token.length <= 4096 &&
-    !/\s/.test(token) &&
-    /^[A-Za-z0-9:_\-.]+$/.test(token)
-  );
-}
-
 function pickSixDigit() {
   return 100000 + Math.floor(Math.random() * 900000);
 }
 
-async function ensureUserDeviceTokensTable() {
-  // Backwards-compatible schema upgrades:
-  // - old schema: token PRIMARY KEY, no device_id
-  // - new schema: add device_id + unique(user_id, device_id) for per-device tracking
+async function ensureDeviceTokensTable() {
   await pool.query(
     `CREATE TABLE IF NOT EXISTS user_device_tokens (
-       token TEXT PRIMARY KEY,
+       id BIGSERIAL PRIMARY KEY,
        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-       device_id TEXT,
+       device_token TEXT NOT NULL,
        platform VARCHAR(20) NOT NULL DEFAULT 'android',
        app_version VARCHAR(40) NOT NULL DEFAULT '',
-       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+       device_model VARCHAR(120) NOT NULL DEFAULT '',
+       is_active BOOLEAN NOT NULL DEFAULT true,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+       last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+       UNIQUE (device_token)
      )`,
-  );
-  // Ensure column exists on older deployments.
-  await pool.query(`ALTER TABLE user_device_tokens ADD COLUMN IF NOT EXISTS device_id TEXT`);
-  // Uniqueness per user-device. Postgres UNIQUE indexes allow multiple NULLs,
-  // so legacy rows with NULL device_id remain valid and do not block new clients.
-  await pool.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS user_device_tokens_user_device_uidx
-     ON user_device_tokens (user_id, device_id)`,
   );
 }
 
@@ -397,74 +365,54 @@ router.post('/report-issue', async (req, res) => {
 });
 
 router.post('/device-token', async (req, res) => {
-  const body = req.body || {};
-  const token = normalizeDeviceToken(body.token);
-  const deviceIdRaw = body.deviceId ?? body.device_id;
-  const deviceId = String(deviceIdRaw || '').trim().slice(0, 200);
-  const platform = String(body.platform || 'android').trim().toLowerCase().slice(0, 20) || 'android';
-  const appVersion = String(body.appVersion || '').trim().slice(0, 40);
-  if (!isLikelyValidFcmToken(token)) {
-    console.warn('device_token_register_rejected', {
-      userId: req.userId,
-      platform,
-      len: token.length,
-      hasSpace: /\s/.test(token),
-      starts: token.slice(0, 8),
-      ends: token.slice(-8),
-    });
-    return res.status(400).json({ error: 'Valid device token is required' });
+  const token = String(req.body?.deviceToken || '').trim();
+  const platform = String(req.body?.platform || 'android')
+    .trim()
+    .toLowerCase()
+    .slice(0, 20);
+  const appVersion = String(req.body?.appVersion || '').trim().slice(0, 40);
+  const deviceModel = String(req.body?.deviceModel || '').trim().slice(0, 120);
+  if (!token || token.length < 20) {
+    return res.status(400).json({ error: 'deviceToken is required' });
   }
   try {
-    await ensureUserDeviceTokensTable();
-    if (!deviceId) {
-      // Legacy clients: keep old behavior (upsert by token).
-      await pool.query(
-        `INSERT INTO user_device_tokens (token, user_id, device_id, platform, app_version, updated_at)
-         VALUES ($1, $2::uuid, NULL, $3, $4, now())
-         ON CONFLICT (token)
-         DO UPDATE SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform, app_version = EXCLUDED.app_version, updated_at = now()`,
-        [token, req.userId, platform, appVersion],
-      );
-      console.info('device_token_registered', {
-        userId: req.userId,
-        platform,
-        legacy: true,
-        len: token.length,
-        starts: token.slice(0, 8),
-        ends: token.slice(-8),
-      });
-      return res.json({ ok: true, legacy: true });
-    }
-
-    // Per-device upsert:
-    // - Delete any row already holding this token for a different device/user to avoid PK conflicts
-    // - Upsert by (user_id, device_id) so rotation updates token in-place for that device
+    await ensureDeviceTokensTable();
     await pool.query(
-      `DELETE FROM user_device_tokens
-       WHERE token = $1
-         AND NOT (user_id = $2::uuid AND device_id = $3)`,
-      [token, req.userId, deviceId],
+      `INSERT INTO user_device_tokens (user_id, device_token, platform, app_version, device_model, is_active, updated_at, last_seen_at)
+       VALUES ($1::uuid, $2, $3, $4, $5, true, now(), now())
+       ON CONFLICT (device_token)
+       DO UPDATE
+         SET user_id = EXCLUDED.user_id,
+             platform = EXCLUDED.platform,
+             app_version = EXCLUDED.app_version,
+             device_model = EXCLUDED.device_model,
+             is_active = true,
+             updated_at = now(),
+             last_seen_at = now()`,
+      [req.userId, token, platform || 'android', appVersion, deviceModel],
     );
-    await pool.query(
-      `INSERT INTO user_device_tokens (token, user_id, device_id, platform, app_version, updated_at)
-       VALUES ($1, $2::uuid, $3, $4, $5, now())
-       ON CONFLICT (user_id, device_id)
-       DO UPDATE SET token = EXCLUDED.token, platform = EXCLUDED.platform, app_version = EXCLUDED.app_version, updated_at = now()`,
-      [token, req.userId, deviceId, platform, appVersion],
-    );
-    console.info('device_token_registered', {
-      userId: req.userId,
-      platform,
-      legacy: false,
-      deviceId: deviceId.slice(0, 16),
-      len: token.length,
-      starts: token.slice(0, 8),
-      ends: token.slice(-8),
-    });
     return res.json({ ok: true });
   } catch (e) {
     console.error(e);
-    return res.status(500).json({ error: 'Failed to register device token' });
+    return res.status(500).json({ error: 'Failed to save device token' });
+  }
+});
+
+router.delete('/device-token', async (req, res) => {
+  const token = String(req.body?.deviceToken || '').trim();
+  if (!token) return res.status(400).json({ error: 'deviceToken is required' });
+  try {
+    await ensureDeviceTokensTable();
+    await pool.query(
+      `UPDATE user_device_tokens
+       SET is_active = false, updated_at = now()
+       WHERE user_id = $1::uuid AND device_token = $2`,
+      [req.userId, token],
+    );
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to remove device token' });
   }
 });
 

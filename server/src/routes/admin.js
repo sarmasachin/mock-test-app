@@ -4,7 +4,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { pool } = require('../db');
-const { publishAppNotification } = require('../notificationDispatch');
+const { sendPushToToken } = require('../notificationDispatch');
 
 const router = express.Router();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -631,32 +631,6 @@ async function enqueueNotification(userId, payload) {
     ],
   };
   await setJsonSetting('notificationScheduling', next, userId);
-  console.info('push_target_user_context', {
-    source: 'admin_enqueue_notification',
-    actorUserId: userId || null,
-    target: String(payload.target || 'all'),
-    segmentKey: String(payload.segmentKey || ''),
-    deepLink: String(payload.deepLink || ''),
-  });
-  await publishAppNotification(
-    {
-      title: payload.title,
-      message: payload.message,
-      target: payload.target || 'all',
-      scheduleAt: payload.scheduleAt,
-      deepLink: payload.deepLink || '',
-    },
-    userId || null,
-  ).then((result) => {
-    if (!result || result.ok !== true) {
-      console.warn('publish_app_notification_skipped', {
-        reason: result?.reason || 'unknown',
-        detail: result?.detail || '',
-      });
-    }
-  }).catch((e) => {
-    console.error('publish_app_notification_error', e);
-  });
 }
 
 function shuffleArray(arr) {
@@ -2582,6 +2556,88 @@ router.patch('/publish-scheduling/:id', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to update publish schedule' });
+  }
+});
+
+router.post('/notifications/send', async (req, res) => {
+  const body = req.body || {};
+  const title = String(body.title || '').trim().slice(0, 120);
+  const message = String(body.message || '').trim().slice(0, 500);
+  const target = String(body.target || 'all').trim().toLowerCase();
+  const deepLink = String(body.deepLink || '').trim().slice(0, 120);
+  if (!title || !message) return res.status(400).json({ error: 'title and message are required' });
+  if (!['all', 'new_users', 'active_users'].includes(target)) {
+    return res.status(400).json({ error: 'target must be all, new_users or active_users' });
+  }
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS user_device_tokens (
+         id BIGSERIAL PRIMARY KEY,
+         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         device_token TEXT NOT NULL,
+         platform VARCHAR(20) NOT NULL DEFAULT 'android',
+         app_version VARCHAR(40) NOT NULL DEFAULT '',
+         device_model VARCHAR(120) NOT NULL DEFAULT '',
+         is_active BOOLEAN NOT NULL DEFAULT true,
+         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+         last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+         UNIQUE (device_token)
+       )`,
+    );
+    let whereClause = 'TRUE';
+    if (target === 'new_users') {
+      whereClause = `u.created_at >= now() - interval '7 days'`;
+    } else if (target === 'active_users') {
+      whereClause = `EXISTS (
+        SELECT 1 FROM test_attempts ta
+        WHERE ta.user_id = u.id AND ta.completed_at >= now() - interval '30 days'
+      )`;
+    }
+    const tokenRows = await pool.query(
+      `SELECT udt.id, udt.device_token
+       FROM user_device_tokens udt
+       INNER JOIN users u ON u.id = udt.user_id
+       WHERE udt.is_active = true AND ${whereClause}
+       ORDER BY udt.updated_at DESC
+       LIMIT 10000`,
+    );
+    const rows = tokenRows.rows || [];
+    let sent = 0;
+    let failed = 0;
+    let deactivated = 0;
+    for (const row of rows) {
+      try {
+        const result = await sendPushToToken(row.device_token, { title, message, deepLink });
+        if (result.ok) {
+          sent += 1;
+        } else {
+          failed += 1;
+          if (result.code === 'UNREGISTERED') {
+            await pool.query(
+              `UPDATE user_device_tokens
+               SET is_active = false, updated_at = now()
+               WHERE id = $1`,
+              [row.id],
+            );
+            deactivated += 1;
+          }
+        }
+      } catch (_e) {
+        failed += 1;
+      }
+    }
+    await logAdminAction(req, 'push_notification_manual_send', 'notification', null, {
+      target,
+      sent,
+      failed,
+      deactivated,
+      total: rows.length,
+    });
+    return res.json({ ok: true, total: rows.length, sent, failed, deactivated });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to send push notification' });
   }
 });
 

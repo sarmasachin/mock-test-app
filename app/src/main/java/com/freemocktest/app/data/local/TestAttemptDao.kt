@@ -1,0 +1,22 @@
+package com.freemocktest.app.data.local
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface TestAttemptDao {
+
+    @Insert
+    suspend fun insert(entity: TestAttemptEntity): Long
+
+    @Query("SELECT * FROM test_attempts WHERE user_key = :userKey ORDER BY completed_at_millis DESC")
+    fun observeAllByUser(userKey: String): Flow<List<TestAttemptEntity>>
+
+    @Query("DELETE FROM test_attempts WHERE user_key = :userKey")
+    suspend fun deleteAllByUser(userKey: String)
+
+    @Query("DELETE FROM test_attempts")
+    suspend fun deleteAll()
+}
