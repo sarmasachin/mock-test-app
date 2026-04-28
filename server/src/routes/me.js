@@ -33,6 +33,30 @@ async function ensureDeviceTokensTable() {
   );
 }
 
+async function resolveDeviceTokenStorage() {
+  const colsRes = await pool.query(
+    `SELECT table_name, column_name
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name IN ('user_device_tokens', 'user_devices')`,
+  );
+  const map = {};
+  for (const row of colsRes.rows || []) {
+    const table = String(row.table_name || '');
+    const col = String(row.column_name || '');
+    if (!table || !col) continue;
+    if (!map[table]) map[table] = new Set();
+    map[table].add(col);
+  }
+  if (map.user_device_tokens && map.user_device_tokens.size > 0) {
+    return { table: 'user_device_tokens', cols: map.user_device_tokens };
+  }
+  if (map.user_devices && map.user_devices.size > 0) {
+    return { table: 'user_devices', cols: map.user_devices };
+  }
+  return null;
+}
+
 async function appendInboxItem(settingKey, item, userId) {
   const cur = await pool.query(
     `SELECT setting_value FROM app_settings WHERE setting_key = $1 LIMIT 1`,
@@ -377,19 +401,71 @@ router.post('/device-token', async (req, res) => {
   }
   try {
     await ensureDeviceTokensTable();
+    const storage = await resolveDeviceTokenStorage();
+    if (!storage) return res.status(500).json({ error: 'Device token table not found' });
+    const { table, cols } = storage;
+    const tokenCol = cols.has('device_token')
+      ? 'device_token'
+      : cols.has('token')
+        ? 'token'
+        : cols.has('fcm_token')
+          ? 'fcm_token'
+          : null;
+    if (!tokenCol) return res.status(500).json({ error: 'Device token column not found' });
+    const hasPlatform = cols.has('platform');
+    const hasAppVersion = cols.has('app_version');
+    const hasDeviceModel = cols.has('device_model');
+    const hasActive = cols.has('is_active') || cols.has('active') || cols.has('enabled');
+    const activeCol = cols.has('is_active') ? 'is_active' : cols.has('active') ? 'active' : 'enabled';
+    const hasUpdatedAt = cols.has('updated_at');
+    const hasLastSeenAt = cols.has('last_seen_at');
+    const insertCols = ['user_id', tokenCol];
+    const insertVals = ['$1::uuid', '$2'];
+    const params = [req.userId, token];
+    let p = 3;
+    if (hasPlatform) {
+      insertCols.push('platform');
+      insertVals.push(`$${p}`);
+      params.push(platform || 'android');
+      p += 1;
+    }
+    if (hasAppVersion) {
+      insertCols.push('app_version');
+      insertVals.push(`$${p}`);
+      params.push(appVersion);
+      p += 1;
+    }
+    if (hasDeviceModel) {
+      insertCols.push('device_model');
+      insertVals.push(`$${p}`);
+      params.push(deviceModel);
+      p += 1;
+    }
+    if (hasActive) {
+      insertCols.push(activeCol);
+      insertVals.push('true');
+    }
+    if (hasUpdatedAt) {
+      insertCols.push('updated_at');
+      insertVals.push('now()');
+    }
+    if (hasLastSeenAt) {
+      insertCols.push('last_seen_at');
+      insertVals.push('now()');
+    }
+    const setParts = ['user_id = EXCLUDED.user_id'];
+    if (hasPlatform) setParts.push('platform = EXCLUDED.platform');
+    if (hasAppVersion) setParts.push('app_version = EXCLUDED.app_version');
+    if (hasDeviceModel) setParts.push('device_model = EXCLUDED.device_model');
+    if (hasActive) setParts.push(`${activeCol} = true`);
+    if (hasUpdatedAt) setParts.push('updated_at = now()');
+    if (hasLastSeenAt) setParts.push('last_seen_at = now()');
     await pool.query(
-      `INSERT INTO user_device_tokens (user_id, device_token, platform, app_version, device_model, is_active, updated_at, last_seen_at)
-       VALUES ($1::uuid, $2, $3, $4, $5, true, now(), now())
-       ON CONFLICT (device_token)
-       DO UPDATE
-         SET user_id = EXCLUDED.user_id,
-             platform = EXCLUDED.platform,
-             app_version = EXCLUDED.app_version,
-             device_model = EXCLUDED.device_model,
-             is_active = true,
-             updated_at = now(),
-             last_seen_at = now()`,
-      [req.userId, token, platform || 'android', appVersion, deviceModel],
+      `INSERT INTO ${table} (${insertCols.join(', ')})
+       VALUES (${insertVals.join(', ')})
+       ON CONFLICT (${tokenCol})
+       DO UPDATE SET ${setParts.join(', ')}`,
+      params,
     );
     return res.json({ ok: true });
   } catch (e) {
@@ -403,12 +479,34 @@ router.delete('/device-token', async (req, res) => {
   if (!token) return res.status(400).json({ error: 'deviceToken is required' });
   try {
     await ensureDeviceTokensTable();
-    await pool.query(
-      `UPDATE user_device_tokens
-       SET is_active = false, updated_at = now()
-       WHERE user_id = $1::uuid AND device_token = $2`,
-      [req.userId, token],
-    );
+    const storage = await resolveDeviceTokenStorage();
+    if (!storage) return res.json({ ok: true });
+    const { table, cols } = storage;
+    const tokenCol = cols.has('device_token')
+      ? 'device_token'
+      : cols.has('token')
+        ? 'token'
+        : cols.has('fcm_token')
+          ? 'fcm_token'
+          : null;
+    if (!tokenCol) return res.json({ ok: true });
+    const hasActive = cols.has('is_active') || cols.has('active') || cols.has('enabled');
+    const activeCol = cols.has('is_active') ? 'is_active' : cols.has('active') ? 'active' : 'enabled';
+    if (hasActive) {
+      const updatedExpr = cols.has('updated_at') ? ', updated_at = now()' : '';
+      await pool.query(
+        `UPDATE ${table}
+         SET ${activeCol} = false${updatedExpr}
+         WHERE user_id = $1::uuid AND ${tokenCol} = $2`,
+        [req.userId, token],
+      );
+    } else {
+      await pool.query(
+        `DELETE FROM ${table}
+         WHERE user_id = $1::uuid AND ${tokenCol} = $2`,
+        [req.userId, token],
+      );
+    }
     return res.json({ ok: true });
   } catch (e) {
     console.error(e);
