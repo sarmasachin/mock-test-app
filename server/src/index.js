@@ -32,6 +32,18 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '8mb' }));
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+app.use((req, _res, next) => {
+  if (req.method === 'POST' && String(req.path || '') === '/v1/me/device-token') {
+    const authHeader = String(req.headers.authorization || '');
+    console.info('device_token_request_entry', {
+      method: req.method,
+      path: req.path,
+      hasAuthHeader: authHeader.toLowerCase().startsWith('bearer '),
+      authLen: authHeader.length,
+    });
+  }
+  next();
+});
 app.use(async (req, res, next) => {
   const path = String(req.path || '');
   if (
