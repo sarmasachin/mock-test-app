@@ -1,5 +1,7 @@
 package com.example.mocktestapp.notifications
 
+import android.content.Context
+import android.provider.Settings
 import android.util.Log
 import com.example.mocktestapp.BuildConfig
 import com.example.mocktestapp.data.AuthRepository
@@ -12,6 +14,21 @@ import kotlinx.coroutines.launch
 
 object PushTokenRegistrar {
     private const val TAG = "PushTokenRegistrar"
+    @Volatile
+    private var appContext: Context? = null
+
+    fun init(context: Context) {
+        appContext = context.applicationContext
+    }
+
+    private fun getDeviceIdOrNull(): String? {
+        val ctx = appContext ?: return null
+        val raw = runCatching {
+            Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ANDROID_ID)
+        }.getOrNull()
+        val value = raw?.trim().orEmpty()
+        return value.takeIf { it.isNotBlank() && it.lowercase() != "unknown" }
+    }
 
     fun sync(token: String) {
         val normalized = token.trim()
@@ -24,6 +41,11 @@ object PushTokenRegistrar {
             Log.d(TAG, "Skip device token sync: no auth session yet")
             return
         }
+        val deviceId = getDeviceIdOrNull()
+        if (deviceId.isNullOrBlank()) {
+            // Keep backwards-compatible behavior: old server logic can still upsert by token.
+            Log.w(TAG, "Device id unavailable; registering token without deviceId")
+        }
         CoroutineScope(Dispatchers.IO).launch {
             var done = false
             repeat(3) { attempt ->
@@ -31,6 +53,7 @@ object PushTokenRegistrar {
                     RetrofitProvider.appApi.registerDeviceToken(
                         DeviceTokenRegisterRequest(
                             token = normalized,
+                            deviceId = deviceId,
                             platform = "android",
                             appVersion = BuildConfig.VERSION_NAME,
                         ),

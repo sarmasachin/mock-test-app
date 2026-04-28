@@ -8,6 +8,7 @@ import com.example.mocktestapp.data.TestHistoryRepository
 import com.example.mocktestapp.data.remote.RetrofitProvider
 import com.example.mocktestapp.data.local.MockTestDatabase
 import com.example.mocktestapp.notifications.MockTestNotificationChannels
+import com.example.mocktestapp.notifications.PushTokenRegistrar
 import com.google.firebase.FirebaseApp
 
 class MockTestApp : Application() {
@@ -19,6 +20,7 @@ class MockTestApp : Application() {
         RetrofitProvider.init(this)
         TestHistoryRepository.init(MockTestDatabase.getInstance(this))
         MockTestNotificationChannels.ensureChannels(this)
+        PushTokenRegistrar.init(this)
         try {
             FirebaseApp.initializeApp(this)
         } catch (e: Exception) {

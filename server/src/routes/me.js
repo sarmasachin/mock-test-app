@@ -16,14 +16,26 @@ function pickSixDigit() {
 }
 
 async function ensureUserDeviceTokensTable() {
+  // Backwards-compatible schema upgrades:
+  // - old schema: token PRIMARY KEY, no device_id
+  // - new schema: add device_id + unique(user_id, device_id) for per-device tracking
   await pool.query(
     `CREATE TABLE IF NOT EXISTS user_device_tokens (
        token TEXT PRIMARY KEY,
        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       device_id TEXT,
        platform VARCHAR(20) NOT NULL DEFAULT 'android',
        app_version VARCHAR(40) NOT NULL DEFAULT '',
        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
      )`,
+  );
+  // Ensure column exists on older deployments.
+  await pool.query(`ALTER TABLE user_device_tokens ADD COLUMN IF NOT EXISTS device_id TEXT`);
+  // Uniqueness per user-device. Postgres UNIQUE indexes allow multiple NULLs,
+  // so legacy rows with NULL device_id remain valid and do not block new clients.
+  await pool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS user_device_tokens_user_device_uidx
+     ON user_device_tokens (user_id, device_id)`,
   );
 }
 
@@ -361,6 +373,8 @@ router.post('/report-issue', async (req, res) => {
 router.post('/device-token', async (req, res) => {
   const body = req.body || {};
   const token = String(body.token || '').trim();
+  const deviceIdRaw = body.deviceId ?? body.device_id;
+  const deviceId = String(deviceIdRaw || '').trim().slice(0, 200);
   const platform = String(body.platform || 'android').trim().toLowerCase().slice(0, 20) || 'android';
   const appVersion = String(body.appVersion || '').trim().slice(0, 40);
   if (!token || token.length < 20) {
@@ -368,12 +382,33 @@ router.post('/device-token', async (req, res) => {
   }
   try {
     await ensureUserDeviceTokensTable();
+    if (!deviceId) {
+      // Legacy clients: keep old behavior (upsert by token).
+      await pool.query(
+        `INSERT INTO user_device_tokens (token, user_id, device_id, platform, app_version, updated_at)
+         VALUES ($1, $2::uuid, NULL, $3, $4, now())
+         ON CONFLICT (token)
+         DO UPDATE SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform, app_version = EXCLUDED.app_version, updated_at = now()`,
+        [token, req.userId, platform, appVersion],
+      );
+      return res.json({ ok: true, legacy: true });
+    }
+
+    // Per-device upsert:
+    // - Delete any row already holding this token for a different device/user to avoid PK conflicts
+    // - Upsert by (user_id, device_id) so rotation updates token in-place for that device
     await pool.query(
-      `INSERT INTO user_device_tokens (token, user_id, platform, app_version, updated_at)
-       VALUES ($1, $2::uuid, $3, $4, now())
-       ON CONFLICT (token)
-       DO UPDATE SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform, app_version = EXCLUDED.app_version, updated_at = now()`,
-      [token, req.userId, platform, appVersion],
+      `DELETE FROM user_device_tokens
+       WHERE token = $1
+         AND NOT (user_id = $2::uuid AND device_id = $3)`,
+      [token, req.userId, deviceId],
+    );
+    await pool.query(
+      `INSERT INTO user_device_tokens (token, user_id, device_id, platform, app_version, updated_at)
+       VALUES ($1, $2::uuid, $3, $4, $5, now())
+       ON CONFLICT (user_id, device_id)
+       DO UPDATE SET token = EXCLUDED.token, platform = EXCLUDED.platform, app_version = EXCLUDED.app_version, updated_at = now()`,
+      [token, req.userId, deviceId, platform, appVersion],
     );
     return res.json({ ok: true });
   } catch (e) {

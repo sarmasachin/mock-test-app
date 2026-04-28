@@ -423,6 +423,7 @@ data class PollVoteResponse(
 
 data class DeviceTokenRegisterRequest(
     val token: String,
+    @SerializedName("deviceId") val deviceId: String? = null,
     val platform: String = "android",
     @SerializedName("appVersion") val appVersion: String = "",
 )

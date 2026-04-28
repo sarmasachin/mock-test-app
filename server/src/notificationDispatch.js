@@ -5,14 +5,21 @@ const { pool } = require('./db');
 const MAX_ITEMS = 500;
 
 async function ensureUserDeviceTokensTable() {
+  // Backwards-compatible schema upgrades for per-device tracking.
   await pool.query(
     `CREATE TABLE IF NOT EXISTS user_device_tokens (
        token TEXT PRIMARY KEY,
        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       device_id TEXT,
        platform VARCHAR(20) NOT NULL DEFAULT 'android',
        app_version VARCHAR(40) NOT NULL DEFAULT '',
        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
      )`,
+  );
+  await pool.query(`ALTER TABLE user_device_tokens ADD COLUMN IF NOT EXISTS device_id TEXT`);
+  await pool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS user_device_tokens_user_device_uidx
+     ON user_device_tokens (user_id, device_id)`,
   );
 }
 
@@ -108,6 +115,33 @@ async function sendFcmBroadcast(payload) {
   if (!resp.ok) {
     const txt = await resp.text().catch(() => '');
     return { ok: false, reason: `fcm_http_${resp.status}`, detail: txt.slice(0, 500) };
+  }
+  // Cleanup invalid/stale tokens based on FCM response.
+  const json = await resp.json().catch(() => null);
+  if (json && Array.isArray(json.results)) {
+    const invalid = [];
+    for (let i = 0; i < json.results.length; i += 1) {
+      const r = json.results[i] || {};
+      const err = String(r.error || '');
+      if (err === 'NotRegistered' || err === 'InvalidRegistration') {
+        const t = tokens[i];
+        if (t) invalid.push(t);
+      }
+    }
+    if (invalid.length) {
+      try {
+        await pool.query(`DELETE FROM user_device_tokens WHERE token = ANY($1::text[])`, [invalid]);
+      } catch (e) {
+        // Non-fatal: cleanup best-effort.
+        console.warn('token_cleanup_failed', e?.message || e);
+      }
+    }
+  }
+  // Optional: remove tokens that haven't been updated in 30 days.
+  try {
+    await pool.query(`DELETE FROM user_device_tokens WHERE updated_at < now() - interval '30 days'`);
+  } catch (_e) {
+    // Ignore if table doesn't exist yet or DB doesn't support interval (very unlikely on Postgres).
   }
   return { ok: true };
 }
