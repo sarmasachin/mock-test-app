@@ -248,6 +248,14 @@ async function processPublishSchedules() {
         await pool.query(`UPDATE news_articles SET is_published = true WHERE id = $1::uuid`, [String(item.entityId || '')]);
       }
       if (item.notifyOnPublish) {
+        console.info('push_target_user_context', {
+          source: 'publish_scheduler',
+          actorUserId: null,
+          entityType: String(item.entityType || ''),
+          entityId: String(item.entityId || ''),
+          target: 'all',
+          deepLink: item.entityType === 'test' ? 'main/tests' : 'main/news',
+        });
         await publishAppNotification(
           {
             title: item.entityType === 'test' ? 'Test Published' : 'News Published',

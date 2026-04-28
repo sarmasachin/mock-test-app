@@ -631,6 +631,13 @@ async function enqueueNotification(userId, payload) {
     ],
   };
   await setJsonSetting('notificationScheduling', next, userId);
+  console.info('push_target_user_context', {
+    source: 'admin_enqueue_notification',
+    actorUserId: userId || null,
+    target: String(payload.target || 'all'),
+    segmentKey: String(payload.segmentKey || ''),
+    deepLink: String(payload.deepLink || ''),
+  });
   await publishAppNotification(
     {
       title: payload.title,
