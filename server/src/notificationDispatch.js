@@ -5,6 +5,30 @@ const { GoogleAuth } = require('google-auth-library');
 
 const MAX_ITEMS = 500;
 
+function normalizeDeviceToken(raw) {
+  let value = String(raw || '').trim();
+  for (let i = 0; i < 3; i += 1) {
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  return value;
+}
+
+function isLikelyValidFcmToken(token) {
+  return (
+    token.length >= 20 &&
+    token.length <= 4096 &&
+    !/\s/.test(token) &&
+    /^[A-Za-z0-9:_\-.]+$/.test(token)
+  );
+}
+
 async function ensureUserDeviceTokensTable() {
   // Backwards-compatible schema upgrades for per-device tracking.
   await pool.query(
@@ -91,7 +115,26 @@ async function sendFcmBroadcast(payload) {
     if (e && e.code === '42P01') return { ok: false, reason: 'user_device_tokens missing' };
     throw e;
   }
-  const tokens = rows.map((x) => String(x.token || '').trim()).filter(Boolean);
+  const malformed = [];
+  const tokens = rows
+    .map((x) => ({
+      raw: String(x.token || ''),
+      normalized: normalizeDeviceToken(x.token),
+    }))
+    .filter(({ normalized, raw }) => {
+      const ok = isLikelyValidFcmToken(normalized);
+      if (!ok && raw) malformed.push(raw);
+      return ok;
+    })
+    .map(({ normalized }) => normalized);
+  if (malformed.length) {
+    try {
+      await pool.query(`DELETE FROM user_device_tokens WHERE token = ANY($1::text[])`, [malformed]);
+      console.info('push_malformed_token_cleanup', { deleted: malformed.length });
+    } catch (e) {
+      console.warn('malformed_token_cleanup_failed', e?.message || e);
+    }
+  }
   if (!tokens.length) return { ok: false, reason: 'no tokens' };
 
   // --- FCM HTTP v1 path ---
@@ -210,6 +253,14 @@ async function sendFcmBroadcast(payload) {
     } catch (_e) {}
 
     if (sent <= 0) {
+      console.warn('push_dispatch_summary', {
+        ok: false,
+        totalTokens: tokens.length,
+        sent,
+        invalidDeleted: invalid.length,
+        malformedDeleted: malformed.length,
+        firstFailureStatus: firstFailure?.status || null,
+      });
       return {
         ok: false,
         reason: 'fcm_v1_send_failed',
@@ -218,6 +269,13 @@ async function sendFcmBroadcast(payload) {
         invalidDeleted: invalid.length,
       };
     }
+    console.info('push_dispatch_summary', {
+      ok: true,
+      totalTokens: tokens.length,
+      sent,
+      invalidDeleted: invalid.length,
+      malformedDeleted: malformed.length,
+    });
     return { ok: true, sent, invalidDeleted: invalid.length };
   }
 

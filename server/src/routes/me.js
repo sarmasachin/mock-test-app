@@ -11,6 +11,32 @@ const router = express.Router();
 const EMAIL_VERIFY_OTP_MINUTES = () =>
   parseInt(process.env.EMAIL_VERIFY_OTP_MINUTES || '15', 10);
 
+function normalizeDeviceToken(raw) {
+  let value = String(raw || '').trim();
+  // Some clients accidentally wrap token as a JSON string literal, e.g. "\"abc...\"".
+  for (let i = 0; i < 3; i += 1) {
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  return value;
+}
+
+function isLikelyValidFcmToken(token) {
+  // FCM registration tokens are typically long and contain URL-safe-ish characters.
+  return (
+    token.length >= 20 &&
+    token.length <= 4096 &&
+    !/\s/.test(token) &&
+    /^[A-Za-z0-9:_\-.]+$/.test(token)
+  );
+}
+
 function pickSixDigit() {
   return 100000 + Math.floor(Math.random() * 900000);
 }
@@ -372,12 +398,20 @@ router.post('/report-issue', async (req, res) => {
 
 router.post('/device-token', async (req, res) => {
   const body = req.body || {};
-  const token = String(body.token || '').trim();
+  const token = normalizeDeviceToken(body.token);
   const deviceIdRaw = body.deviceId ?? body.device_id;
   const deviceId = String(deviceIdRaw || '').trim().slice(0, 200);
   const platform = String(body.platform || 'android').trim().toLowerCase().slice(0, 20) || 'android';
   const appVersion = String(body.appVersion || '').trim().slice(0, 40);
-  if (!token || token.length < 20) {
+  if (!isLikelyValidFcmToken(token)) {
+    console.warn('device_token_register_rejected', {
+      userId: req.userId,
+      platform,
+      len: token.length,
+      hasSpace: /\s/.test(token),
+      starts: token.slice(0, 8),
+      ends: token.slice(-8),
+    });
     return res.status(400).json({ error: 'Valid device token is required' });
   }
   try {
@@ -391,6 +425,14 @@ router.post('/device-token', async (req, res) => {
          DO UPDATE SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform, app_version = EXCLUDED.app_version, updated_at = now()`,
         [token, req.userId, platform, appVersion],
       );
+      console.info('device_token_registered', {
+        userId: req.userId,
+        platform,
+        legacy: true,
+        len: token.length,
+        starts: token.slice(0, 8),
+        ends: token.slice(-8),
+      });
       return res.json({ ok: true, legacy: true });
     }
 
@@ -410,6 +452,15 @@ router.post('/device-token', async (req, res) => {
        DO UPDATE SET token = EXCLUDED.token, platform = EXCLUDED.platform, app_version = EXCLUDED.app_version, updated_at = now()`,
       [token, req.userId, deviceId, platform, appVersion],
     );
+    console.info('device_token_registered', {
+      userId: req.userId,
+      platform,
+      legacy: false,
+      deviceId: deviceId.slice(0, 16),
+      len: token.length,
+      starts: token.slice(0, 8),
+      ends: token.slice(-8),
+    });
     return res.json({ ok: true });
   } catch (e) {
     console.error(e);
