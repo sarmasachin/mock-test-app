@@ -347,6 +347,32 @@ object ContentRepository {
         homeContentMemory?.let { return@withContext it }
         try {
             val content = RetrofitProvider.publicApi.getHomeContent().content ?: return@withContext null
+            val sanitizedSections = content.sections
+                .map { section ->
+                    HomeSectionRemote(
+                        id = section.id.trim(),
+                        title = section.title.trim(),
+                        items = section.items.map { it.trim() }.filter { it.isNotBlank() },
+                    )
+                }
+                .filter { it.title.isNotBlank() && it.items.isNotEmpty() }
+            val sanitizedQuickActionSections = content.quickActionSections
+                .map { section ->
+                    HomeQuickActionSectionRemote(
+                        id = section.id.trim(),
+                        title = section.title.trim(),
+                        items = section.items
+                            .map { action ->
+                                HomeQuickActionItemRemote(
+                                    title = action.title.trim(),
+                                    actionKey = action.actionKey.trim(),
+                                    iconKey = action.iconKey?.trim()?.ifBlank { null },
+                                )
+                            }
+                            .filter { it.title.isNotBlank() && it.actionKey.isNotBlank() },
+                    )
+                }
+                .filter { it.title.isNotBlank() && it.items.isNotEmpty() }
             HomeContentRemote(
                 welcomeText = content.welcomeText,
                 quickActionsTitle = content.quickActionsTitle,
@@ -355,29 +381,11 @@ object ContentRepository {
                 promoWidgetHtml = content.promoWidgetHtml,
                 studentUpdateWidgetEnabled = content.studentUpdateWidgetEnabled || content.billWidgetEnabledLegacy,
                 studentUpdateWidgetHtml = content.studentUpdateWidgetHtml ?: content.billWidgetHtmlLegacy,
-                newsCategoryMenu = content.newsCategoryMenu.filter { it.isNotBlank() },
-                jobCategoryMenu = content.jobCategoryMenu.filter { it.isNotBlank() },
-                examCategoryMenu = content.examCategoryMenu.filter { it.isNotBlank() },
-                sections = content.sections.map {
-                    HomeSectionRemote(
-                        id = it.id,
-                        title = it.title,
-                        items = it.items,
-                    )
-                },
-                quickActionSections = content.quickActionSections.map {
-                    HomeQuickActionSectionRemote(
-                        id = it.id,
-                        title = it.title,
-                        items = it.items.map { action ->
-                            HomeQuickActionItemRemote(
-                                title = action.title,
-                                actionKey = action.actionKey,
-                                iconKey = action.iconKey,
-                            )
-                        },
-                    )
-                },
+                newsCategoryMenu = content.newsCategoryMenu.map { it.trim() }.filter { it.isNotBlank() },
+                jobCategoryMenu = content.jobCategoryMenu.map { it.trim() }.filter { it.isNotBlank() },
+                examCategoryMenu = content.examCategoryMenu.map { it.trim() }.filter { it.isNotBlank() },
+                sections = sanitizedSections,
+                quickActionSections = sanitizedQuickActionSections,
                 banners = content.banners.filter { it.enabled && it.imageUrl.isNotBlank() }.map { it.imageUrl },
                 newsSlides = content.newsSlides
                     .filter { it.enabled && it.articleId.isNotBlank() && it.imageUrl.isNotBlank() }

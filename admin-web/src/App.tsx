@@ -58,6 +58,7 @@ type TestAdvancedConfig = {
   fullscreenRequired: boolean;
   copyPasteBlocked: boolean;
   notifyOnPublish: boolean;
+  sendEmailOnPublish: boolean;
 };
 
 type TestItem = {
@@ -144,6 +145,10 @@ type AppSettings = {
   maintenanceMode: boolean;
   maintenanceMessage: string;
   registrationOpen: boolean;
+  resultUnlockEmailSettings?: {
+    enabled: boolean;
+    delayHours: number;
+  };
 };
 type ProfileMenuItem = {
   id: string;
@@ -807,6 +812,7 @@ function TestsTab({
   const [fullscreenRequired, setFullscreenRequired] = useState(false);
   const [copyPasteBlocked, setCopyPasteBlocked] = useState(false);
   const [notifyOnPublish, setNotifyOnPublish] = useState(true);
+  const [sendEmailOnPublish, setSendEmailOnPublish] = useState(false);
   const [opsTestId, setOpsTestId] = useState('');
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState('');
@@ -842,6 +848,7 @@ function TestsTab({
   const [testsPage, setTestsPage] = useState(1);
   const [questionsPage, setQuestionsPage] = useState(1);
   const TEST_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+  const SLOT_LABEL_RE = /^(0[1-9]|1[0-2]):([0-5][0-9])\s?(AM|PM)$/i;
 
   function normalizeAndValidateTestPayload(input: {
     title: string;
@@ -879,6 +886,7 @@ function TestsTab({
     fullscreenRequired?: boolean;
     copyPasteBlocked?: boolean;
     notifyOnPublish?: boolean;
+    sendEmailOnPublish?: boolean;
     testKind: string;
     isPublished: boolean;
     dynamicFluctuationOnPublish: boolean;
@@ -944,6 +952,12 @@ function TestsTab({
     }
     if (examDateValue && Number.isNaN(Date.parse(`${examDateValue}T00:00:00Z`))) {
       return { error: 'examDate must be a valid date (YYYY-MM-DD)' };
+    }
+    if (slotLabelValue && !SLOT_LABEL_RE.test(slotLabelValue)) {
+      return { error: 'slotLabel must be in HH:MM AM/PM format (example: 09:30 AM)' };
+    }
+    if (examDateValue && !slotLabelValue) {
+      return { error: 'slotLabel is required when examDate is provided (use HH:MM AM/PM)' };
     }
     if (validUntilValue && Number.isNaN(Date.parse(`${validUntilValue}T00:00:00Z`))) {
       return { error: 'validUntil must be a valid date (YYYY-MM-DD)' };
@@ -1028,6 +1042,7 @@ function TestsTab({
           fullscreenRequired: input.fullscreenRequired === true,
           copyPasteBlocked: input.copyPasteBlocked === true,
           notifyOnPublish: input.notifyOnPublish !== false,
+          sendEmailOnPublish: input.sendEmailOnPublish === true,
         },
         testKind: testKindValue as TestKind,
         isPublished: input.isPublished !== false,
@@ -1111,6 +1126,7 @@ function TestsTab({
                     fullscreenRequired: normalizeBoolean(x.advanced_config.fullscreenRequired, false),
                     copyPasteBlocked: normalizeBoolean(x.advanced_config.copyPasteBlocked, false),
                     notifyOnPublish: normalizeBoolean(x.advanced_config.notifyOnPublish, true),
+                    sendEmailOnPublish: normalizeBoolean(x.advanced_config.sendEmailOnPublish, false),
                   }
                 : null,
           }))
@@ -1161,6 +1177,7 @@ function TestsTab({
       fullscreenRequired,
       copyPasteBlocked,
       notifyOnPublish,
+      sendEmailOnPublish,
       testKind: kind,
       isPublished,
       dynamicFluctuationOnPublish,
@@ -1214,6 +1231,7 @@ function TestsTab({
       setFullscreenRequired(false);
       setCopyPasteBlocked(false);
       setNotifyOnPublish(true);
+      setSendEmailOnPublish(false);
       await load();
     } catch (err: any) {
       setSuccess('');
@@ -1265,6 +1283,7 @@ function TestsTab({
         fullscreenRequired: normalizeBoolean(current.advanced_config?.fullscreenRequired, false),
         copyPasteBlocked: normalizeBoolean(current.advanced_config?.copyPasteBlocked, false),
         notifyOnPublish: normalizeBoolean(current.advanced_config?.notifyOnPublish, true),
+        sendEmailOnPublish: normalizeBoolean(current.advanced_config?.sendEmailOnPublish, false),
         testKind: current.test_kind,
         isPublished: current.is_published,
         dynamicFluctuationOnPublish: normalizeBoolean(current.dynamic_fluctuation_on_publish, true),
@@ -1570,7 +1589,7 @@ function TestsTab({
                   <span>Valid Until</span>
                   <input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} />
                 </label>
-                <input value={slotLabel} onChange={(e) => setSlotLabel(e.target.value)} placeholder="Slot label (e.g. Morning)" />
+                <input value={slotLabel} onChange={(e) => setSlotLabel(e.target.value)} placeholder="Slot label (e.g. 09:30 AM)" />
                 <input type="number" value={durationMinutes} onChange={(e) => setDurationMinutes(e.target.value)} placeholder="Duration (minutes)" />
                 <input type="number" value={questionCount} onChange={(e) => setQuestionCount(e.target.value)} placeholder="Question count" />
                 <input type="number" value={totalMarks} onChange={(e) => setTotalMarks(e.target.value)} placeholder="Total marks" />
@@ -1662,6 +1681,10 @@ function TestsTab({
                   <label className="check-wrap">
                     <input type="checkbox" checked={notifyOnPublish} onChange={(e) => setNotifyOnPublish(e.target.checked)} />
                     notify on publish
+                  </label>
+                  <label className="check-wrap">
+                    <input type="checkbox" checked={sendEmailOnPublish} onChange={(e) => setSendEmailOnPublish(e.target.checked)} />
+                    send email on publish
                   </label>
                 </div>
               </div>
@@ -2326,6 +2349,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
   const [correctIndex, setCorrectIndex] = useState('0');
   const [factText, setFactText] = useState('');
   const [isPublished, setIsPublished] = useState(true);
+  const [notifyUsers, setNotifyUsers] = useState(true);
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState('');
   const [error, setError] = useState('');
@@ -2377,6 +2401,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
         correctIndex: Number(correctIndex),
         factText,
         isPublished,
+        notifyUsers,
       });
       setQuestionPrompt('');
       setOptionA('');
@@ -2386,6 +2411,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
       setCorrectIndex('0');
       setFactText('');
       setIsPublished(true);
+      setNotifyUsers(true);
       await load();
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Failed to create daily digest item');
@@ -2403,6 +2429,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
         correctIndex: item.correct_index,
         factText: item.fact_text,
         isPublished: item.is_published,
+        notifyUsers,
       });
       setEditingId('');
       await load();
@@ -2449,6 +2476,10 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
         <label className="check-wrap">
           <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
           published
+        </label>
+        <label className="check-wrap">
+          <input type="checkbox" checked={notifyUsers} onChange={(e) => setNotifyUsers(e.target.checked)} />
+          send auto notification
         </label>
         <div className="inline-form">
           <button type="submit">Add Digest Item</button>
@@ -2590,6 +2621,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
                     correctIndex: item.correct_index,
                     factText: item.fact_text,
                     isPublished: !item.is_published,
+                    notifyUsers,
                   });
                   await load();
                 } catch (err: any) {
@@ -2616,6 +2648,7 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
   const [correctIndex, setCorrectIndex] = useState('0');
   const [explanation, setExplanation] = useState('');
   const [isPublished, setIsPublished] = useState(true);
+  const [notifyUsers, setNotifyUsers] = useState(true);
   const [editingId, setEditingId] = useState('');
   const [error, setError] = useState('');
 
@@ -2642,6 +2675,7 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
         correctIndex: Number(correctIndex),
         explanation,
         isPublished,
+        notifyUsers,
       });
       setQuestionPrompt('');
       setOptionA('');
@@ -2651,6 +2685,7 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
       setCorrectIndex('0');
       setExplanation('');
       setIsPublished(true);
+      setNotifyUsers(true);
       await load();
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Failed to create daily quiz item');
@@ -2669,6 +2704,7 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
         correctIndex: item.correctIndex,
         explanation: item.explanation,
         isPublished: item.isPublished,
+        notifyUsers,
       });
       setEditingId('');
       await load();
@@ -2709,6 +2745,10 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
         <label className="check-wrap">
           <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
           published
+        </label>
+        <label className="check-wrap">
+          <input type="checkbox" checked={notifyUsers} onChange={(e) => setNotifyUsers(e.target.checked)} />
+          send auto notification
         </label>
         <div className="inline-form">
           <button type="submit">Add Daily Quiz Item</button>
@@ -2824,6 +2864,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   const [body, setBody] = useState('');
   const [linkUrl, setLinkUrl] = useState('');
   const [isPublished, setIsPublished] = useState(true);
+  const [sendEmail, setSendEmail] = useState(false);
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState('');
   const [error, setError] = useState('');
@@ -2853,6 +2894,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
         body,
         linkUrl,
         isPublished,
+        sendEmail,
       });
       setHeadline('');
       setSummary('');
@@ -2860,6 +2902,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
       setBody('');
       setLinkUrl('');
       setIsPublished(true);
+      setSendEmail(false);
       setShowArticleForm(false);
       await load();
     } catch (err: any) {
@@ -2878,6 +2921,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
         body: item.body,
         linkUrl: item.link_url,
         isPublished: item.is_published,
+        sendEmail,
       });
       setEditingId('');
       await load();
@@ -2962,6 +3006,10 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
               <label className="check-wrap">
                 <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
                 published
+              </label>
+              <label className="check-wrap">
+                <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
+                send email
               </label>
               <button type="submit">Add Article</button>
             </div>
@@ -3674,10 +3722,37 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   const [uploadingBanner, setUploadingBanner] = useState(false);
   const autoSaveReadyRef = useRef(false);
 
+  function validateHomeContentDraft(currentSettings: HomeContentSettings): string | null {
+    const invalidSection = currentSettings.sections.find(
+      (section) =>
+        !String(section.title || '').trim() ||
+        !Array.isArray(section.items) ||
+        section.items.map((item) => String(item || '').trim()).filter(Boolean).length === 0,
+    );
+    if (invalidSection) {
+      return 'Each category section must have a title and at least one item';
+    }
+    const invalidQuickActionSection = currentSettings.quickActionSections.find(
+      (section) =>
+        !String(section.title || '').trim() ||
+        !Array.isArray(section.items) ||
+        section.items.filter((item) => String(item?.title || '').trim() && String(item?.actionKey || '').trim()).length === 0,
+    );
+    if (invalidQuickActionSection) {
+      return 'Each quick action section must have a title and at least one valid action';
+    }
+    return null;
+  }
+
   async function persistHomeContent(currentSettings: HomeContentSettings, opts?: { silent?: boolean }) {
     const silent = opts?.silent === true;
     try {
       if (!silent) setError('');
+      const draftValidationError = validateHomeContentDraft(currentSettings);
+      if (draftValidationError) {
+        if (!silent) setError(draftValidationError);
+        return;
+      }
       const normalizedSections = currentSettings.sections
         .map((section, idx) => ({
           id: String(section.id || `section-${idx + 1}`),
@@ -3918,6 +3993,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
       return;
     }
     if (!settings.autoSaveEnabled) return;
+    if (validateHomeContentDraft(settings)) return;
     const timer = window.setTimeout(() => {
       void persistHomeContent(settings, { silent: true });
     }, 700);
@@ -5012,6 +5088,7 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
     maintenanceMode: false,
     maintenanceMessage: '',
     registrationOpen: true,
+    resultUnlockEmailSettings: { enabled: true, delayHours: 3 },
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -5070,6 +5147,40 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
           />
           Registration open
         </label>
+        <label className="check-wrap">
+          <input
+            type="checkbox"
+            checked={settings.resultUnlockEmailSettings?.enabled !== false}
+            onChange={(e) =>
+              setSettings((p) => ({
+                ...p,
+                resultUnlockEmailSettings: {
+                  enabled: e.target.checked,
+                  delayHours: Number(p.resultUnlockEmailSettings?.delayHours ?? 3),
+                },
+              }))
+            }
+            disabled={!isSuperAdmin}
+          />
+          Result unlock emails enabled
+        </label>
+        <input
+          type="number"
+          min={0}
+          max={168}
+          value={String(settings.resultUnlockEmailSettings?.delayHours ?? 3)}
+          onChange={(e) =>
+            setSettings((p) => ({
+              ...p,
+              resultUnlockEmailSettings: {
+                enabled: p.resultUnlockEmailSettings?.enabled !== false,
+                delayHours: Number(e.target.value || '0'),
+              },
+            }))
+          }
+          placeholder="Result unlock delay (hours)"
+          disabled={!isSuperAdmin || settings.resultUnlockEmailSettings?.enabled === false}
+        />
         <input
           value={settings.maintenanceMessage}
           onChange={(e) => setSettings((p) => ({ ...p, maintenanceMessage: e.target.value }))}

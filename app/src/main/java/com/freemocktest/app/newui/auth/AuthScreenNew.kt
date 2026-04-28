@@ -25,10 +25,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,7 +56,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
 import com.freemocktest.app.BuildConfig
+import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.data.needsProfileCompletion
 import com.freemocktest.app.data.auth.GoogleSignInHelper
@@ -72,6 +82,8 @@ private tailrec fun Context.findComponentActivity(): ComponentActivity? =
         else -> null
     }
 
+private enum class PendingAuthRoute { None, Home, Profile }
+
 @Composable
 fun AuthScreenNew(
     modifier: Modifier = Modifier,
@@ -84,6 +96,29 @@ fun AuthScreenNew(
     val snackbar = rememberAppSnackbarHostStateNew()
     val scope = rememberCoroutineScope()
     val p = mockTestPalette()
+    val profile by AppPreferencesRepository.editableProfile.collectAsState(
+        initial = AppPreferencesRepository.EditableProfileState("", "", "", ""),
+    )
+    val emailVerified by AppPreferencesRepository.emailVerified.collectAsState(initial = false)
+    var showEmailVerifyPopup by remember { mutableStateOf(false) }
+    var pendingRoute by remember { mutableStateOf(PendingAuthRoute.None) }
+
+    fun continuePostAuth(route: PendingAuthRoute) {
+        when (route) {
+            PendingAuthRoute.Home -> onAuthSuccess()
+            PendingAuthRoute.Profile -> onProfileIncomplete()
+            PendingAuthRoute.None -> Unit
+        }
+    }
+
+    fun handlePostAuth(route: PendingAuthRoute) {
+        if (emailVerified) {
+            continuePostAuth(route)
+        } else {
+            pendingRoute = route
+            showEmailVerifyPopup = true
+        }
+    }
 
     val bg = Brush.linearGradient(
         colors = p.gradientColors(),
@@ -104,8 +139,8 @@ fun AuthScreenNew(
             AuthCard(
                 mode = mode,
                 onModeChange = { mode = it },
-                onAuthSuccess = onAuthSuccess,
-                onProfileIncomplete = onProfileIncomplete,
+                onAuthSuccess = { handlePostAuth(PendingAuthRoute.Home) },
+                onProfileIncomplete = { handlePostAuth(PendingAuthRoute.Profile) },
                 onForgotPassword = onForgotPassword,
                 onOpenTerms = onOpenTerms,
                 onSuccess = { msg -> scope.launch { snackbar.showSuccess(msg) } },
@@ -120,6 +155,214 @@ fun AuthScreenNew(
                 .statusBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         )
+    }
+    if (showEmailVerifyPopup) {
+        EmailVerificationPopupModal(
+            initialEmail = profile.email,
+            onDismiss = {
+                showEmailVerifyPopup = false
+                continuePostAuth(pendingRoute)
+                pendingRoute = PendingAuthRoute.None
+            },
+            onVerified = {
+                showEmailVerifyPopup = false
+                continuePostAuth(pendingRoute)
+                pendingRoute = PendingAuthRoute.None
+            },
+        )
+    }
+}
+
+@Composable
+private fun EmailVerificationPopupModal(
+    initialEmail: String,
+    onDismiss: () -> Unit,
+    onVerified: () -> Unit,
+) {
+    val p = mockTestPalette()
+    val scope = rememberCoroutineScope()
+    var email by remember(initialEmail) { mutableStateOf(initialEmail.trim()) }
+    var otp by remember { mutableStateOf("") }
+    var otpRequested by remember { mutableStateOf(false) }
+    var resendSeconds by remember { mutableStateOf(0) }
+    var busy by remember { mutableStateOf(false) }
+    var verifyBusy by remember { mutableStateOf(false) }
+    var inlineError by remember { mutableStateOf("") }
+    var inlineSuccess by remember { mutableStateOf("") }
+
+    LaunchedEffect(resendSeconds, otpRequested) {
+        if (otpRequested && resendSeconds > 0) {
+            delay(1000)
+            resendSeconds -= 1
+        }
+    }
+
+    fun sendOtp() {
+        val normalizedEmail = email.trim().lowercase()
+        if (!isValidEmail(normalizedEmail)) {
+            inlineSuccess = ""
+            inlineError = "Enter a valid email"
+            return
+        }
+        scope.launch {
+            busy = true
+            inlineError = ""
+            inlineSuccess = ""
+            val updateResult = AuthRepository.patchProfileRemote(email = normalizedEmail)
+            updateResult.fold(
+                onSuccess = {
+                    AuthRepository.requestEmailVerificationOtp().fold(
+                        onSuccess = {
+                            otpRequested = true
+                            resendSeconds = 30
+                            inlineSuccess = "OTP sent to your email"
+                            inlineError = ""
+                        },
+                        onFailure = { e ->
+                            inlineSuccess = ""
+                            inlineError = networkAwareError(e, "Could not send OTP")
+                        },
+                    )
+                },
+                onFailure = { e ->
+                    inlineSuccess = ""
+                    inlineError = networkAwareError(e, "Could not update email")
+                },
+            )
+            busy = false
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = p.surface),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Verify your email",
+                        color = p.textPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = "Close",
+                            tint = p.textSecondary,
+                        )
+                    }
+                }
+                Text(
+                    text = "Secure your account. You can edit email before sending OTP.",
+                    color = p.textSecondary,
+                    fontSize = 13.sp,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = {
+                        email = it.trim()
+                        inlineError = ""
+                    },
+                    label = { Text("Email") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !busy && !verifyBusy,
+                )
+                if (otpRequested) {
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = otp,
+                        onValueChange = {
+                            otp = it.filter(Char::isDigit).take(6)
+                            inlineError = ""
+                        },
+                        label = { Text("6-digit OTP") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !busy && !verifyBusy,
+                    )
+                }
+                if (inlineError.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(inlineError, color = p.error, fontSize = 12.sp)
+                }
+                if (inlineSuccess.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(inlineSuccess, color = Color(0xFF16A34A), fontSize = 12.sp)
+                }
+                Spacer(Modifier.height(14.dp))
+                if (!otpRequested) {
+                    Button(
+                        onClick = { sendOtp() },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !busy && !verifyBusy,
+                        colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+                    ) {
+                        Text(if (busy) "Sending..." else "Send OTP")
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Button(
+                            onClick = {
+                                if (otp.length != 6) {
+                                    inlineSuccess = ""
+                                    inlineError = "Enter valid 6-digit OTP"
+                                    return@Button
+                                }
+                                scope.launch {
+                                    verifyBusy = true
+                                    inlineError = ""
+                                    AuthRepository.confirmEmailVerification(otp).fold(
+                                        onSuccess = {
+                                            inlineSuccess = "Email verified successfully"
+                                            inlineError = ""
+                                            delay(500)
+                                            onVerified()
+                                        },
+                                        onFailure = { e ->
+                                            inlineSuccess = ""
+                                            inlineError = networkAwareError(e, "OTP verification failed")
+                                        },
+                                    )
+                                    verifyBusy = false
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            enabled = !busy && !verifyBusy,
+                            colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+                        ) {
+                            Text(if (verifyBusy) "Verifying..." else "Verify OTP")
+                        }
+                        Button(
+                            onClick = { sendOtp() },
+                            modifier = Modifier.weight(1f),
+                            enabled = resendSeconds == 0 && !busy && !verifyBusy,
+                            colors = ButtonDefaults.buttonColors(containerColor = p.primaryButton),
+                        ) {
+                            Text(
+                                if (resendSeconds > 0) "Resend ${resendSeconds}s" else if (busy) "Sending..." else "Resend OTP",
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

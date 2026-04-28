@@ -5,6 +5,59 @@ const { pool } = require('../db');
 
 const router = express.Router();
 
+function sanitizeHomeContent(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const sectionsRaw = Array.isArray(raw.sections) ? raw.sections : [];
+  const quickSectionsRaw = Array.isArray(raw.quickActionSections) ? raw.quickActionSections : [];
+  const sections = sectionsRaw
+    .map((section, idx) => {
+      const s = section || {};
+      const title = String(s.title || '').trim();
+      const items = (Array.isArray(s.items) ? s.items : [])
+        .map((x) => String(x || '').trim())
+        .filter(Boolean)
+        .slice(0, 12);
+      return {
+        id: String(s.id || `section-${idx + 1}`).trim(),
+        title,
+        items,
+      };
+    })
+    .filter((s) => s.title && s.items.length > 0);
+  const quickActionSections = quickSectionsRaw
+    .map((section, idx) => {
+      const s = section || {};
+      const title = String(s.title || '').trim();
+      const items = (Array.isArray(s.items) ? s.items : [])
+        .map((item) => ({
+          title: String((item || {}).title || '').trim(),
+          actionKey: String((item || {}).actionKey || '').trim(),
+          iconKey: String((item || {}).iconKey || '').trim(),
+        }))
+        .filter((x) => x.title && x.actionKey);
+      return {
+        id: String(s.id || `qa-section-${idx + 1}`).trim(),
+        title,
+        items,
+      };
+    })
+    .filter((s) => s.title && s.items.length > 0);
+  return {
+    ...raw,
+    sections,
+    quickActionSections,
+    newsCategoryMenu: (Array.isArray(raw.newsCategoryMenu) ? raw.newsCategoryMenu : [])
+      .map((x) => String(x || '').trim())
+      .filter(Boolean),
+    jobCategoryMenu: (Array.isArray(raw.jobCategoryMenu) ? raw.jobCategoryMenu : [])
+      .map((x) => String(x || '').trim())
+      .filter(Boolean),
+    examCategoryMenu: (Array.isArray(raw.examCategoryMenu) ? raw.examCategoryMenu : [])
+      .map((x) => String(x || '').trim())
+      .filter(Boolean),
+  };
+}
+
 router.get('/content', async (_req, res) => {
   try {
     const { rows } = await pool.query(
@@ -72,7 +125,7 @@ router.get('/content', async (_req, res) => {
       parsedPushNotificationSettings = { items: [] };
     }
     return res.json({
-      content: parsedHome,
+      content: sanitizeHomeContent(parsedHome),
       submitApplicationContent: parsedSubmit,
       instructionContent: parsedInstruction,
       profileMenuItems: parsedProfileMenuItems,

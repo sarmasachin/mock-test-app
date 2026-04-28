@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { pool } = require('../db');
 const { sendPushToToken } = require('../notificationDispatch');
+const { isMailConfigured, sendAdminContentAlertEmail, sendSupportJourneyEmail } = require('../mail');
 
 const router = express.Router();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -55,6 +56,7 @@ const SETTINGS_KEYS = [
   'privacyPolicyContent',
   'termsOfUseContent',
   'testAdvancedConfigs',
+  'resultUnlockEmailSettings',
 ];
 
 function normalizeProfileMenuItems(value) {
@@ -512,6 +514,8 @@ function normalizeSupportInbox(value) {
       const status = String(x.status || 'new').trim().toLowerCase();
       return {
         id: String(x.id || `inbox-${index + 1}`).trim().slice(0, 80),
+        userId: String(x.userId || '').trim().slice(0, 60),
+        userEmail: String(x.userEmail || '').trim().slice(0, 320).toLowerCase(),
         user: String(x.user || '').trim().slice(0, 80),
         subject: String(x.subject || '').trim().slice(0, 180),
         message: String(x.message || '').trim().slice(0, 600),
@@ -531,6 +535,16 @@ function normalizeSimpleContent(value, fallbackTitle) {
       body: String(safe.body || '').trim().slice(0, 10000),
     },
   };
+}
+
+function normalizeResultUnlockEmailSettings(value) {
+  const safe = value && typeof value === 'object' ? value : {};
+  const enabled = safe.enabled !== false;
+  const delayHours = Number(safe.delayHours ?? 3);
+  if (!Number.isFinite(delayHours) || !Number.isInteger(delayHours) || delayHours < 0 || delayHours > 168) {
+    return { error: 'resultUnlockEmailSettings.delayHours must be an integer between 0 and 168' };
+  }
+  return { value: { enabled, delayHours } };
 }
 
 async function logAdminAction(req, actionType, targetType, targetId, details) {
@@ -631,6 +645,67 @@ async function enqueueNotification(userId, payload) {
     ],
   };
   await setJsonSetting('notificationScheduling', next, userId);
+}
+
+async function appendPushNotificationItem(userId, payload) {
+  const current = await getJsonSetting('pushNotificationSettings', { items: [] });
+  const existing = Array.isArray(current.items) ? current.items : [];
+  const nowIso = new Date().toISOString();
+  const item = {
+    id: `push-manual-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
+    title: String(payload.title || '').trim().slice(0, 100),
+    message: String(payload.message || '').trim().slice(0, 300),
+    target: ['all', 'new_users', 'active_users'].includes(String(payload.target || '').trim().toLowerCase())
+      ? String(payload.target || '').trim().toLowerCase()
+      : 'all',
+    deepLink: String(payload.deepLink || '').trim().slice(0, 300),
+    scheduledAt: '',
+    enabled: true,
+    status: 'sent',
+    resendCount: 0,
+    lastSentAt: nowIso,
+    createdAt: nowIso,
+  };
+  await setJsonSetting(
+    'pushNotificationSettings',
+    { items: [item, ...existing].slice(0, 200) },
+    userId,
+  );
+}
+
+async function sendContentAnnouncementEmails({
+  kind,
+  title,
+  message,
+  ctaUrl,
+  ctaLabel,
+}) {
+  if (!isMailConfigured()) return;
+  const { rows } = await pool.query(
+    `SELECT email, display_name
+     FROM users
+     WHERE is_banned = false
+       AND trim(COALESCE(email, '')) <> ''
+     ORDER BY created_at DESC
+     LIMIT 2000`,
+  );
+  for (const row of rows || []) {
+    const to = String(row.email || '').trim();
+    if (!to) continue;
+    try {
+      await sendAdminContentAlertEmail({
+        to,
+        displayName: String(row.display_name || '').trim(),
+        kind,
+        title,
+        message,
+        ctaUrl,
+        ctaLabel,
+      });
+    } catch (mailErr) {
+      console.error('content_alert_email_failed', kind, to, mailErr && (mailErr.message || mailErr));
+    }
+  }
 }
 
 function shuffleArray(arr) {
@@ -821,6 +896,18 @@ async function getSettingsMap() {
         return parsed && typeof parsed === 'object' ? parsed : {};
       } catch (_e) {
         return {};
+      }
+    })(),
+    resultUnlockEmailSettings: (() => {
+      try {
+        const parsed = JSON.parse(String(map.resultUnlockEmailSettings || '{}'));
+        if (!parsed || typeof parsed !== 'object') return { enabled: true, delayHours: 3 };
+        return {
+          enabled: parsed.enabled !== false,
+          delayHours: Math.max(0, Math.min(168, Number(parsed.delayHours ?? 3))),
+        };
+      } catch (_e) {
+        return { enabled: true, delayHours: 3 };
       }
     })(),
     feedbackInbox: (() => {
@@ -1027,6 +1114,7 @@ function normalizeTestAdvancedConfig(rawValue) {
       fullscreenRequired: raw.fullscreenRequired === true,
       copyPasteBlocked: raw.copyPasteBlocked === true,
       notifyOnPublish: raw.notifyOnPublish !== false,
+      sendEmailOnPublish: raw.sendEmailOnPublish === true,
     },
   };
 }
@@ -1057,6 +1145,7 @@ function normalizeTestPayload(body) {
   const resultReleaseAt = String(payload.resultReleaseAt || '').trim();
   const dynamicDateEnabled = payload.dynamicDateEnabled === true;
   const dateCycleDays = Number(payload.dateCycleDays || 0);
+  const slotLabelPattern = /^(0[1-9]|1[0-2]):([0-5][0-9])\s?(AM|PM)$/i;
 
   if (!title || !slug || !['mock', 'quiz'].includes(testKind)) {
     return { error: 'title, slug, and valid testKind are required' };
@@ -1090,6 +1179,12 @@ function normalizeTestPayload(body) {
   }
   if (examDate && Number.isNaN(Date.parse(`${examDate}T00:00:00Z`))) {
     return { error: 'examDate must be a valid date (YYYY-MM-DD)' };
+  }
+  if (slotLabel && !slotLabelPattern.test(slotLabel)) {
+    return { error: 'slotLabel must be in HH:MM AM/PM format (example: 09:30 AM)' };
+  }
+  if (examDate && !slotLabel) {
+    return { error: 'slotLabel is required when examDate is provided (use HH:MM AM/PM)' };
   }
   if (validUntil && Number.isNaN(Date.parse(`${validUntil}T00:00:00Z`))) {
     return { error: 'validUntil must be a valid date (YYYY-MM-DD)' };
@@ -1253,6 +1348,11 @@ router.patch('/settings', async (req, res) => {
     body.examCategoryIconOptions === undefined ? null : normalizeExamCategoryIconOptions(body.examCategoryIconOptions);
   const normalizedNotificationScheduling =
     body.notificationScheduling === undefined ? null : normalizeNotificationScheduling(body.notificationScheduling);
+  const normalizedResultUnlockEmailSettings =
+    body.resultUnlockEmailSettings === undefined ? null : normalizeResultUnlockEmailSettings(body.resultUnlockEmailSettings);
+  if (normalizedResultUnlockEmailSettings && normalizedResultUnlockEmailSettings.error) {
+    return res.status(400).json({ error: normalizedResultUnlockEmailSettings.error });
+  }
   const normalizedFeedbackInbox =
     body.feedbackInbox === undefined ? null : normalizeSupportInbox(body.feedbackInbox);
   const normalizedReportIssueInbox =
@@ -1279,6 +1379,7 @@ router.patch('/settings', async (req, res) => {
     normalizedExamCategories === null &&
     normalizedExamCategoryIconOptions === null &&
     normalizedNotificationScheduling === null &&
+    normalizedResultUnlockEmailSettings === null &&
     normalizedFeedbackInbox === null &&
     normalizedReportIssueInbox === null &&
     normalizedHelpSupportContent === null &&
@@ -1289,6 +1390,12 @@ router.patch('/settings', async (req, res) => {
     return res.status(400).json({ error: 'No settings provided' });
   }
   try {
+    const previousFeedbackInbox = normalizedFeedbackInbox !== null
+      ? await getJsonSetting('feedbackInbox', { items: [] })
+      : null;
+    const previousReportIssueInbox = normalizedReportIssueInbox !== null
+      ? await getJsonSetting('reportIssueInbox', { items: [] })
+      : null;
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -1409,6 +1516,15 @@ router.patch('/settings', async (req, res) => {
           [JSON.stringify(normalizedNotificationScheduling.value), req.userId],
         );
       }
+      if (normalizedResultUnlockEmailSettings !== null) {
+        await client.query(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+           VALUES ('resultUnlockEmailSettings', $1, $2::uuid)
+           ON CONFLICT (setting_key)
+           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [JSON.stringify(normalizedResultUnlockEmailSettings.value), req.userId],
+        );
+      }
       if (normalizedFeedbackInbox !== null) {
         await client.query(
           `INSERT INTO app_settings (setting_key, setting_value, updated_by)
@@ -1485,6 +1601,7 @@ router.patch('/settings', async (req, res) => {
       examCategoriesUpdated: normalizedExamCategories !== null,
       examCategoryIconOptionsUpdated: normalizedExamCategoryIconOptions !== null,
       notificationSchedulingUpdated: normalizedNotificationScheduling !== null,
+      resultUnlockEmailSettingsUpdated: normalizedResultUnlockEmailSettings !== null,
       feedbackInboxUpdated: normalizedFeedbackInbox !== null,
       reportIssueInboxUpdated: normalizedReportIssueInbox !== null,
       helpSupportContentUpdated: normalizedHelpSupportContent !== null,
@@ -1492,6 +1609,36 @@ router.patch('/settings', async (req, res) => {
       privacyPolicyContentUpdated: normalizedPrivacyPolicyContent !== null,
       termsOfUseContentUpdated: normalizedTermsOfUseContent !== null,
     });
+    if (isMailConfigured()) {
+      const notifyResolved = async (beforePayload, afterPayload) => {
+        const beforeItems = Array.isArray(beforePayload?.items) ? beforePayload.items : [];
+        const afterItems = Array.isArray(afterPayload?.items) ? afterPayload.items : [];
+        const beforeMap = new Map(beforeItems.map((x) => [String(x.id || ''), String(x.status || 'new')]));
+        for (const item of afterItems) {
+          const id = String(item.id || '');
+          const status = String(item.status || '').toLowerCase();
+          const prev = String(beforeMap.get(id) || 'new').toLowerCase();
+          const email = String(item.userEmail || '').trim();
+          if (!email) continue;
+          if (status === 'resolved' && prev !== 'resolved') {
+            await sendSupportJourneyEmail({
+              to: email,
+              status: 'resolved',
+              subject: String(item.subject || 'Support Request'),
+              message: 'Your request has been marked resolved. If anything is still pending, reply with details.',
+            }).catch((mailErr) => {
+              console.error('support_resolved_email_failed', id, mailErr && (mailErr.message || mailErr));
+            });
+          }
+        }
+      };
+      if (normalizedFeedbackInbox !== null) {
+        await notifyResolved(previousFeedbackInbox, normalizedFeedbackInbox.value);
+      }
+      if (normalizedReportIssueInbox !== null) {
+        await notifyResolved(previousReportIssueInbox, normalizedReportIssueInbox.value);
+      }
+    }
     if (normalizedDailyQuizSettings !== null) {
       await enqueueNotification(req.userId, {
         title: 'Daily Quiz Rescheduled',
@@ -1657,12 +1804,24 @@ router.post('/tests', async (req, res) => {
     );
     if (data.isPublished) {
       await regenerateTestFromSubcategoryPool(rows[0].id);
-      await enqueueNotification(req.userId, {
-        title: 'New Test Published',
-        message: `${data.title} is now available.`,
-        target: 'all',
-        scheduleAt: new Date().toISOString(),
-      });
+      if (advancedConfig.notifyOnPublish !== false) {
+        await enqueueNotification(req.userId, {
+          title: 'New Test Published',
+          message: `${data.title} is now available.`,
+          target: 'all',
+          deepLink: 'main/tests',
+          scheduleAt: new Date().toISOString(),
+        });
+      }
+      if (advancedConfig.sendEmailOnPublish === true) {
+        await sendContentAnnouncementEmails({
+          kind: 'mocktest',
+          title: data.title,
+          message: `${data.title} is now available. Open app and attempt it now.`,
+          ctaUrl: String(process.env.MAIL_APP_URL || '').trim(),
+          ctaLabel: 'Open Mock Test',
+        });
+      }
     }
     const currentAdvancedMap = await getJsonSetting('testAdvancedConfigs', {});
     const nextAdvancedMap =
@@ -1746,13 +1905,24 @@ router.patch('/tests/:id', async (req, res) => {
     if (!rows[0]) return res.status(404).json({ error: 'Test not found' });
     if (!beforeRow.is_published && rows[0].is_published) {
       await regenerateTestFromSubcategoryPool(rows[0].id);
-      await enqueueNotification(req.userId, {
-        title: 'Test Published',
-        message: `${rows[0].title} is now live.`,
-        target: 'all',
-        deepLink: 'main/tests',
-        scheduleAt: new Date().toISOString(),
-      });
+      if (advancedConfig.notifyOnPublish !== false) {
+        await enqueueNotification(req.userId, {
+          title: 'Test Published',
+          message: `${rows[0].title} is now live.`,
+          target: 'all',
+          deepLink: 'main/tests',
+          scheduleAt: new Date().toISOString(),
+        });
+      }
+      if (advancedConfig.sendEmailOnPublish === true) {
+        await sendContentAnnouncementEmails({
+          kind: 'mocktest',
+          title: rows[0].title,
+          message: `${rows[0].title} is now live. Start your attempt and track your score.`,
+          ctaUrl: String(process.env.MAIL_APP_URL || '').trim(),
+          ctaLabel: 'Start Mock Test',
+        });
+      }
     }
     const currentAdvancedMap = await getJsonSetting('testAdvancedConfigs', {});
     const nextAdvancedMap =
@@ -1981,6 +2151,7 @@ router.post('/digest', async (req, res) => {
   const correctIndex = Number(body.correctIndex);
   const factText = String(body.factText || '').trim();
   const isPublished = body.isPublished !== false;
+  const notifyUsers = body.notifyUsers === true;
 
   if (!questionPrompt || !optionA || !optionB || !optionC || !optionD || !factText) {
     return res.status(400).json({ error: 'Question, all options, and fact are required' });
@@ -1997,7 +2168,7 @@ router.post('/digest', async (req, res) => {
        RETURNING id, question_prompt, option_a, option_b, option_c, option_d, correct_index, fact_text, is_published, created_at`,
       [questionPrompt, optionA, optionB, optionC, optionD, correctIndex, factText, isPublished],
     );
-    if (isPublished) {
+    if (isPublished && notifyUsers) {
       await enqueueNotification(req.userId, {
         title: 'Daily Digest Updated',
         message: 'A new daily digest has been published.',
@@ -2024,6 +2195,7 @@ router.patch('/digest/:id', async (req, res) => {
   const correctIndex = Number(body.correctIndex);
   const factText = String(body.factText || '').trim();
   const isPublished = body.isPublished !== false;
+  const notifyUsers = body.notifyUsers === true;
 
   if (!questionPrompt || !optionA || !optionB || !optionC || !optionD || !factText) {
     return res.status(400).json({ error: 'Question, all options, and fact are required' });
@@ -2042,7 +2214,7 @@ router.patch('/digest/:id', async (req, res) => {
       [questionPrompt, optionA, optionB, optionC, optionD, correctIndex, factText, isPublished, id],
     );
     if (!rows[0]) return res.status(404).json({ error: 'Daily digest item not found' });
-    if (isPublished) {
+    if (isPublished && notifyUsers) {
       await enqueueNotification(req.userId, {
         title: 'Daily Digest Updated',
         message: 'Daily digest has been refreshed by admin.',
@@ -2085,6 +2257,7 @@ router.post('/daily-quiz', async (req, res) => {
   try {
     const body = req.body || {};
     const normalized = normalizeDailyQuizItem(body);
+    const notifyUsers = body.notifyUsers === true;
     if (!normalized) {
       return res.status(400).json({ error: 'Question, four options, and valid correctIndex are required' });
     }
@@ -2092,7 +2265,7 @@ router.post('/daily-quiz', async (req, res) => {
     const items = Array.isArray(current.items) ? current.items : [];
     const next = { items: [normalized, ...items].slice(0, 500) };
     await setJsonSetting('dailyQuizItems', next, req.userId);
-    if (normalized.isPublished) {
+    if (normalized.isPublished && notifyUsers) {
       await enqueueNotification(req.userId, {
         title: 'Daily Quiz Updated',
         message: 'Today\'s daily quiz is now available.',
@@ -2111,6 +2284,7 @@ router.post('/daily-quiz', async (req, res) => {
 router.patch('/daily-quiz/:id', async (req, res) => {
   try {
     const id = String(req.params.id || '').trim();
+    const notifyUsers = (req.body || {}).notifyUsers === true;
     if (!id) return res.status(400).json({ error: 'Invalid daily quiz item id' });
     const current = await getJsonSetting('dailyQuizItems', { items: [] });
     const items = Array.isArray(current.items) ? current.items : [];
@@ -2131,7 +2305,7 @@ router.patch('/daily-quiz/:id', async (req, res) => {
     const nextItems = [...items];
     nextItems[idx] = normalized;
     await setJsonSetting('dailyQuizItems', { items: nextItems }, req.userId);
-    if (normalized.isPublished) {
+    if (normalized.isPublished && notifyUsers) {
       await enqueueNotification(req.userId, {
         title: 'Daily Quiz Updated',
         message: 'Daily quiz has been refreshed by admin.',
@@ -2220,6 +2394,18 @@ router.post('/articles', async (req, res) => {
         target: 'all',
         scheduleAt: new Date().toISOString(),
       });
+      if (body.sendEmail === true) {
+        const kind = feedKind === 'job' ? 'job' : feedKind === 'exam' ? 'exam' : null;
+        if (kind) {
+          await sendContentAnnouncementEmails({
+            kind,
+            title: headline,
+            message: String(body.summary || body.category || 'A new update is now available for you.'),
+            ctaUrl: String(body.linkUrl || process.env.MAIL_APP_URL || '').trim(),
+            ctaLabel: kind === 'job' ? 'View Job Alert' : 'View Exam Alert',
+          });
+        }
+      }
     }
     return res.status(201).json({ item: rows[0] });
   } catch (e) {
@@ -2266,6 +2452,18 @@ router.patch('/articles/:id', async (req, res) => {
         deepLink: 'main/news',
         scheduleAt: new Date().toISOString(),
       });
+      if (body.sendEmail === true) {
+        const kind = feedKind === 'job' ? 'job' : feedKind === 'exam' ? 'exam' : null;
+        if (kind) {
+          await sendContentAnnouncementEmails({
+            kind,
+            title: rows[0].headline,
+            message: String(body.summary || body.category || 'A new update is now available for you.'),
+            ctaUrl: String(body.linkUrl || process.env.MAIL_APP_URL || '').trim(),
+            ctaLabel: kind === 'job' ? 'Open Job Alert' : 'Open Exam Alert',
+          });
+        }
+      }
     }
     return res.json({ item: rows[0] });
   } catch (e) {
@@ -2688,6 +2886,8 @@ router.post('/notifications/send', async (req, res) => {
         failed += 1;
       }
     }
+    // Keep app bell/inbox feed in sync with manually sent pushes.
+    await appendPushNotificationItem(req.userId, { title, message, target, deepLink });
     await logAdminAction(req, 'push_notification_manual_send', 'notification', null, {
       target,
       sent,

@@ -5,7 +5,12 @@ const bcrypt = require('bcryptjs');
 const { pool } = require('../db');
 const { sha256Hex } = require('../cryptoUtil');
 const { mapUserRow } = require('../userMapper');
-const { isMailConfigured, sendEmailVerificationOtp } = require('../mail');
+const {
+  isMailConfigured,
+  sendEmailVerificationOtp,
+  sendSecurityAccountAlertEmail,
+  sendSupportJourneyEmail,
+} = require('../mail');
 
 const router = express.Router();
 const EMAIL_VERIFY_OTP_MINUTES = () =>
@@ -175,6 +180,16 @@ router.patch('/profile', async (req, res) => {
        WHERE id = $6::uuid RETURNING *`,
       [nextName, nextEmail, nextPhone, nextState, nextDistrict, req.userId],
     );
+    if (isMailConfigured() && String(cur.email || '').trim().toLowerCase() !== String(nextEmail || '').trim().toLowerCase()) {
+      sendSecurityAccountAlertEmail({
+        to: String(nextEmail || '').trim(),
+        subject: 'Email updated on your account',
+        eventType: 'Email Changed',
+        eventDetail: `Your account email was changed from ${String(cur.email || '').trim()} to ${String(nextEmail || '').trim()}.`,
+      }).catch((mailErr) => {
+        console.error('security_email_change_alert_failed', mailErr && (mailErr.message || mailErr));
+      });
+    }
     return res.json({ user: mapUserRow(upd.rows[0]) });
   } catch (e) {
     if (e.code === '23505') {
@@ -208,6 +223,20 @@ router.patch('/password', async (req, res) => {
       hash,
       req.userId,
     ]);
+    if (isMailConfigured()) {
+      const userRes = await pool.query(`SELECT email FROM users WHERE id = $1::uuid LIMIT 1`, [req.userId]);
+      const em = String(userRes.rows[0]?.email || '').trim();
+      if (em) {
+        sendSecurityAccountAlertEmail({
+          to: em,
+          subject: 'Password changed from profile',
+          eventType: 'Password Changed',
+          eventDetail: 'Your password was changed successfully from profile settings.',
+        }).catch((mailErr) => {
+          console.error('security_profile_password_change_alert_failed', mailErr && (mailErr.message || mailErr));
+        });
+      }
+    }
     return res.json({ ok: true });
   } catch (e) {
     console.error(e);
@@ -325,12 +354,24 @@ router.post('/support', async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
     await appendInboxItem('feedbackInbox', {
       id: `support-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
+      userId: String(req.userId || ''),
+      userEmail: String(user.email || ''),
       user: String(user.display_name || user.email || 'User'),
       subject: 'Help & Support',
       message,
       createdAt: new Date().toISOString(),
       status: 'new',
     }, req.userId);
+    if (isMailConfigured() && String(user.email || '').trim()) {
+      sendSupportJourneyEmail({
+        to: String(user.email || '').trim(),
+        status: 'received',
+        subject: 'Help & Support',
+        message: 'We have received your support request. Our team will review it shortly.',
+      }).catch((mailErr) => {
+        console.error('support_received_email_failed', mailErr && (mailErr.message || mailErr));
+      });
+    }
     return res.json({ ok: true });
   } catch (e) {
     console.error(e);
@@ -350,12 +391,24 @@ router.post('/feedback', async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
     await appendInboxItem('feedbackInbox', {
       id: `feedback-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
+      userId: String(req.userId || ''),
+      userEmail: String(user.email || ''),
       user: String(user.display_name || user.email || 'User'),
       subject: 'Feedback',
       message,
       createdAt: new Date().toISOString(),
       status: 'new',
     }, req.userId);
+    if (isMailConfigured() && String(user.email || '').trim()) {
+      sendSupportJourneyEmail({
+        to: String(user.email || '').trim(),
+        status: 'received',
+        subject: 'Feedback',
+        message: 'Thanks for your feedback. We have received it and will review it soon.',
+      }).catch((mailErr) => {
+        console.error('feedback_received_email_failed', mailErr && (mailErr.message || mailErr));
+      });
+    }
     return res.json({ ok: true });
   } catch (e) {
     console.error(e);
@@ -375,12 +428,24 @@ router.post('/report-issue', async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
     await appendInboxItem('reportIssueInbox', {
       id: `issue-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
+      userId: String(req.userId || ''),
+      userEmail: String(user.email || ''),
       user: String(user.display_name || user.email || 'User'),
       subject: 'Reported Issue',
       message,
       createdAt: new Date().toISOString(),
       status: 'new',
     }, req.userId);
+    if (isMailConfigured() && String(user.email || '').trim()) {
+      sendSupportJourneyEmail({
+        to: String(user.email || '').trim(),
+        status: 'received',
+        subject: 'Issue Report',
+        message: 'Issue report received. We are on it and will update you once resolved.',
+      }).catch((mailErr) => {
+        console.error('issue_received_email_failed', mailErr && (mailErr.message || mailErr));
+      });
+    }
     return res.json({ ok: true });
   } catch (e) {
     console.error(e);

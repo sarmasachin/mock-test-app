@@ -17,6 +17,18 @@ const homeRouter = require('./routes/home');
 const adminRouter = require('./routes/admin');
 const pollsRouter = require('./routes/polls');
 const { pool } = require('./db');
+const {
+  isMailConfigured,
+  sendCompleteProfileReminderEmail,
+  sendResultUnlockedEmail,
+  sendMockTestStartingSoonEmail,
+  sendMissedTestFollowupEmail,
+  sendStreakRiskAlertEmail,
+  sendWeeklyPerformanceReportEmail,
+  sendRankMilestoneEmail,
+  sendNewContentByInterestEmail,
+  sendReEngagementEmail,
+} = require('./mail');
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
   console.error('FATAL: set JWT_SECRET (min 16 chars) in .env');
@@ -36,8 +48,7 @@ app.use(async (req, res, next) => {
   if (
     path === '/health' ||
     path.startsWith('/v1/admin') ||
-    path === '/v1/auth/login' ||
-    path === '/v1/auth/refresh'
+    path.startsWith('/v1/auth/')
   ) {
     return next();
   }
@@ -271,8 +282,672 @@ async function processPublishSchedules() {
   }
 }
 
+async function processProfileReminderEmails() {
+  if (!isMailConfigured()) return;
+  try {
+    const settingKey = 'profileReminderEmailState';
+    const stateRes = await pool.query(
+      `SELECT setting_value FROM app_settings WHERE setting_key = $1 LIMIT 1`,
+      [settingKey],
+    );
+    let state = { sentUserIds: [] };
+    if (stateRes.rows[0]) {
+      try {
+        state = JSON.parse(String(stateRes.rows[0].setting_value || '{}')) || { sentUserIds: [] };
+      } catch (_e) {
+        state = { sentUserIds: [] };
+      }
+    }
+    const sent = new Set(Array.isArray(state.sentUserIds) ? state.sentUserIds.map((x) => String(x || '').trim()) : []);
+    const { rows } = await pool.query(
+      `SELECT id, email, display_name
+       FROM users
+       WHERE is_banned = false
+         AND created_at <= (now() - interval '10 minutes')
+         AND (
+           length(regexp_replace(COALESCE(phone, ''), '\D', '', 'g')) <> 10
+           OR trim(COALESCE(signup_state, '')) = ''
+           OR trim(COALESCE(signup_district, '')) = ''
+         )
+       ORDER BY created_at DESC
+       LIMIT 200`,
+    );
+    let changed = false;
+    for (const row of rows || []) {
+      const userId = String(row.id || '').trim();
+      const email = String(row.email || '').trim();
+      if (!userId || !email || sent.has(userId)) continue;
+      try {
+        await sendCompleteProfileReminderEmail({
+          to: email,
+          displayName: String(row.display_name || '').trim(),
+        });
+        sent.add(userId);
+        changed = true;
+      } catch (mailErr) {
+        console.error('profile_reminder_email_failed', userId, mailErr && (mailErr.message || mailErr));
+      }
+    }
+    if (changed) {
+      const next = { sentUserIds: Array.from(sent).slice(-10000) };
+      await pool.query(
+        `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+         VALUES ($1, $2, NULL)
+         ON CONFLICT (setting_key)
+         DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = now()`,
+        [settingKey, JSON.stringify(next)],
+      );
+    }
+  } catch (e) {
+    if (e && e.code === '42P01') return;
+    console.error('profile_reminder_scheduler_error', e);
+  }
+}
+
+async function processUnlockedResultEmails() {
+  if (!isMailConfigured()) return;
+  try {
+    const settingsRes = await pool.query(
+      `SELECT setting_value FROM app_settings WHERE setting_key = 'resultUnlockEmailSettings' LIMIT 1`,
+    );
+    let settings = { enabled: true, delayHours: 3 };
+    if (settingsRes.rows[0]) {
+      try {
+        const parsed = JSON.parse(String(settingsRes.rows[0].setting_value || '{}')) || {};
+        settings = {
+          enabled: parsed.enabled !== false,
+          delayHours: Math.max(0, Math.min(168, Number(parsed.delayHours ?? 3))),
+        };
+      } catch (_e) {
+        settings = { enabled: true, delayHours: 3 };
+      }
+    }
+    if (!settings.enabled) return;
+    const delayHours = settings.delayHours;
+    const stateKey = 'resultUnlockEmailState';
+    const stateRes = await pool.query(
+      `SELECT setting_value FROM app_settings WHERE setting_key = $1 LIMIT 1`,
+      [stateKey],
+    );
+    let state = { sentAttemptIds: [] };
+    if (stateRes.rows[0]) {
+      try {
+        state = JSON.parse(String(stateRes.rows[0].setting_value || '{}')) || { sentAttemptIds: [] };
+      } catch (_e) {
+        state = { sentAttemptIds: [] };
+      }
+    }
+    const sent = new Set(
+      Array.isArray(state.sentAttemptIds) ? state.sentAttemptIds.map((x) => String(x || '').trim()) : [],
+    );
+    const { rows } = await pool.query(
+      `WITH base AS (
+         SELECT
+           ta.id,
+           ta.user_id,
+           ta.correct,
+           ta.total,
+           ta.completed_at,
+           u.email,
+           u.display_name,
+           COALESCE(t.title, ta.test_name) AS test_title,
+           COALESCE(
+             t.result_release_at,
+             ta.completed_at + make_interval(hours => $1::int)
+           ) AS unlock_at,
+           COALESCE(ta.test_catalog_id::text, lower(trim(ta.test_name))) AS test_key
+         FROM test_attempts ta
+         INNER JOIN users u ON u.id = ta.user_id
+         LEFT JOIN tests t ON t.id = ta.test_catalog_id
+         WHERE u.is_banned = false
+           AND trim(COALESCE(u.email, '')) <> ''
+       ),
+       ranked AS (
+         SELECT
+           b.*,
+           ROW_NUMBER() OVER (
+             PARTITION BY b.test_key
+             ORDER BY b.correct DESC, b.total DESC, b.completed_at ASC, b.id ASC
+           ) AS rank,
+           COUNT(*) OVER (PARTITION BY b.test_key) AS participants
+         FROM base b
+       )
+       SELECT
+         id::text AS attempt_id,
+         user_id::text AS user_id,
+         email,
+         display_name,
+         test_title,
+         correct,
+         total,
+         rank,
+         participants,
+         unlock_at
+       FROM ranked
+       WHERE unlock_at <= now()
+       ORDER BY unlock_at DESC
+       LIMIT 200`,
+      [delayHours],
+    );
+
+    let changed = false;
+    for (const row of rows || []) {
+      const attemptId = String(row.attempt_id || '').trim();
+      if (!attemptId || sent.has(attemptId)) continue;
+      try {
+        await sendResultUnlockedEmail({
+          to: String(row.email || '').trim(),
+          displayName: String(row.display_name || '').trim(),
+          testTitle: String(row.test_title || '').trim() || 'Mock Test',
+          correct: Number(row.correct || 0),
+          total: Number(row.total || 0),
+          rank: Number(row.rank || 0),
+          participants: Number(row.participants || 0),
+          unlockAtIso: row.unlock_at ? new Date(row.unlock_at).toISOString() : new Date().toISOString(),
+        });
+        sent.add(attemptId);
+        changed = true;
+      } catch (mailErr) {
+        console.error('result_unlock_email_failed', attemptId, mailErr && (mailErr.message || mailErr));
+      }
+    }
+
+    if (changed) {
+      const next = { sentAttemptIds: Array.from(sent).slice(-20000) };
+      await pool.query(
+        `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+         VALUES ($1, $2, NULL)
+         ON CONFLICT (setting_key)
+         DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = now()`,
+        [stateKey, JSON.stringify(next)],
+      );
+    }
+  } catch (e) {
+    if (e && e.code === '42P01') return;
+    console.error('result_unlock_email_scheduler_error', e);
+  }
+}
+
+function parseHourMinuteFromSlotLabel(slotLabel) {
+  const raw = String(slotLabel || '').trim().toLowerCase();
+  if (!raw) return null;
+  const m = raw.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (!m) return null;
+  let hour = Number(m[1]);
+  const minute = Number(m[2] || 0);
+  const meridiem = String(m[3] || '').toLowerCase();
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return null;
+    if (meridiem === 'pm' && hour !== 12) hour += 12;
+    if (meridiem === 'am' && hour === 12) hour = 0;
+  } else if (hour < 0 || hour > 23) {
+    return null;
+  }
+  return { hour, minute };
+}
+
+function buildExamStartIso(examDate, slotLabel) {
+  const date = String(examDate || '').trim();
+  if (!date) return null;
+  const hm = parseHourMinuteFromSlotLabel(slotLabel);
+  if (!hm) return null;
+  const tzOffsetMinutes = Number(process.env.EXAM_TIMEZONE_OFFSET_MINUTES || 330);
+  const sign = tzOffsetMinutes >= 0 ? '+' : '-';
+  const abs = Math.abs(tzOffsetMinutes);
+  const tzH = String(Math.floor(abs / 60)).padStart(2, '0');
+  const tzM = String(abs % 60).padStart(2, '0');
+  const hh = String(hm.hour).padStart(2, '0');
+  const mm = String(hm.minute).padStart(2, '0');
+  const iso = `${date}T${hh}:${mm}:00${sign}${tzH}:${tzM}`;
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  return new Date(ms).toISOString();
+}
+
+async function processMockTestStartReminderEmails() {
+  if (!isMailConfigured()) return;
+  try {
+    const stateKey = 'mockTestStartReminderEmailState';
+    const stateRes = await pool.query(
+      `SELECT setting_value FROM app_settings WHERE setting_key = $1 LIMIT 1`,
+      [stateKey],
+    );
+    let state = { sentTestIds: [] };
+    if (stateRes.rows[0]) {
+      try {
+        state = JSON.parse(String(stateRes.rows[0].setting_value || '{}')) || { sentTestIds: [] };
+      } catch (_e) {
+        state = { sentTestIds: [] };
+      }
+    }
+    const sentTestIds = new Set(
+      Array.isArray(state.sentTestIds) ? state.sentTestIds.map((x) => String(x || '').trim()) : [],
+    );
+    const testsRes = await pool.query(
+      `SELECT id::text AS id, title, exam_date, slot_label
+       FROM tests
+       WHERE is_published = true
+         AND exam_date IS NOT NULL
+         AND trim(COALESCE(slot_label, '')) <> ''
+         AND exam_date BETWEEN (now()::date - interval '1 day') AND (now()::date + interval '2 days')
+       ORDER BY exam_date ASC
+       LIMIT 120`,
+    );
+    const usersRes = await pool.query(
+      `SELECT id::text AS user_id, email, display_name
+       FROM users
+       WHERE is_banned = false
+         AND trim(COALESCE(email, '')) <> ''
+       ORDER BY created_at DESC
+       LIMIT 8000`,
+    );
+    const nowMs = Date.now();
+    let changed = false;
+
+    for (const testRow of testsRes.rows || []) {
+      const testId = String(testRow.id || '').trim();
+      if (!testId || sentTestIds.has(testId)) continue;
+      const startAtIso = buildExamStartIso(testRow.exam_date, testRow.slot_label);
+      if (!startAtIso) continue;
+      const diffMin = (Date.parse(startAtIso) - nowMs) / 60000;
+      if (diffMin < 55 || diffMin > 65) continue;
+
+      for (const userRow of usersRes.rows || []) {
+        const email = String(userRow.email || '').trim();
+        if (!email) continue;
+        try {
+          await sendMockTestStartingSoonEmail({
+            to: email,
+            displayName: String(userRow.display_name || '').trim(),
+            testTitle: String(testRow.title || '').trim() || 'Mock Test',
+            examDate: String(testRow.exam_date || '').trim(),
+            slotLabel: String(testRow.slot_label || '').trim(),
+            startAtIso,
+          });
+        } catch (mailErr) {
+          console.error('mocktest_start_reminder_email_failed', testId, email, mailErr && (mailErr.message || mailErr));
+        }
+      }
+      sentTestIds.add(testId);
+      changed = true;
+    }
+
+    if (changed) {
+      const next = { sentTestIds: Array.from(sentTestIds).slice(-10000) };
+      await pool.query(
+        `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+         VALUES ($1, $2, NULL)
+         ON CONFLICT (setting_key)
+         DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = now()`,
+        [stateKey, JSON.stringify(next)],
+      );
+    }
+  } catch (e) {
+    if (e && e.code === '42P01') return;
+    console.error('mocktest_start_reminder_scheduler_error', e);
+  }
+}
+
+async function getSettingJson(settingKey, fallback) {
+  const res = await pool.query(`SELECT setting_value FROM app_settings WHERE setting_key = $1 LIMIT 1`, [settingKey]);
+  if (!res.rows[0]) return fallback;
+  try {
+    return JSON.parse(String(res.rows[0].setting_value || 'null')) ?? fallback;
+  } catch (_e) {
+    return fallback;
+  }
+}
+
+async function setSettingJson(settingKey, value) {
+  await pool.query(
+    `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+     VALUES ($1, $2, NULL)
+     ON CONFLICT (setting_key)
+     DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = now()`,
+    [settingKey, JSON.stringify(value)],
+  );
+}
+
+async function processMissedTestFollowupEmails() {
+  if (!isMailConfigured()) return;
+  try {
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const stateKey = 'missedTestFollowupState';
+    const state = await getSettingJson(stateKey, { dayKey: '', sentUserIds: [] });
+    let sent = new Set(Array.isArray(state.sentUserIds) && state.dayKey === todayKey ? state.sentUserIds : []);
+    const testsRes = await pool.query(
+      `SELECT id::text AS id, title FROM tests WHERE is_published = true AND exam_date = now()::date ORDER BY created_at DESC LIMIT 1`,
+    );
+    const todayTest = testsRes.rows[0];
+    if (!todayTest) return;
+    const usersRes = await pool.query(
+      `SELECT u.id::text AS user_id, u.email, u.display_name
+       FROM users u
+       WHERE u.is_banned = false
+         AND trim(COALESCE(u.email, '')) <> ''
+         AND NOT EXISTS (
+           SELECT 1 FROM test_attempts ta
+           WHERE ta.user_id = u.id AND ta.test_catalog_id = $1::uuid AND ta.completed_at::date = now()::date
+         )
+       LIMIT 4000`,
+      [todayTest.id],
+    );
+    let changed = false;
+    for (const row of usersRes.rows || []) {
+      const userId = String(row.user_id || '');
+      if (!userId || sent.has(userId)) continue;
+      await sendMissedTestFollowupEmail({
+        to: String(row.email || ''),
+        displayName: String(row.display_name || ''),
+        testTitle: String(todayTest.title || 'Today Mock Test'),
+      }).catch((e) => console.error('missed_test_followup_email_failed', userId, e && (e.message || e)));
+      sent.add(userId);
+      changed = true;
+    }
+    if (changed) await setSettingJson(stateKey, { dayKey: todayKey, sentUserIds: Array.from(sent).slice(-20000) });
+  } catch (e) {
+    if (e && e.code === '42P01') return;
+    console.error('missed_test_followup_scheduler_error', e);
+  }
+}
+
+async function processStreakRiskEmails() {
+  if (!isMailConfigured()) return;
+  try {
+    const stateKey = 'streakRiskEmailState';
+    const state = await getSettingJson(stateKey, { sentAtByUser: {} });
+    const sentMap = state.sentAtByUser && typeof state.sentAtByUser === 'object' ? state.sentAtByUser : {};
+    const rowsRes = await pool.query(
+      `SELECT
+         u.id::text AS user_id,
+         u.email,
+         u.display_name,
+         COALESCE(MAX(ta.completed_at), u.created_at) AS last_active
+       FROM users u
+       LEFT JOIN test_attempts ta ON ta.user_id = u.id
+       WHERE u.is_banned = false AND trim(COALESCE(u.email, '')) <> ''
+       GROUP BY u.id, u.email, u.display_name, u.created_at
+       HAVING (now() - COALESCE(MAX(ta.completed_at), u.created_at)) BETWEEN interval '2 days' AND interval '3 days'
+       LIMIT 3000`,
+    );
+    let changed = false;
+    for (const row of rowsRes.rows || []) {
+      const userId = String(row.user_id || '');
+      const lastSent = String(sentMap[userId] || '');
+      if (lastSent && Date.now() - Date.parse(lastSent) < 36 * 60 * 60 * 1000) continue;
+      const days = Math.max(2, Math.floor((Date.now() - Date.parse(String(row.last_active || new Date().toISOString()))) / 86400000));
+      await sendStreakRiskAlertEmail({
+        to: String(row.email || ''),
+        displayName: String(row.display_name || ''),
+        inactiveDays: days,
+      }).catch((e) => console.error('streak_risk_email_failed', userId, e && (e.message || e)));
+      sentMap[userId] = new Date().toISOString();
+      changed = true;
+    }
+    if (changed) await setSettingJson(stateKey, { sentAtByUser: sentMap });
+  } catch (e) {
+    if (e && e.code === '42P01') return;
+    console.error('streak_risk_scheduler_error', e);
+  }
+}
+
+function weekKeyUtc(d = new Date()) {
+  const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = x.getUTCDay() || 7;
+  x.setUTCDate(x.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(x.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((x - yearStart) / 86400000) + 1) / 7);
+  return `${x.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+async function processWeeklyPerformanceReportEmails() {
+  if (!isMailConfigured()) return;
+  try {
+    const key = weekKeyUtc();
+    const stateKey = 'weeklyPerformanceEmailState';
+    const state = await getSettingJson(stateKey, { weekKey: '', sentUserIds: [] });
+    const sent = new Set(Array.isArray(state.sentUserIds) && state.weekKey === key ? state.sentUserIds : []);
+    const metricsRes = await pool.query(
+      `WITH recent AS (
+         SELECT ta.user_id, ta.correct, ta.total, ta.completed_at, t.subcategory
+         FROM test_attempts ta
+         LEFT JOIN tests t ON t.id = ta.test_catalog_id
+         WHERE ta.completed_at >= now() - interval '7 days'
+       ),
+       user_summary AS (
+         SELECT user_id, COUNT(*)::int AS attempts, ROUND(AVG((correct::numeric / NULLIF(total,0))*100), 0)::int AS avg_percent
+         FROM recent
+         GROUP BY user_id
+       ),
+       weak AS (
+         SELECT DISTINCT ON (r.user_id)
+           r.user_id,
+           COALESCE(NULLIF(trim(r.subcategory), ''), 'General Practice') AS weak_topic
+         FROM recent r
+         GROUP BY r.user_id, weak_topic
+         ORDER BY r.user_id, AVG((r.correct::numeric / NULLIF(r.total,0))*100) ASC
+       )
+       SELECT u.id::text AS user_id, u.email, u.display_name, us.attempts, us.avg_percent, w.weak_topic
+       FROM user_summary us
+       INNER JOIN users u ON u.id = us.user_id
+       LEFT JOIN weak w ON w.user_id = us.user_id
+       WHERE u.is_banned = false AND trim(COALESCE(u.email, '')) <> ''
+       LIMIT 4000`,
+    );
+    let changed = false;
+    for (const row of metricsRes.rows || []) {
+      const userId = String(row.user_id || '');
+      if (!userId || sent.has(userId)) continue;
+      await sendWeeklyPerformanceReportEmail({
+        to: String(row.email || ''),
+        displayName: String(row.display_name || ''),
+        attempts: Number(row.attempts || 0),
+        avgPercent: Number(row.avg_percent || 0),
+        weakTopic: String(row.weak_topic || 'General Practice'),
+      }).catch((e) => console.error('weekly_report_email_failed', userId, e && (e.message || e)));
+      sent.add(userId);
+      changed = true;
+    }
+    if (changed) await setSettingJson(stateKey, { weekKey: key, sentUserIds: Array.from(sent).slice(-20000) });
+  } catch (e) {
+    if (e && e.code === '42P01') return;
+    console.error('weekly_report_scheduler_error', e);
+  }
+}
+
+async function processRankMilestoneEmails() {
+  if (!isMailConfigured()) return;
+  try {
+    const stateKey = 'rankMilestoneEmailState';
+    const state = await getSettingJson(stateKey, { sentAttemptIds: [] });
+    const sent = new Set(Array.isArray(state.sentAttemptIds) ? state.sentAttemptIds.map((x) => String(x)) : []);
+    const res = await pool.query(
+      `WITH ranked AS (
+         SELECT
+           ta.id,
+           ta.user_id,
+           ta.correct,
+           ta.total,
+           ta.completed_at,
+           COALESCE(t.title, ta.test_name) AS test_title,
+           COALESCE(ta.test_catalog_id::text, lower(trim(ta.test_name))) AS test_key,
+           ROW_NUMBER() OVER (PARTITION BY COALESCE(ta.test_catalog_id::text, lower(trim(ta.test_name))) ORDER BY ta.correct DESC, ta.total DESC, ta.completed_at ASC, ta.id ASC) AS rank
+         FROM test_attempts ta
+         LEFT JOIN tests t ON t.id = ta.test_catalog_id
+       ),
+       trend AS (
+         SELECT
+           r.*,
+           LAG(r.rank) OVER (PARTITION BY r.user_id, r.test_key ORDER BY r.completed_at ASC, r.id ASC) AS prev_rank
+         FROM ranked r
+       )
+       SELECT
+         tr.id::text AS attempt_id,
+         tr.user_id::text AS user_id,
+         u.email,
+         u.display_name,
+         tr.test_title,
+         tr.rank,
+         COALESCE(tr.prev_rank, tr.rank) AS prev_rank
+       FROM trend tr
+       INNER JOIN users u ON u.id = tr.user_id
+       WHERE u.is_banned = false
+         AND trim(COALESCE(u.email, '')) <> ''
+         AND tr.completed_at >= now() - interval '2 days'
+         AND (tr.rank <= 100 OR (COALESCE(tr.prev_rank, tr.rank) - tr.rank) >= 20)
+       ORDER BY tr.completed_at DESC
+       LIMIT 500`,
+    );
+    let changed = false;
+    for (const row of res.rows || []) {
+      const attemptId = String(row.attempt_id || '');
+      if (!attemptId || sent.has(attemptId)) continue;
+      const improvedBy = Math.max(0, Number(row.prev_rank || row.rank) - Number(row.rank || 0));
+      const reason = Number(row.rank || 0) <= 100 ? 'You entered Top 100.' : `You improved by ${improvedBy} ranks.`;
+      await sendRankMilestoneEmail({
+        to: String(row.email || ''),
+        displayName: String(row.display_name || ''),
+        testTitle: String(row.test_title || 'Mock Test'),
+        rank: Number(row.rank || 0),
+        improvedBy,
+        reason,
+      }).catch((e) => console.error('rank_milestone_email_failed', attemptId, e && (e.message || e)));
+      sent.add(attemptId);
+      changed = true;
+    }
+    if (changed) await setSettingJson(stateKey, { sentAttemptIds: Array.from(sent).slice(-30000) });
+  } catch (e) {
+    if (e && e.code === '42P01') return;
+    console.error('rank_milestone_scheduler_error', e);
+  }
+}
+
+async function processInterestContentEmails() {
+  if (!isMailConfigured()) return;
+  try {
+    const stateKey = 'interestContentEmailState';
+    const state = await getSettingJson(stateKey, { sentPairs: [] });
+    const sent = new Set(Array.isArray(state.sentPairs) ? state.sentPairs.map((x) => String(x)) : []);
+    const usersRes = await pool.query(
+      `WITH test_interest AS (
+         SELECT ta.user_id, t.subcategory, COUNT(*) AS c
+         FROM test_attempts ta
+         INNER JOIN tests t ON t.id = ta.test_catalog_id
+         WHERE trim(COALESCE(t.subcategory, '')) <> ''
+         GROUP BY ta.user_id, t.subcategory
+       ),
+       top_interest AS (
+         SELECT DISTINCT ON (user_id) user_id, subcategory
+         FROM test_interest
+         ORDER BY user_id, c DESC
+       )
+       SELECT u.id::text AS user_id, u.email, u.display_name, ti.subcategory
+       FROM users u
+       LEFT JOIN top_interest ti ON ti.user_id = u.id
+       WHERE u.is_banned = false AND trim(COALESCE(u.email, '')) <> ''
+       LIMIT 4000`,
+    );
+    const testsRes = await pool.query(
+      `SELECT id::text AS id, title, subcategory
+       FROM tests
+       WHERE is_published = true AND created_at >= now() - interval '24 hours'
+       ORDER BY created_at DESC
+       LIMIT 60`,
+    );
+    let changed = false;
+    for (const user of usersRes.rows || []) {
+      const interest = String(user.subcategory || '').trim().toLowerCase();
+      if (!interest) continue;
+      const matched = (testsRes.rows || []).find((t) => String(t.subcategory || '').trim().toLowerCase() === interest);
+      if (!matched) continue;
+      const pair = `${String(user.user_id)}:${String(matched.id)}`;
+      if (sent.has(pair)) continue;
+      await sendNewContentByInterestEmail({
+        to: String(user.email || ''),
+        displayName: String(user.display_name || ''),
+        interestLabel: `Interest: ${String(matched.subcategory || '').trim()}`,
+        title: String(matched.title || 'New Mock Test'),
+        message: 'New content matching your preferred category is now available.',
+      }).catch((e) => console.error('interest_content_email_failed', pair, e && (e.message || e)));
+      sent.add(pair);
+      changed = true;
+    }
+    if (changed) await setSettingJson(stateKey, { sentPairs: Array.from(sent).slice(-30000) });
+  } catch (e) {
+    if (e && e.code === '42P01') return;
+    console.error('interest_content_scheduler_error', e);
+  }
+}
+
+async function processReEngagementEmails() {
+  if (!isMailConfigured()) return;
+  try {
+    const milestones = [7, 14, 30];
+    const stateKey = 'reengagementEmailState';
+    const state = await getSettingJson(stateKey, { sentByUser: {} });
+    const sentByUser = state.sentByUser && typeof state.sentByUser === 'object' ? state.sentByUser : {};
+    const usersRes = await pool.query(
+      `SELECT u.id::text AS user_id, u.email, u.display_name, COALESCE(MAX(ta.completed_at), u.created_at) AS last_active
+       FROM users u
+       LEFT JOIN test_attempts ta ON ta.user_id = u.id
+       WHERE u.is_banned = false AND trim(COALESCE(u.email, '')) <> ''
+       GROUP BY u.id, u.email, u.display_name, u.created_at
+       LIMIT 6000`,
+    );
+    let changed = false;
+    for (const row of usersRes.rows || []) {
+      const userId = String(row.user_id || '');
+      const inactiveDays = Math.floor((Date.now() - Date.parse(String(row.last_active || new Date().toISOString()))) / 86400000);
+      const targetMilestone = milestones.find((m) => inactiveDays >= m && inactiveDays < m + 1);
+      if (!targetMilestone) continue;
+      const sentMilestones = new Set(Array.isArray(sentByUser[userId]) ? sentByUser[userId].map((x) => Number(x)) : []);
+      if (sentMilestones.has(targetMilestone)) continue;
+      await sendReEngagementEmail({
+        to: String(row.email || ''),
+        displayName: String(row.display_name || ''),
+        inactiveDays: targetMilestone,
+      }).catch((e) => console.error('reengagement_email_failed', userId, e && (e.message || e)));
+      sentMilestones.add(targetMilestone);
+      sentByUser[userId] = Array.from(sentMilestones).sort((a, b) => a - b);
+      changed = true;
+    }
+    if (changed) await setSettingJson(stateKey, { sentByUser });
+  } catch (e) {
+    if (e && e.code === '42P01') return;
+    console.error('reengagement_scheduler_error', e);
+  }
+}
+
 setInterval(() => {
   processPublishSchedules();
+}, 60000);
+setInterval(() => {
+  processProfileReminderEmails();
+}, 60000);
+setInterval(() => {
+  processUnlockedResultEmails();
+}, 60000);
+setInterval(() => {
+  processMockTestStartReminderEmails();
+}, 60000);
+setInterval(() => {
+  processMissedTestFollowupEmails();
+}, 60000);
+setInterval(() => {
+  processStreakRiskEmails();
+}, 60000);
+setInterval(() => {
+  processWeeklyPerformanceReportEmails();
+}, 60000);
+setInterval(() => {
+  processRankMilestoneEmails();
+}, 60000);
+setInterval(() => {
+  processInterestContentEmails();
+}, 60000);
+setInterval(() => {
+  processReEngagementEmails();
 }, 60000);
 
 // eslint-disable-next-line no-unused-vars

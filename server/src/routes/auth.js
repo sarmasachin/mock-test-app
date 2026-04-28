@@ -6,7 +6,12 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('../db');
 const { sha256Hex, randomRefreshToken } = require('../cryptoUtil');
 const { mapUserRow } = require('../userMapper');
-const { isMailConfigured, sendPasswordResetOtp } = require('../mail');
+const {
+  isMailConfigured,
+  sendPasswordResetOtp,
+  sendWelcomeEmail,
+  sendSecurityAccountAlertEmail,
+} = require('../mail');
 const { verifyGoogleIdToken, isGoogleAuthConfigured } = require('../googleAuth');
 
 const router = express.Router();
@@ -121,6 +126,11 @@ router.post('/register', async (req, res) => {
       return res.status(500).json({ error: 'Could not allocate user id; retry' });
     }
     const tokens = await issueTokens(userRow.id);
+    if (isMailConfigured()) {
+      sendWelcomeEmail({ to: em, displayName: name }).catch((mailErr) => {
+        console.error('welcome_email_failed', mailErr && (mailErr.message || mailErr));
+      });
+    }
     return res.status(201).json({
       user: mapUserRow(userRow),
       accessToken: tokens.accessToken,
@@ -166,6 +176,16 @@ router.post('/login', async (req, res) => {
     const ok = await bcrypt.compare(pw, row.password_hash);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
     const tokens = await issueTokens(row.id);
+    if (isMailConfigured() && row.email) {
+      sendSecurityAccountAlertEmail({
+        to: String(row.email || '').trim(),
+        subject: 'New login detected',
+        eventType: 'New Login',
+        eventDetail: `A new login was detected from IP ${String(req.ip || '')} using ${String(req.headers['user-agent'] || '').slice(0, 120)}.`,
+      }).catch((mailErr) => {
+        console.error('security_login_alert_failed', mailErr && (mailErr.message || mailErr));
+      });
+    }
     return res.json({
       user: mapUserRow(row),
       accessToken: tokens.accessToken,
@@ -253,6 +273,16 @@ router.post('/google', async (req, res) => {
       return res.status(403).json({ error: row.ban_reason || 'Account is blocked by admin' });
     }
     const tokens = await issueTokens(row.id);
+    if (isMailConfigured() && row.email) {
+      sendSecurityAccountAlertEmail({
+        to: String(row.email || '').trim(),
+        subject: 'Google sign-in detected',
+        eventType: 'Google Login',
+        eventDetail: `A Google sign-in was detected from IP ${String(req.ip || '')}. If this was not you, secure your account now.`,
+      }).catch((mailErr) => {
+        console.error('security_google_login_alert_failed', mailErr && (mailErr.message || mailErr));
+      });
+    }
     return res.json({
       user: mapUserRow(row),
       accessToken: tokens.accessToken,
@@ -432,6 +462,16 @@ router.post('/password-reset/complete', async (req, res) => {
       [userId, tokenRow.id],
     );
     await client.query('COMMIT');
+    if (isMailConfigured()) {
+      sendSecurityAccountAlertEmail({
+        to: em,
+        subject: 'Password changed successfully',
+        eventType: 'Password Changed',
+        eventDetail: `Your password was changed successfully. If you did not perform this action, reset password immediately.`,
+      }).catch((mailErr) => {
+        console.error('security_password_change_alert_failed', mailErr && (mailErr.message || mailErr));
+      });
+    }
     return res.json({ ok: true });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});

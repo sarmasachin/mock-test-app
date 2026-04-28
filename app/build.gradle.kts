@@ -5,7 +5,6 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
-    id("com.google.gms.google-services")
 }
 
 val localProperties = Properties().apply {
@@ -14,12 +13,11 @@ val localProperties = Properties().apply {
 }
 
 android {
-    namespace = "com.freemocktest.app"
+    namespace = "com.example.mocktestapp"
     compileSdk = 34
 
     defaultConfig {
-        // Final app identity for Play Store/Firebase.
-        applicationId = "com.freemocktest.app"
+        applicationId = "com.example.mocktestapp"
         minSdk = 26
         targetSdk = 34
         versionCode = 2
@@ -103,8 +101,6 @@ dependencies {
     implementation("androidx.credentials:credentials:1.3.0")
     implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
     implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
-    implementation("com.google.firebase:firebase-messaging-ktx:24.0.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
