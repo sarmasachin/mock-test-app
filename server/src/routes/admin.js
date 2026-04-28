@@ -2595,7 +2595,7 @@ router.post('/notifications/send', async (req, res) => {
       )`;
     }
     const tokenRows = await pool.query(
-      `SELECT udt.id, udt.device_token
+      `SELECT udt.device_token
        FROM user_device_tokens udt
        INNER JOIN users u ON u.id = udt.user_id
        WHERE udt.is_active = true AND ${whereClause}
@@ -2617,8 +2617,8 @@ router.post('/notifications/send', async (req, res) => {
             await pool.query(
               `UPDATE user_device_tokens
                SET is_active = false, updated_at = now()
-               WHERE id = $1`,
-              [row.id],
+               WHERE device_token = $1`,
+              [row.device_token],
             );
             deactivated += 1;
           }
