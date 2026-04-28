@@ -1,6 +1,7 @@
 'use strict';
 
 const { pool } = require('./db');
+const { GoogleAuth } = require('google-auth-library');
 
 const MAX_ITEMS = 500;
 
@@ -71,8 +72,14 @@ async function appendPushNotificationFeed(payload, userId = null) {
 }
 
 async function sendFcmBroadcast(payload) {
-  const serverKey = String(process.env.FCM_SERVER_KEY || '').trim();
-  if (!serverKey) return { ok: false, reason: 'FCM_SERVER_KEY missing' };
+  // Prefer FCM HTTP v1 (service account) because legacy HTTP endpoint may be disabled.
+  const v1ProjectId = String(process.env.FCM_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '').trim();
+  const serviceJsonRaw = String(process.env.FCM_SERVICE_ACCOUNT_JSON || '').trim();
+  const legacyServerKey = String(process.env.FCM_SERVER_KEY || '').trim();
+
+  if (!v1ProjectId && !legacyServerKey) {
+    return { ok: false, reason: 'FCM config missing', detail: 'Set FCM_PROJECT_ID + FCM_SERVICE_ACCOUNT_JSON (preferred) or FCM_SERVER_KEY (legacy)' };
+  }
   let rows = [];
   try {
     await ensureUserDeviceTokensTable();
@@ -87,6 +94,115 @@ async function sendFcmBroadcast(payload) {
   const tokens = rows.map((x) => String(x.token || '').trim()).filter(Boolean);
   if (!tokens.length) return { ok: false, reason: 'no tokens' };
 
+  // --- FCM HTTP v1 path ---
+  if (v1ProjectId && serviceJsonRaw) {
+    const creds = (() => {
+      try {
+        return JSON.parse(serviceJsonRaw);
+      } catch (_e) {
+        return null;
+      }
+    })();
+    if (!creds || !creds.client_email || !creds.private_key) {
+      return { ok: false, reason: 'FCM_SERVICE_ACCOUNT_JSON invalid' };
+    }
+    const auth = new GoogleAuth({
+      credentials: creds,
+      scopes: ['https://www.googleapis.com/auth/firebase.messaging'],
+    });
+    const client = await auth.getClient();
+    const accessToken = await client.getAccessToken();
+    if (!accessToken || !accessToken.token) {
+      return { ok: false, reason: 'fcm_v1_token_missing' };
+    }
+
+    const url = `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(v1ProjectId)}/messages:send`;
+    const invalid = [];
+    let sent = 0;
+
+    // Limit concurrency to avoid rate limits.
+    const CONCURRENCY = 20;
+    let i = 0;
+    async function sendOne(token) {
+      const body = {
+        message: {
+          token,
+          notification: {
+            title: String(payload.title || 'MockTestApp'),
+            body: String(payload.message || 'New update'),
+          },
+          data: {
+            title: String(payload.title || 'MockTestApp'),
+            body: String(payload.message || 'New update'),
+            target: String(payload.target || 'all'),
+            deepLink: String(payload.deepLink || '').trim(),
+          },
+          android: {
+            priority: 'HIGH',
+            notification: {
+              channel_id: 'exams_jobs_alerts_v2',
+              sound: 'default',
+            },
+          },
+        },
+      };
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+      if (resp.ok) {
+        sent += 1;
+        return;
+      }
+      const txt = await resp.text().catch(() => '');
+      // v1 commonly returns 404 NOT_FOUND for unregistered tokens.
+      const isUnregistered =
+        resp.status === 404 ||
+        txt.includes('UNREGISTERED') ||
+        txt.includes('registration-token-not-registered') ||
+        txt.includes('Requested entity was not found');
+      if (isUnregistered) invalid.push(token);
+    }
+
+    async function worker() {
+      while (true) {
+        const idx = i;
+        i += 1;
+        if (idx >= tokens.length) return;
+        const token = tokens[idx];
+        if (!token) continue;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await sendOne(token);
+        } catch (_e) {
+          // Ignore single-token failure; we'll keep token for now.
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tokens.length) }, () => worker()));
+
+    if (invalid.length) {
+      try {
+        await pool.query(`DELETE FROM user_device_tokens WHERE token = ANY($1::text[])`, [invalid]);
+      } catch (e) {
+        console.warn('token_cleanup_failed', e?.message || e);
+      }
+    }
+    // Optional: remove tokens that haven't been updated in 30 days.
+    try {
+      await pool.query(`DELETE FROM user_device_tokens WHERE updated_at < now() - interval '30 days'`);
+    } catch (_e) {}
+
+    return { ok: sent > 0, sent, invalidDeleted: invalid.length };
+  }
+
+  // --- Legacy HTTP path (may be disabled) ---
+  if (!legacyServerKey) return { ok: false, reason: 'FCM_SERVER_KEY missing' };
   const body = {
     registration_ids: tokens,
     priority: 'high',
@@ -107,7 +223,7 @@ async function sendFcmBroadcast(payload) {
   const resp = await fetch('https://fcm.googleapis.com/fcm/send', {
     method: 'POST',
     headers: {
-      Authorization: `key=${serverKey}`,
+      Authorization: `key=${legacyServerKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
