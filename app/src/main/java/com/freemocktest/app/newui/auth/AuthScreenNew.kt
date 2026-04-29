@@ -189,6 +189,7 @@ private fun EmailVerificationPopupModal(
     var verifyBusy by remember { mutableStateOf(false) }
     var inlineError by remember { mutableStateOf("") }
     var inlineSuccess by remember { mutableStateOf("") }
+    val initialEmailNormalized = remember(initialEmail) { initialEmail.trim().lowercase() }
 
     LaunchedEffect(resendSeconds, otpRequested) {
         if (otpRequested && resendSeconds > 0) {
@@ -208,53 +209,108 @@ private fun EmailVerificationPopupModal(
             busy = true
             inlineError = ""
             inlineSuccess = ""
-            val updateResult = AuthRepository.patchProfileRemote(email = normalizedEmail)
-            updateResult.fold(
-                onSuccess = {
-                    AuthRepository.requestEmailVerificationOtp().fold(
-                        onSuccess = {
-                            otpRequested = true
-                            resendSeconds = 30
-                            inlineSuccess = "OTP sent to your email"
-                            inlineError = ""
-                        },
-                        onFailure = { e ->
-                            inlineSuccess = ""
-                            inlineError = networkAwareError(e, "Could not send OTP")
-                        },
-                    )
-                },
-                onFailure = { e ->
-                    inlineSuccess = ""
-                    inlineError = networkAwareError(e, "Could not update email")
-                },
-            )
+            val needsProfileEmailUpdate = normalizedEmail != initialEmailNormalized
+            if (needsProfileEmailUpdate) {
+                val updateResult = AuthRepository.patchProfileRemote(email = normalizedEmail)
+                updateResult.fold(
+                    onSuccess = {
+                        AuthRepository.requestEmailVerificationOtp().fold(
+                            onSuccess = {
+                                otpRequested = true
+                                resendSeconds = 30
+                                inlineSuccess = "OTP sent to your email"
+                                inlineError = ""
+                            },
+                            onFailure = { e ->
+                                inlineSuccess = ""
+                                inlineError = networkAwareError(e, "Could not send OTP")
+                            },
+                        )
+                    },
+                    onFailure = { e ->
+                        inlineSuccess = ""
+                        inlineError = networkAwareError(e, "Could not update email")
+                    },
+                )
+            } else {
+                AuthRepository.requestEmailVerificationOtp().fold(
+                    onSuccess = {
+                        otpRequested = true
+                        resendSeconds = 30
+                        inlineSuccess = "OTP sent to your email"
+                        inlineError = ""
+                    },
+                    onFailure = { e ->
+                        inlineSuccess = ""
+                        inlineError = networkAwareError(e, "Could not send OTP")
+                    },
+                )
+            }
             busy = false
         }
     }
 
+    LaunchedEffect(Unit) {
+        val normalizedEmail = email.trim().lowercase()
+        if (isValidEmail(normalizedEmail) && !otpRequested && !busy && !verifyBusy) {
+            sendOtp()
+        }
+    }
+
     Dialog(onDismissRequest = onDismiss) {
+        val cardBrush = Brush.verticalGradient(
+            colors = listOf(
+                p.surface.copy(alpha = 0.97f),
+                p.surface.copy(alpha = 0.90f),
+            ),
+        )
+        val titleBrush = Brush.horizontalGradient(
+            colors = listOf(p.primaryButton, p.accent),
+        )
+        val fieldColors = TextFieldDefaults.colors(
+            focusedContainerColor = p.surface.copy(alpha = 0.92f),
+            unfocusedContainerColor = p.surface.copy(alpha = 0.92f),
+            disabledContainerColor = p.surface.copy(alpha = 0.80f),
+            focusedIndicatorColor = p.accent,
+            unfocusedIndicatorColor = p.border,
+            focusedLabelColor = p.accent,
+            unfocusedLabelColor = p.textSecondary,
+            focusedTextColor = p.textPrimary,
+            unfocusedTextColor = p.textPrimary,
+        )
+
         Card(
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = p.surface),
-            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, p.border.copy(alpha = 0.36f), RoundedCornerShape(24.dp))
+                .background(cardBrush, RoundedCornerShape(24.dp)),
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(18.dp),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = "Verify your email",
-                        color = p.textPrimary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
+                    Column {
+                        Text(
+                            text = "Premium Security Check",
+                            color = p.textPrimary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            text = "Verify Your Email",
+                            color = p.textPrimary,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                        )
+                    }
                     IconButton(onClick = onDismiss) {
                         Icon(
                             imageVector = Icons.Outlined.Close,
@@ -263,22 +319,32 @@ private fun EmailVerificationPopupModal(
                         )
                     }
                 }
-                Text(
-                    text = "Secure your account. You can edit email before sending OTP.",
-                    color = p.textSecondary,
-                    fontSize = 13.sp,
-                )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(p.accent.copy(alpha = 0.12f))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        text = "Secure your account with one-time verification code.",
+                        color = p.textSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
                 OutlinedTextField(
                     value = email,
                     onValueChange = {
                         email = it.trim()
                         inlineError = ""
                     },
-                    label = { Text("Email") },
+                    label = { Text("Email Address") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !busy && !verifyBusy,
+                    colors = fieldColors,
                 )
                 if (otpRequested) {
                     Spacer(Modifier.height(10.dp))
@@ -293,6 +359,7 @@ private fun EmailVerificationPopupModal(
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !busy && !verifyBusy,
+                        colors = fieldColors,
                     )
                 }
                 if (inlineError.isNotBlank()) {
@@ -301,17 +368,29 @@ private fun EmailVerificationPopupModal(
                 }
                 if (inlineSuccess.isNotBlank()) {
                     Spacer(Modifier.height(8.dp))
-                    Text(inlineSuccess, color = Color(0xFF16A34A), fontSize = 12.sp)
+                    Text(inlineSuccess, color = Color(0xFF16A34A), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
-                Spacer(Modifier.height(14.dp))
+                if (otpRequested && resendSeconds > 0) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Resend available in ${resendSeconds}s",
+                        color = p.textSecondary,
+                        fontSize = 12.sp,
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
                 if (!otpRequested) {
                     Button(
                         onClick = { sendOtp() },
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !busy && !verifyBusy,
-                        colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = p.primaryButton,
+                            contentColor = p.onPrimaryButton,
+                        ),
+                        shape = RoundedCornerShape(14.dp),
                     ) {
-                        Text(if (busy) "Sending..." else "Send OTP")
+                        Text(if (busy) "Sending OTP..." else "Send Verification OTP")
                     }
                 } else {
                     Row(
@@ -345,7 +424,11 @@ private fun EmailVerificationPopupModal(
                             },
                             modifier = Modifier.weight(1f),
                             enabled = !busy && !verifyBusy,
-                            colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.primaryButton,
+                                contentColor = p.onPrimaryButton,
+                            ),
+                            shape = RoundedCornerShape(14.dp),
                         ) {
                             Text(if (verifyBusy) "Verifying..." else "Verify OTP")
                         }
@@ -353,7 +436,8 @@ private fun EmailVerificationPopupModal(
                             onClick = { sendOtp() },
                             modifier = Modifier.weight(1f),
                             enabled = resendSeconds == 0 && !busy && !verifyBusy,
-                            colors = ButtonDefaults.buttonColors(containerColor = p.primaryButton),
+                            colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+                            shape = RoundedCornerShape(14.dp),
                         ) {
                             Text(
                                 if (resendSeconds > 0) "Resend ${resendSeconds}s" else if (busy) "Sending..." else "Resend OTP",
