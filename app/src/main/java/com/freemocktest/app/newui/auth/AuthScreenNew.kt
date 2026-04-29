@@ -4,14 +4,11 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -22,13 +19,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -49,8 +44,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -205,7 +198,6 @@ private fun EmailVerificationPopupModal(
     }
 
     fun sendOtp() {
-        if (busy || verifyBusy) return
         val normalizedEmail = email.trim().lowercase()
         if (!isValidEmail(normalizedEmail)) {
             inlineSuccess = ""
@@ -319,14 +311,6 @@ private fun EmailVerificationPopupModal(
                         enabled = !busy && !verifyBusy,
                         colors = ButtonDefaults.buttonColors(containerColor = p.accent),
                     ) {
-                        if (busy) {
-                            CircularProgressIndicator(
-                                color = p.onPrimaryButton,
-                                strokeWidth = 2.dp,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                        }
                         Text(if (busy) "Sending..." else "Send OTP")
                     }
                 } else {
@@ -363,14 +347,6 @@ private fun EmailVerificationPopupModal(
                             enabled = !busy && !verifyBusy,
                             colors = ButtonDefaults.buttonColors(containerColor = p.accent),
                         ) {
-                            if (verifyBusy) {
-                                CircularProgressIndicator(
-                                    color = p.onPrimaryButton,
-                                    strokeWidth = 2.dp,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(8.dp))
-                            }
                             Text(if (verifyBusy) "Verifying..." else "Verify OTP")
                         }
                         Button(
@@ -379,14 +355,6 @@ private fun EmailVerificationPopupModal(
                             enabled = resendSeconds == 0 && !busy && !verifyBusy,
                             colors = ButtonDefaults.buttonColors(containerColor = p.primaryButton),
                         ) {
-                            if (busy && resendSeconds == 0) {
-                                CircularProgressIndicator(
-                                    color = p.onPrimaryButton,
-                                    strokeWidth = 2.dp,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(8.dp))
-                            }
                             Text(
                                 if (resendSeconds > 0) "Resend ${resendSeconds}s" else if (busy) "Sending..." else "Resend OTP",
                             )
@@ -418,30 +386,30 @@ private fun AuthCard(
     val onGoogleSignIn: () -> Unit = {
         val act = context.findComponentActivity()
         if (act == null) {
-            onError("Google sign-in is not available on this device.")
+            onError("Google Sign-In is not available.")
         } else if (BuildConfig.GOOGLE_WEB_CLIENT_ID.isBlank()) {
             onError(
-                "Google sign-in is currently unavailable. Please try again later.",
+                "Add mocktest.googleWebClientId to local.properties (Web client ID — same as server GOOGLE_WEB_CLIENT_ID).",
             )
         } else {
             scope.launch {
                 val idToken = GoogleSignInHelper.requestIdToken(act).getOrElse { e ->
-                    onError(googleAuthErrorMessage(e))
+                    onError(networkAwareError(e, "Google Sign-In failed"))
                     return@launch
                 }
                 AuthRepository.loginWithGoogle(idToken)
                     .onSuccess { user ->
                         if (user.needsProfileCompletion()) {
-                            onSuccess("Google sign-in successful. Please complete your profile to continue.")
+                            onSuccess("Login successful")
                             delay(600)
                             onProfileIncomplete()
                         } else {
-                            onSuccess("Welcome back. Google sign-in successful.")
+                            onSuccess("Login successful")
                             delay(600)
                             onAuthSuccess()
                         }
                     }
-                    .onFailure { e -> onError(googleAuthErrorMessage(e)) }
+                    .onFailure { e -> onError(networkAwareError(e, "Google Sign-In failed")) }
             }
         }
     }
@@ -754,7 +722,6 @@ private fun LoginForm(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SignupForm(
     onSwitch: () -> Unit,
@@ -767,17 +734,6 @@ private fun SignupForm(
     val p = mockTestPalette()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val usernameBringRequester = remember { BringIntoViewRequester() }
-    val emailBringRequester = remember { BringIntoViewRequester() }
-    val mobileBringRequester = remember { BringIntoViewRequester() }
-    val stateBringRequester = remember { BringIntoViewRequester() }
-    val districtBringRequester = remember { BringIntoViewRequester() }
-    val passwordBringRequester = remember { BringIntoViewRequester() }
-    val termsBringRequester = remember { BringIntoViewRequester() }
-    val usernameFocusRequester = remember { FocusRequester() }
-    val emailFocusRequester = remember { FocusRequester() }
-    val mobileFocusRequester = remember { FocusRequester() }
-    val passwordFocusRequester = remember { FocusRequester() }
     var username by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var mobile by remember { mutableStateOf("") }
@@ -806,9 +762,6 @@ private fun SignupForm(
         onValueChange = { username = it },
         label = "Username",
         isPassword = false,
-        modifier = Modifier
-            .bringIntoViewRequester(usernameBringRequester)
-            .focusRequester(usernameFocusRequester),
         errorText = usernameError,
         isError = usernameError != null,
     )
@@ -818,9 +771,6 @@ private fun SignupForm(
         onValueChange = { email = it },
         label = "Email",
         isPassword = false,
-        modifier = Modifier
-            .bringIntoViewRequester(emailBringRequester)
-            .focusRequester(emailFocusRequester),
         errorText = emailError,
         isError = emailError != null,
     )
@@ -830,9 +780,6 @@ private fun SignupForm(
         onValueChange = { mobile = it.filter(Char::isDigit).take(10) },
         label = "Mobile Number",
         isPassword = false,
-        modifier = Modifier
-            .bringIntoViewRequester(mobileBringRequester)
-            .focusRequester(mobileFocusRequester),
         errorText = mobileError,
         isError = mobileError != null,
     )
@@ -847,7 +794,6 @@ private fun SignupForm(
         },
         label = "State",
         options = SignupRegionData.indianStates,
-        modifier = Modifier.bringIntoViewRequester(stateBringRequester),
         enabled = true,
         errorText = stateError,
         isError = stateError != null,
@@ -858,7 +804,6 @@ private fun SignupForm(
         onValueChange = { district = it },
         label = if (stateMatched) "District" else "District (select state first)",
         options = districtOptions,
-        modifier = Modifier.bringIntoViewRequester(districtBringRequester),
         enabled = stateMatched && districtOptions.isNotEmpty(),
         errorText = districtError,
         isError = districtError != null,
@@ -869,17 +814,12 @@ private fun SignupForm(
         onValueChange = { password = it },
         label = "Password",
         isPassword = true,
-        modifier = Modifier
-            .bringIntoViewRequester(passwordBringRequester)
-            .focusRequester(passwordFocusRequester),
         errorText = passwordError,
         isError = passwordError != null,
     )
     Spacer(Modifier.height(10.dp))
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .bringIntoViewRequester(termsBringRequester),
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Checkbox(
@@ -973,59 +913,22 @@ private fun SignupForm(
                 else -> null
             }
 
-            val firstError = listOf(
-                Pair("username", newUsernameError),
-                Pair("email", newEmailError),
-                Pair("mobile", newMobileError),
-                Pair("state", newStateError),
-                Pair("district", newDistrictError),
-                Pair("password", newPasswordError),
-                Pair("terms", newTermsError),
-            ).firstOrNull { it.second != null }
-
-            if (firstError != null) {
-                when (firstError.first) {
-                    "username" -> {
-                        usernameError = firstError.second
-                        scope.launch {
-                            usernameBringRequester.bringIntoView()
-                            usernameFocusRequester.requestFocus()
-                        }
-                    }
-                    "email" -> {
-                        emailError = firstError.second
-                        scope.launch {
-                            emailBringRequester.bringIntoView()
-                            emailFocusRequester.requestFocus()
-                        }
-                    }
-                    "mobile" -> {
-                        mobileError = firstError.second
-                        scope.launch {
-                            mobileBringRequester.bringIntoView()
-                            mobileFocusRequester.requestFocus()
-                        }
-                    }
-                    "state" -> {
-                        stateError = firstError.second
-                        scope.launch { stateBringRequester.bringIntoView() }
-                    }
-                    "district" -> {
-                        districtError = firstError.second
-                        scope.launch { districtBringRequester.bringIntoView() }
-                    }
-                    "password" -> {
-                        passwordError = firstError.second
-                        scope.launch {
-                            passwordBringRequester.bringIntoView()
-                            passwordFocusRequester.requestFocus()
-                        }
-                    }
-                    "terms" -> {
-                        termsError = firstError.second
-                        scope.launch { termsBringRequester.bringIntoView() }
-                    }
-                }
+            if (
+                newUsernameError != null ||
+                newEmailError != null ||
+                newMobileError != null ||
+                newStateError != null ||
+                newDistrictError != null ||
+                newPasswordError != null ||
+                newTermsError != null
+            ) {
+                usernameError = newUsernameError
+                emailError = newEmailError
+                mobileError = newMobileError
+                stateError = newStateError
+                districtError = newDistrictError
+                passwordError = newPasswordError
+                termsError = newTermsError
             } else {
                 busy = true
                 scope.launch {
@@ -1091,34 +994,6 @@ private fun networkAwareError(error: Throwable?, fallback: String): String {
         "No internet connection. Please check your network and try again."
     } else {
         raw.ifBlank { fallback }
-    }
-}
-
-private fun googleAuthErrorMessage(error: Throwable?): String {
-    val raw = error?.message?.trim().orEmpty()
-    val lowered = raw.lowercase()
-    val likelyOffline =
-        error is UnknownHostException ||
-            error is SocketTimeoutException ||
-            error is ConnectException ||
-            lowered.contains("unable to resolve host") ||
-            lowered.contains("failed to connect") ||
-            lowered.contains("timeout") ||
-            lowered.contains("network")
-    if (likelyOffline) {
-        return "Network issue detected. Please check your internet connection and try again."
-    }
-    return when {
-        lowered.contains("no google account data") ->
-            "No Google account data is available for this app on this device. Please try another account."
-        lowered.contains("cancel") ->
-            "Google sign-in was cancelled. Please tap Continue with Google to try again."
-        lowered.contains("not configured") || lowered.contains("unavailable on this server") ->
-            "Google sign-in is temporarily unavailable. Please try again later."
-        lowered.contains("invalid or expired") ->
-            "Your Google sign-in session has expired. Please sign in again."
-        else ->
-            raw.ifBlank { "Google sign-in failed. Please try again." }
     }
 }
 

@@ -12,7 +12,20 @@
           "package_name": "com.freemocktest.app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "532425267567-s8k1iokm9lh46gsohgipk3elpe0jik0b.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.freemocktest.app",
+            "certificate_hash": "a845b2431edd049e94faa752779b23b510eef3f3"
+          }
+        },
+        {
+          "client_id": "532425267567-rphktqaqjlbhpf6o39ondpk84h8b7cjg.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyAupupWS8lHWCot3RQzjCAvockj_nXeWx4"
@@ -20,7 +33,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "532425267567-rphktqaqjlbhpf6o39ondpk84h8b7cjg.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }
