@@ -23,6 +23,9 @@ function createTransport() {
   const connectionTimeout = parseInt(process.env.SMTP_CONNECTION_TIMEOUT_MS || '10000', 10);
   const greetingTimeout = parseInt(process.env.SMTP_GREETING_TIMEOUT_MS || '10000', 10);
   const socketTimeout = parseInt(process.env.SMTP_SOCKET_TIMEOUT_MS || '15000', 10);
+  const tlsRejectUnauthorized =
+    String(process.env.SMTP_TLS_REJECT_UNAUTHORIZED || 'true').toLowerCase() !== 'false';
+  const tlsMinVersion = String(process.env.SMTP_TLS_MIN_VERSION || 'TLSv1.2').trim();
 
   return nodemailer.createTransport({
     host,
@@ -34,6 +37,54 @@ function createTransport() {
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
+    },
+    tls: {
+      rejectUnauthorized: tlsRejectUnauthorized,
+      minVersion: tlsMinVersion,
+    },
+  });
+}
+
+function createTransportForPrefix(prefix) {
+  const safePrefix = String(prefix || '').trim();
+  const host = String(process.env[`${safePrefix}HOST`] || process.env.SMTP_HOST || 'smtp.gmail.com').trim();
+  const port = parseInt(process.env[`${safePrefix}PORT`] || process.env.SMTP_PORT || '587', 10);
+  const secure =
+    String(process.env[`${safePrefix}SECURE`] || process.env.SMTP_SECURE || 'false').toLowerCase() === 'true';
+  const connectionTimeout = parseInt(
+    process.env[`${safePrefix}CONNECTION_TIMEOUT_MS`] || process.env.SMTP_CONNECTION_TIMEOUT_MS || '10000',
+    10,
+  );
+  const greetingTimeout = parseInt(
+    process.env[`${safePrefix}GREETING_TIMEOUT_MS`] || process.env.SMTP_GREETING_TIMEOUT_MS || '10000',
+    10,
+  );
+  const socketTimeout = parseInt(
+    process.env[`${safePrefix}SOCKET_TIMEOUT_MS`] || process.env.SMTP_SOCKET_TIMEOUT_MS || '15000',
+    10,
+  );
+  const tlsRejectUnauthorized =
+    String(
+      process.env[`${safePrefix}TLS_REJECT_UNAUTHORIZED`] ||
+        process.env.SMTP_TLS_REJECT_UNAUTHORIZED ||
+        'true',
+    ).toLowerCase() !== 'false';
+  const tlsMinVersion = String(
+    process.env[`${safePrefix}TLS_MIN_VERSION`] || process.env.SMTP_TLS_MIN_VERSION || 'TLSv1.2',
+  ).trim();
+  const user = String(process.env[`${safePrefix}USER`] || process.env.SMTP_USER || '').trim();
+  const pass = String(process.env[`${safePrefix}PASS`] || process.env.SMTP_PASS || '').trim();
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    connectionTimeout,
+    greetingTimeout,
+    socketTimeout,
+    auth: { user, pass },
+    tls: {
+      rejectUnauthorized: tlsRejectUnauthorized,
+      minVersion: tlsMinVersion,
     },
   });
 }
@@ -166,14 +217,72 @@ async function sendWelcomeEmail(opts) {
   const to = String(opts?.to || '').trim();
   const displayName = String(opts?.displayName || 'User').trim();
   const brand = String(process.env.MAIL_BRAND_NAME || 'MockTestApp').trim();
-  await sendMail({
+  const welcomeUser = String(process.env.SMTP_WELCOME_USER || process.env.SMTP_USER || '').trim();
+  const welcomePass = String(process.env.SMTP_WELCOME_PASS || process.env.SMTP_PASS || '').trim();
+  if (!welcomeUser || !welcomePass) {
+    throw new Error('Welcome SMTP not configured (set SMTP_WELCOME_USER and SMTP_WELCOME_PASS)');
+  }
+  const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || process.env.MAIL_FROM || welcomeUser).trim();
+  const appUrl = String(process.env.MAIL_APP_URL || '').trim();
+  const ctaLink = appUrl || 'https://play.google.com/store';
+  const ctaLabel = appUrl ? 'Open Dashboard' : 'Start Your First Test';
+  const subject = String(process.env.MAIL_SUBJECT_WELCOME || `Welcome to ${brand}`).trim();
+  const logoUrl = String(process.env.MAIL_LOGO_URL || '').trim();
+  const brandInitial = (brand.trim().charAt(0) || 'M').toUpperCase();
+  const logoMarkup = logoUrl
+    ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(brand)} logo" width="52" height="52" style="display:inline-block;width:52px;height:52px;border-radius:999px;border:1px solid #d0d7de;object-fit:cover;" />`
+    : `<span style="display:inline-block;width:52px;height:52px;line-height:52px;border-radius:999px;background:#111827;color:#ffffff;font-size:22px;font-weight:700;text-align:center;">${escapeHtml(brandInitial)}</span>`;
+  const safeName = escapeHtml(displayName || 'Learner');
+  const footerContactText = supportEmail
+    ? `Need help? Contact us at ${escapeHtml(supportEmail)}.`
+    : 'Need help? Our support team is always with you.';
+  const transporter = createTransportForPrefix('SMTP_WELCOME_');
+  await transporter.sendMail({
+    from: String(process.env.MAIL_FROM_WELCOME || process.env.MAIL_FROM || welcomeUser).trim(),
+    replyTo: String(process.env.MAIL_REPLY_TO_WELCOME || process.env.MAIL_SUPPORT_EMAIL || welcomeUser).trim(),
     to,
-    subject: `Welcome to ${brand}`,
-    text: `Hi ${displayName}, welcome to ${brand}. Your account is ready.`,
+    subject,
+    text:
+      `Hello ${displayName || 'Learner'}, welcome to ${brand}.\n\n` +
+      `We are happy to have you with us. You can now:\n` +
+      `- Practice mock tests\n` +
+      `- Improve daily with quiz and digest\n` +
+      `- Track your progress and rankings\n` +
+      `- Stay updated with exam and job alerts\n\n` +
+      `Start here: ${ctaLink}\n\n` +
+      `${footerContactText}`,
     html: `
-      <div style="font-family:Segoe UI,Arial,sans-serif;line-height:1.5;color:#111">
-        <h2>Welcome to ${escapeHtml(brand)}</h2>
-        <p>Hi ${escapeHtml(displayName)}, your account is ready.</p>
+      <div style="background:#f3f6fb;padding:26px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111827;word-break:break-word;overflow-wrap:anywhere;">
+        <div style="max-width:620px;margin:0 auto;background:#ffffff;border:1px solid #dbe3ef;border-radius:18px;overflow:hidden;">
+          <div style="background:linear-gradient(135deg,#1d4ed8 0%,#2563eb 45%,#14b8a6 100%);padding:26px 22px;text-align:center;">
+            ${logoMarkup}
+            <p style="margin:14px 0 6px 0;font-size:15px;line-height:1.4;color:#eaf2ff;letter-spacing:0.08em;text-transform:uppercase;">Welcome to ${escapeHtml(brand)}</p>
+            <p style="margin:0;font-size:33px;line-height:1.15;font-weight:800;color:#ffffff;">Hello, ${safeName}</p>
+          </div>
+          <div style="padding:24px 22px 20px 22px;">
+            <p style="margin:0 0 14px 0;font-size:18px;line-height:1.55;color:#1f2937;">
+              Your account is ready. We are excited to support your preparation journey with a premium experience.
+            </p>
+            <div style="background:#f8fbff;border:1px solid #dbeafe;border-radius:14px;padding:14px 14px 8px 14px;margin:0 0 18px 0;">
+              <p style="margin:0 0 10px 0;font-size:14px;color:#1e3a8a;font-weight:700;">What you can do now</p>
+              <p style="margin:0 0 8px 0;font-size:15px;line-height:1.5;">- Attempt high-quality mock tests with real exam feel.</p>
+              <p style="margin:0 0 8px 0;font-size:15px;line-height:1.5;">- Stay consistent with daily quiz and digest updates.</p>
+              <p style="margin:0 0 8px 0;font-size:15px;line-height:1.5;">- Track performance from history, score and leaderboard.</p>
+              <p style="margin:0 0 8px 0;font-size:15px;line-height:1.5;">- Get timely job, exam and important news alerts.</p>
+            </div>
+            <div style="text-align:center;margin:0 0 14px 0;">
+              <a href="${escapeHtml(ctaLink)}" style="display:inline-block;background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;border-radius:999px;padding:12px 26px;">
+                ${escapeHtml(ctaLabel)}
+              </a>
+            </div>
+            <p style="margin:0;font-size:14px;line-height:1.6;color:#4b5563;text-align:center;">
+              Thank you for trusting <strong>${escapeHtml(brand)}</strong>. Your goals matter to us, and we are here to help you succeed.
+            </p>
+          </div>
+          <div style="border-top:1px solid #e5e7eb;padding:14px 18px 18px 18px;background:#fbfcfe;">
+            <p style="margin:0;font-size:13px;line-height:1.6;color:#6b7280;text-align:center;">${footerContactText}</p>
+          </div>
+        </div>
       </div>
     `,
   });
