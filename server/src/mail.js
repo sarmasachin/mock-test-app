@@ -12,8 +12,9 @@ function isMailConfigured() {
 function resolveFromAddress() {
   const smtpUser = String(process.env.SMTP_USER || '').trim();
   const configuredFrom = String(process.env.MAIL_FROM || '').trim();
-  // Inbox placement is better when From is authenticated with SMTP account.
-  if (!configuredFrom) return smtpUser;
+  // Always prefer authenticated sender to avoid SMTP rejections on providers like Gmail.
+  // A custom MAIL_FROM can still be used only when SMTP_USER is missing.
+  if (smtpUser) return smtpUser;
   return configuredFrom;
 }
 
