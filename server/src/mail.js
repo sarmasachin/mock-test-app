@@ -1,11 +1,65 @@
 'use strict';
 
 const nodemailer = require('nodemailer');
+const { pool } = require('./db');
 const { sendWelcomeEmail: sendWelcomeEmailEvent } = require('./mailer/events/welcome');
 const { sendSecurityAccountAlertEmail: sendSecurityAlertEvent } = require('./mailer/events/security');
 const { sendCompleteProfileReminderEmail: sendProfileReminderEvent } = require('./mailer/events/profileReminder');
 const { sendAdminContentAlertEmail: sendAdminContentEvent } = require('./mailer/events/adminContent');
 const { sendResultUnlockedEmail: sendResultUnlockedEvent } = require('./mailer/events/resultUnlocked');
+const { sendMockTestStartingSoonEmail: sendMockStartEvent } = require('./mailer/events/mockTestStartingSoon');
+const { sendMissedTestFollowupEmail: sendMissedTestEvent } = require('./mailer/events/missedTestFollowup');
+const { sendStreakRiskAlertEmail: sendStreakRiskEvent } = require('./mailer/events/streakRisk');
+const { sendWeeklyPerformanceReportEmail: sendWeeklyPerfEvent } = require('./mailer/events/weeklyPerformance');
+const { sendRankMilestoneEmail: sendRankMilestoneEvent } = require('./mailer/events/rankMilestone');
+const { sendBirthdayEmail: sendBirthdayEvent } = require('./mailer/events/birthday');
+
+const EMAIL_EVENT_KEYS = {
+  welcome: 'welcome',
+  securityAlert: 'security_alert',
+  profileReminder: 'profile_reminder',
+  adminContentAlert: 'admin_content_alert',
+  resultUnlocked: 'result_unlocked',
+  mockTestStartingSoon: 'mock_test_starting_soon',
+  missedTestFollowup: 'missed_test_followup',
+  streakRiskAlert: 'streak_risk_alert',
+  weeklyPerformanceReport: 'weekly_performance_report',
+  rankMilestone: 'rank_milestone',
+  newContentByInterest: 'new_content_by_interest',
+  reEngagement: 're_engagement',
+  birthday: 'birthday',
+};
+
+let emailEventTogglesCache = null;
+let emailEventTogglesCacheAt = 0;
+
+async function getEmailEventToggles() {
+  const now = Date.now();
+  if (emailEventTogglesCache && now - emailEventTogglesCacheAt < 30000) {
+    return emailEventTogglesCache;
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT setting_value FROM app_settings WHERE setting_key = 'emailEventToggles' LIMIT 1`,
+    );
+    const raw = String(rows[0]?.setting_value || '{}');
+    const parsed = JSON.parse(raw);
+    const map = parsed && typeof parsed === 'object' ? parsed : {};
+    emailEventTogglesCache = map;
+    emailEventTogglesCacheAt = now;
+    return map;
+  } catch (_e) {
+    emailEventTogglesCache = {};
+    emailEventTogglesCacheAt = now;
+    return {};
+  }
+}
+
+async function isEmailEventEnabled(eventKey) {
+  const toggles = await getEmailEventToggles();
+  if (!Object.prototype.hasOwnProperty.call(toggles, eventKey)) return true;
+  return toggles[eventKey] !== false;
+}
 
 function isMailConfigured() {
   const smtpUser = String(process.env.SMTP_USER || '').trim();
@@ -219,10 +273,12 @@ async function sendEmailVerificationOtp(opts) {
 }
 
 async function sendWelcomeEmail(opts) {
+  if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.welcome))) return undefined;
   return sendWelcomeEmailEvent(opts);
 }
 
 async function sendSecurityAccountAlertEmail(opts) {
+  if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.securityAlert))) return undefined;
   return sendSecurityAlertEvent(opts);
 }
 
@@ -247,19 +303,41 @@ async function noop() {
 }
 
 async function sendCompleteProfileReminderEmail(opts) {
+  if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.profileReminder))) return undefined;
   return sendProfileReminderEvent(opts);
 }
 async function sendAdminContentAlertEmail(opts) {
+  if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.adminContentAlert))) return undefined;
   return sendAdminContentEvent(opts);
 }
 async function sendResultUnlockedEmail(opts) {
+  if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.resultUnlocked))) return undefined;
   return sendResultUnlockedEvent(opts);
 }
-const sendMockTestStartingSoonEmail = noop;
-const sendMissedTestFollowupEmail = noop;
-const sendStreakRiskAlertEmail = noop;
-const sendWeeklyPerformanceReportEmail = noop;
-const sendRankMilestoneEmail = noop;
+async function sendMockTestStartingSoonEmail(opts) {
+  if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.mockTestStartingSoon))) return undefined;
+  return sendMockStartEvent(opts);
+}
+async function sendMissedTestFollowupEmail(opts) {
+  if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.missedTestFollowup))) return undefined;
+  return sendMissedTestEvent(opts);
+}
+async function sendStreakRiskAlertEmail(opts) {
+  if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.streakRiskAlert))) return undefined;
+  return sendStreakRiskEvent(opts);
+}
+async function sendWeeklyPerformanceReportEmail(opts) {
+  if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.weeklyPerformanceReport))) return undefined;
+  return sendWeeklyPerfEvent(opts);
+}
+async function sendRankMilestoneEmail(opts) {
+  if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.rankMilestone))) return undefined;
+  return sendRankMilestoneEvent(opts);
+}
+async function sendBirthdayEmail(opts) {
+  if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.birthday))) return undefined;
+  return sendBirthdayEvent(opts);
+}
 const sendNewContentByInterestEmail = noop;
 const sendReEngagementEmail = noop;
 
@@ -276,6 +354,7 @@ module.exports = {
   sendStreakRiskAlertEmail,
   sendWeeklyPerformanceReportEmail,
   sendRankMilestoneEmail,
+  sendBirthdayEmail,
   sendNewContentByInterestEmail,
   sendReEngagementEmail,
   sendSecurityAccountAlertEmail,

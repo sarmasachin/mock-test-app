@@ -57,7 +57,24 @@ const SETTINGS_KEYS = [
   'termsOfUseContent',
   'testAdvancedConfigs',
   'resultUnlockEmailSettings',
+  'emailEventToggles',
 ];
+
+const DEFAULT_EMAIL_EVENT_TOGGLES = {
+  welcome: true,
+  security_alert: true,
+  profile_reminder: true,
+  admin_content_alert: true,
+  result_unlocked: true,
+  mock_test_starting_soon: true,
+  missed_test_followup: true,
+  streak_risk_alert: true,
+  weekly_performance_report: true,
+  rank_milestone: true,
+  new_content_by_interest: true,
+  re_engagement: true,
+  birthday: true,
+};
 
 function normalizeProfileMenuItems(value) {
   if (!Array.isArray(value)) return { error: 'profileMenuItems must be an array' };
@@ -547,6 +564,15 @@ function normalizeResultUnlockEmailSettings(value) {
   return { value: { enabled, delayHours } };
 }
 
+function normalizeEmailEventToggles(value) {
+  const safe = value && typeof value === 'object' ? value : {};
+  const out = {};
+  for (const key of Object.keys(DEFAULT_EMAIL_EVENT_TOGGLES)) {
+    out[key] = safe[key] !== false;
+  }
+  return { value: out };
+}
+
 async function logAdminAction(req, actionType, targetType, targetId, details) {
   try {
     await pool.query(
@@ -908,6 +934,15 @@ async function getSettingsMap() {
         };
       } catch (_e) {
         return { enabled: true, delayHours: 3 };
+      }
+    })(),
+    emailEventToggles: (() => {
+      try {
+        const parsed = JSON.parse(String(map.emailEventToggles || '{}'));
+        const normalized = normalizeEmailEventToggles(parsed);
+        return normalized.value;
+      } catch (_e) {
+        return { ...DEFAULT_EMAIL_EVENT_TOGGLES };
       }
     })(),
     feedbackInbox: (() => {
@@ -1353,6 +1388,8 @@ router.patch('/settings', async (req, res) => {
   if (normalizedResultUnlockEmailSettings && normalizedResultUnlockEmailSettings.error) {
     return res.status(400).json({ error: normalizedResultUnlockEmailSettings.error });
   }
+  const normalizedEmailEventToggles =
+    body.emailEventToggles === undefined ? null : normalizeEmailEventToggles(body.emailEventToggles);
   const normalizedFeedbackInbox =
     body.feedbackInbox === undefined ? null : normalizeSupportInbox(body.feedbackInbox);
   const normalizedReportIssueInbox =
@@ -1380,6 +1417,7 @@ router.patch('/settings', async (req, res) => {
     normalizedExamCategoryIconOptions === null &&
     normalizedNotificationScheduling === null &&
     normalizedResultUnlockEmailSettings === null &&
+    normalizedEmailEventToggles === null &&
     normalizedFeedbackInbox === null &&
     normalizedReportIssueInbox === null &&
     normalizedHelpSupportContent === null &&
@@ -1525,6 +1563,15 @@ router.patch('/settings', async (req, res) => {
           [JSON.stringify(normalizedResultUnlockEmailSettings.value), req.userId],
         );
       }
+      if (normalizedEmailEventToggles !== null) {
+        await client.query(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+           VALUES ('emailEventToggles', $1, $2::uuid)
+           ON CONFLICT (setting_key)
+           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [JSON.stringify(normalizedEmailEventToggles.value), req.userId],
+        );
+      }
       if (normalizedFeedbackInbox !== null) {
         await client.query(
           `INSERT INTO app_settings (setting_key, setting_value, updated_by)
@@ -1602,6 +1649,7 @@ router.patch('/settings', async (req, res) => {
       examCategoryIconOptionsUpdated: normalizedExamCategoryIconOptions !== null,
       notificationSchedulingUpdated: normalizedNotificationScheduling !== null,
       resultUnlockEmailSettingsUpdated: normalizedResultUnlockEmailSettings !== null,
+      emailEventTogglesUpdated: normalizedEmailEventToggles !== null,
       feedbackInboxUpdated: normalizedFeedbackInbox !== null,
       reportIssueInboxUpdated: normalizedReportIssueInbox !== null,
       helpSupportContentUpdated: normalizedHelpSupportContent !== null,
@@ -1984,18 +2032,30 @@ router.post('/tests/:id/questions', async (req, res) => {
     if (await hasDuplicateStemInTest(id, q.stem)) {
       return res.status(409).json({ error: 'Duplicate question detected for this test' });
     }
-    const { rows } = await pool.query(
-      `INSERT INTO questions (
-         test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published
-       ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published`,
-      [id, q.position, q.stem, q.choiceA, q.choiceB, q.choiceC, q.choiceD, q.correctIndex, q.explanation, q.isPublished],
-    );
-    return res.status(201).json({ item: rows[0] });
-  } catch (e) {
-    if (e.code === '23505') {
-      return res.status(409).json({ error: 'Position already used in this test' });
+    let created = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const posRes = await pool.query(`SELECT COALESCE(MAX(position), 0) AS max_pos FROM questions WHERE test_id = $1::uuid`, [id]);
+      const finalPosition = Number(posRes.rows[0]?.max_pos || 0) + 1;
+      try {
+        const { rows } = await pool.query(
+          `INSERT INTO questions (
+             test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published
+           ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           RETURNING id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published`,
+          [id, finalPosition, q.stem, q.choiceA, q.choiceB, q.choiceC, q.choiceD, q.correctIndex, q.explanation, q.isPublished],
+        );
+        created = rows[0];
+        break;
+      } catch (insertErr) {
+        if (insertErr && insertErr.code === '23505') continue;
+        throw insertErr;
+      }
     }
+    if (!created) {
+      return res.status(409).json({ error: 'Please retry. Could not assign question position safely.' });
+    }
+    return res.status(201).json({ item: created });
+  } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to create question' });
   }
@@ -2095,17 +2155,14 @@ router.patch('/tests/:id/questions/:questionId', async (req, res) => {
     }
     const { rows } = await pool.query(
       `UPDATE questions
-       SET position = $1, stem = $2, choice_a = $3, choice_b = $4, choice_c = $5, choice_d = $6, correct_index = $7, explanation = $8, is_published = $9
-       WHERE id = $10 AND test_id = $11::uuid
+       SET stem = $1, choice_a = $2, choice_b = $3, choice_c = $4, choice_d = $5, correct_index = $6, explanation = $7, is_published = $8
+       WHERE id = $9 AND test_id = $10::uuid
        RETURNING id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published`,
-      [q.position, q.stem, q.choiceA, q.choiceB, q.choiceC, q.choiceD, q.correctIndex, q.explanation, q.isPublished, qid, id],
+      [q.stem, q.choiceA, q.choiceB, q.choiceC, q.choiceD, q.correctIndex, q.explanation, q.isPublished, qid, id],
     );
     if (!rows[0]) return res.status(404).json({ error: 'Question not found' });
     return res.json({ item: rows[0] });
   } catch (e) {
-    if (e.code === '23505') {
-      return res.status(409).json({ error: 'Position already used in this test' });
-    }
     console.error(e);
     return res.status(500).json({ error: 'Failed to update question' });
   }

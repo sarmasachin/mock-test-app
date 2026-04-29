@@ -9,6 +9,7 @@ function mapUserRow(row) {
     isAdmin: Boolean(row.is_admin),
     isSuperAdmin: Boolean(row.is_super_admin),
     phone: row.phone,
+    birthdayDate: row.date_of_birth ? String(row.date_of_birth).slice(0, 10) : null,
     sixDigitPublicId: row.six_digit_public_id,
     signupState: row.signup_state || '',
     signupDistrict: row.signup_district || '',

@@ -145,11 +145,31 @@ type AppSettings = {
   maintenanceMode: boolean;
   maintenanceMessage: string;
   registrationOpen: boolean;
+  emailEventToggles?: Record<string, boolean>;
   resultUnlockEmailSettings?: {
     enabled: boolean;
     delayHours: number;
   };
 };
+const EMAIL_EVENT_TOGGLE_FIELDS: Array<{ key: string; label: string }> = [
+  { key: 'welcome', label: 'Welcome Email' },
+  { key: 'security_alert', label: 'Security Alert' },
+  { key: 'profile_reminder', label: 'Profile Reminder' },
+  { key: 'admin_content_alert', label: 'Admin Content Alert' },
+  { key: 'result_unlocked', label: 'Result Unlocked' },
+  { key: 'mock_test_starting_soon', label: 'Mock Test Starting Soon' },
+  { key: 'missed_test_followup', label: 'Missed Test Followup' },
+  { key: 'streak_risk_alert', label: 'Streak Risk Alert' },
+  { key: 'weekly_performance_report', label: 'Weekly Performance Report' },
+  { key: 'rank_milestone', label: 'Rank Milestone' },
+  { key: 'new_content_by_interest', label: 'New Content By Interest' },
+  { key: 're_engagement', label: 'Re-engagement' },
+  { key: 'birthday', label: 'Birthday Wish' },
+];
+const DEFAULT_EMAIL_EVENT_TOGGLES: Record<string, boolean> = EMAIL_EVENT_TOGGLE_FIELDS.reduce((acc, item) => {
+  acc[item.key] = true;
+  return acc;
+}, {} as Record<string, boolean>);
 type ProfileMenuItem = {
   id: string;
   title: string;
@@ -1347,7 +1367,9 @@ function TestsTab({
     try {
       setError('');
       setSelectedTest(test);
-      onSelectQuestionTest(test.id);
+      if (mode === 'questionBuilder') {
+        onSelectQuestionTest(test.id);
+      }
       const res = await apiClient.get(`/admin/tests/${test.id}/questions`);
       setQuestions(res.data?.items || []);
       setQuestionsPage(1);
@@ -2105,13 +2127,14 @@ function TestsTab({
                   </select>
                 </label>
                 <label>
-                  Position
+                  Position (Auto managed)
                   <input
                     type="number"
                     min={1}
                     value={questionForm.position}
-                    onChange={(e) => setQuestionForm((p) => ({ ...p, position: e.target.value }))}
-                    placeholder="1"
+                    readOnly
+                    title="Position is assigned automatically"
+                    placeholder="Auto"
                     required
                   />
                 </label>
@@ -5088,6 +5111,7 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
     maintenanceMode: false,
     maintenanceMessage: '',
     registrationOpen: true,
+    emailEventToggles: { ...DEFAULT_EMAIL_EVENT_TOGGLES },
     resultUnlockEmailSettings: { enabled: true, delayHours: 3 },
   });
   const [loading, setLoading] = useState(false);
@@ -5098,7 +5122,15 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
       setError('');
       setLoading(true);
       const res = await apiClient.get('/admin/settings');
-      setSettings(res.data?.settings || settings);
+      const incoming = res.data?.settings || {};
+      setSettings((prev) => ({
+        ...prev,
+        ...incoming,
+        emailEventToggles: {
+          ...DEFAULT_EMAIL_EVENT_TOGGLES,
+          ...(incoming.emailEventToggles || {}),
+        },
+      }));
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Failed to load settings');
     } finally {
@@ -5164,6 +5196,26 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
           />
           Result unlock emails enabled
         </label>
+        {EMAIL_EVENT_TOGGLE_FIELDS.map((item) => (
+          <label key={item.key} className="check-wrap">
+            <input
+              type="checkbox"
+              checked={settings.emailEventToggles?.[item.key] !== false}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  emailEventToggles: {
+                    ...DEFAULT_EMAIL_EVENT_TOGGLES,
+                    ...(p.emailEventToggles || {}),
+                    [item.key]: e.target.checked,
+                  },
+                }))
+              }
+              disabled={!isSuperAdmin}
+            />
+            {item.label}
+          </label>
+        ))}
         <input
           type="number"
           min={0}

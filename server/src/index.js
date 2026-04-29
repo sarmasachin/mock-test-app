@@ -26,6 +26,7 @@ const {
   sendStreakRiskAlertEmail,
   sendWeeklyPerformanceReportEmail,
   sendRankMilestoneEmail,
+  sendBirthdayEmail,
   sendNewContentByInterestEmail,
   sendReEngagementEmail,
 } = require('./mail');
@@ -127,6 +128,10 @@ async function ensureOptionalColumns() {
     await pool.query(
       `ALTER TABLE questions
        ADD COLUMN IF NOT EXISTS is_published BOOLEAN NOT NULL DEFAULT true`,
+    );
+    await pool.query(
+      `ALTER TABLE users
+       ADD COLUMN IF NOT EXISTS date_of_birth DATE`,
     );
   } catch (e) {
     if (e && e.code === '42P01') return;
@@ -919,6 +924,43 @@ async function processReEngagementEmails() {
   }
 }
 
+async function processBirthdayEmails() {
+  if (!isMailConfigured()) return;
+  try {
+    const stateKey = 'birthdayEmailState';
+    const currentYear = String(new Date().getUTCFullYear());
+    const state = await getSettingJson(stateKey, { sentByUserYear: {} });
+    const sentByUserYear = state.sentByUserYear && typeof state.sentByUserYear === 'object' ? state.sentByUserYear : {};
+    const rowsRes = await pool.query(
+      `SELECT id::text AS user_id, email, display_name
+       FROM users
+       WHERE is_banned = false
+         AND trim(COALESCE(email, '')) <> ''
+         AND date_of_birth IS NOT NULL
+         AND EXTRACT(MONTH FROM date_of_birth) = EXTRACT(MONTH FROM now())
+         AND EXTRACT(DAY FROM date_of_birth) = EXTRACT(DAY FROM now())
+       LIMIT 4000`,
+    );
+    let changed = false;
+    for (const row of rowsRes.rows || []) {
+      const userId = String(row.user_id || '');
+      if (!userId) continue;
+      if (String(sentByUserYear[userId] || '') === currentYear) continue;
+      await sendBirthdayEmail({
+        to: String(row.email || ''),
+        displayName: String(row.display_name || ''),
+      }).catch((e) => console.error('birthday_email_failed', userId, e && (e.message || e)));
+      sentByUserYear[userId] = currentYear;
+      changed = true;
+    }
+    if (changed) await setSettingJson(stateKey, { sentByUserYear });
+  } catch (e) {
+    if (e && e.code === '42P01') return;
+    if (e && e.code === '42703') return;
+    console.error('birthday_scheduler_error', e);
+  }
+}
+
 setInterval(() => {
   processPublishSchedules();
 }, 60000);
@@ -948,6 +990,9 @@ setInterval(() => {
 }, 60000);
 setInterval(() => {
   processReEngagementEmails();
+}, 60000);
+setInterval(() => {
+  processBirthdayEmails();
 }, 60000);
 
 // eslint-disable-next-line no-unused-vars

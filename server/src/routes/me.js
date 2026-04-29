@@ -20,6 +20,16 @@ function pickSixDigit() {
   return 100000 + Math.floor(Math.random() * 900000);
 }
 
+function parseBirthdayDateOnly(input) {
+  const raw = String(input || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const dt = new Date(`${raw}T00:00:00.000Z`);
+  if (Number.isNaN(dt.getTime())) return null;
+  const [yy, mm, dd] = raw.split('-').map((x) => Number(x));
+  if (dt.getUTCFullYear() !== yy || dt.getUTCMonth() + 1 !== mm || dt.getUTCDate() !== dd) return null;
+  return raw;
+}
+
 async function ensureDeviceTokensTable() {
   await pool.query(
     `CREATE TABLE IF NOT EXISTS user_device_tokens (
@@ -112,13 +122,14 @@ router.delete('/', async (req, res) => {
 });
 
 router.patch('/profile', async (req, res) => {
-  const { displayName, email, phone, state, district } = req.body || {};
+  const { displayName, email, phone, state, district, birthdayDate } = req.body || {};
   if (
     displayName === undefined &&
     email === undefined &&
     phone === undefined &&
     state === undefined &&
-    district === undefined
+    district === undefined &&
+    birthdayDate === undefined
   ) {
     return res.status(400).json({ error: 'No updatable fields provided' });
   }
@@ -175,10 +186,35 @@ router.patch('/profile', async (req, res) => {
       nextDistrict = String(district).trim().slice(0, 120);
     }
 
+    let nextBirthdayDate = cur.date_of_birth ? String(cur.date_of_birth).slice(0, 10) : null;
+    if (birthdayDate !== undefined) {
+      if (birthdayDate === null || String(birthdayDate).trim() === '') {
+        nextBirthdayDate = null;
+      } else {
+        const parsed = parseBirthdayDateOnly(birthdayDate);
+        if (!parsed) {
+          return res.status(400).json({ error: 'birthdayDate must be in YYYY-MM-DD format' });
+        }
+        const today = new Date().toISOString().slice(0, 10);
+        if (parsed > today) {
+          return res.status(400).json({ error: 'birthdayDate cannot be in the future' });
+        }
+        nextBirthdayDate = parsed;
+      }
+    }
+
     const upd = await pool.query(
-      `UPDATE users SET display_name = $1, email = $2, phone = $3, signup_state = $4, signup_district = $5, updated_at = now()
-       WHERE id = $6::uuid RETURNING *`,
-      [nextName, nextEmail, nextPhone, nextState, nextDistrict, req.userId],
+      `UPDATE users
+       SET display_name = $1,
+           email = $2,
+           phone = $3,
+           signup_state = $4,
+           signup_district = $5,
+           date_of_birth = $6::date,
+           updated_at = now()
+       WHERE id = $7::uuid
+       RETURNING *`,
+      [nextName, nextEmail, nextPhone, nextState, nextDistrict, nextBirthdayDate, req.userId],
     );
     if (isMailConfigured() && String(cur.email || '').trim().toLowerCase() !== String(nextEmail || '').trim().toLowerCase()) {
       sendSecurityAccountAlertEmail({
