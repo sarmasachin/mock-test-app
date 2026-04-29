@@ -75,6 +75,7 @@ fun ForgotPasswordScreenNew(
     var newPasswordError by remember { mutableStateOf<String?>(null) }
     var confirmPasswordError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var resendBusy by remember { mutableStateOf(false) }
     var resendCooldownSec by remember { mutableIntStateOf(0) }
     var feedback by remember { mutableStateOf<AuthScreenFeedback?>(null) }
     val snackbar = rememberAppSnackbarHostStateNew()
@@ -428,12 +429,12 @@ fun ForgotPasswordScreenNew(
                         }
                         TextButton(
                             onClick = {
-                                if (busy || resendCooldownSec > 0) return@TextButton
+                                if (busy || resendBusy || resendCooldownSec > 0) return@TextButton
                                 scope.launch {
-                                    busy = true
+                                    resendBusy = true
                                     feedback = null
                                     val r = AuthRepository.requestPasswordResetOtp(email)
-                                    busy = false
+                                    resendBusy = false
                                     r.onSuccess { body ->
                                         if (body.ok) {
                                             resendCooldownSec = 30
@@ -457,17 +458,29 @@ fun ForgotPasswordScreenNew(
                                     }
                                 }
                             },
-                            enabled = !busy && resendCooldownSec == 0,
+                            enabled = !busy && !resendBusy && resendCooldownSec == 0,
                             modifier = Modifier.padding(top = 4.dp),
                         ) {
-                            Text(
-                                text = if (resendCooldownSec > 0) {
-                                    "Resend code in ${resendCooldownSec}s"
-                                } else {
-                                    "Resend code"
-                                },
-                                color = if (resendCooldownSec > 0) p.textSecondary else p.accent,
-                            )
+                            if (resendBusy) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp,
+                                        color = p.accent,
+                                    )
+                                    Spacer(Modifier.size(6.dp))
+                                    Text("Sending...")
+                                }
+                            } else {
+                                Text(
+                                    text = if (resendCooldownSec > 0) {
+                                        "Resend code in ${resendCooldownSec}s"
+                                    } else {
+                                        "Resend code"
+                                    },
+                                    color = if (resendCooldownSec > 0) p.textSecondary else p.accent,
+                                )
+                            }
                         }
                         TextButton(
                             onClick = {

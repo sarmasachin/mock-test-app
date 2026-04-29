@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -820,8 +821,6 @@ fun ProfileEmailVerificationScreen(
     }
     LaunchedEffect(isVerifiedNow) {
         if (isVerifiedNow) {
-            // Give user feedback moment, then auto-return to profile.
-            delay(1800)
             onVerified()
         }
     }
@@ -909,11 +908,19 @@ fun ProfileEmailVerificationScreen(
                     shape = RoundedCornerShape(12.dp),
                     enabled = !otpRequestInProgress,
                 ) {
-                    Text(
-                        if (otpRequestInProgress) "Sending..." else "Send OTP",
-                        color = Color.White,
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                    if (otpRequestInProgress) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White,
+                            )
+                            Spacer(Modifier.size(8.dp))
+                            Text("Sending...", color = Color.White, fontWeight = FontWeight.SemiBold)
+                        }
+                    } else {
+                        Text("Send OTP", color = Color.White, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
 
@@ -976,11 +983,19 @@ fun ProfileEmailVerificationScreen(
                         shape = RoundedCornerShape(12.dp),
                         enabled = !verifyInProgress,
                     ) {
-                        Text(
-                            if (verifyInProgress) "Verifying..." else "Verify OTP",
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold,
-                        )
+                        if (verifyInProgress) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Color.White,
+                                )
+                                Spacer(Modifier.size(8.dp))
+                                Text("Verifying...", color = Color.White, fontWeight = FontWeight.SemiBold)
+                            }
+                        } else {
+                            Text("Verify OTP", color = Color.White, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -1018,15 +1033,21 @@ fun ProfileEmailVerificationScreen(
                     },
                     enabled = resendSeconds == 0 && !otpRequestInProgress,
                 ) {
-                    Text(
-                        if (otpRequestInProgress) {
-                            "Sending..."
-                        } else if (resendSeconds > 0) {
-                            "Resend OTP (${resendSeconds}s)"
-                        } else {
-                            "Resend OTP"
-                        },
-                    )
+                    if (otpRequestInProgress) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = p.accent,
+                            )
+                            Spacer(Modifier.size(6.dp))
+                            Text("Sending...")
+                        }
+                    } else {
+                        Text(
+                            if (resendSeconds > 0) "Resend OTP (${resendSeconds}s)" else "Resend OTP",
+                        )
+                    }
                 }
             }
 
