@@ -3,6 +3,9 @@
 const nodemailer = require('nodemailer');
 const { sendWelcomeEmail: sendWelcomeEmailEvent } = require('./mailer/events/welcome');
 const { sendSecurityAccountAlertEmail: sendSecurityAlertEvent } = require('./mailer/events/security');
+const { sendCompleteProfileReminderEmail: sendProfileReminderEvent } = require('./mailer/events/profileReminder');
+const { sendAdminContentAlertEmail: sendAdminContentEvent } = require('./mailer/events/adminContent');
+const { sendResultUnlockedEmail: sendResultUnlockedEvent } = require('./mailer/events/resultUnlocked');
 
 function isMailConfigured() {
   const smtpUser = String(process.env.SMTP_USER || '').trim();
@@ -243,9 +246,15 @@ async function noop() {
   return undefined;
 }
 
-const sendCompleteProfileReminderEmail = noop;
-const sendAdminContentAlertEmail = noop;
-const sendResultUnlockedEmail = noop;
+async function sendCompleteProfileReminderEmail(opts) {
+  return sendProfileReminderEvent(opts);
+}
+async function sendAdminContentAlertEmail(opts) {
+  return sendAdminContentEvent(opts);
+}
+async function sendResultUnlockedEmail(opts) {
+  return sendResultUnlockedEvent(opts);
+}
 const sendMockTestStartingSoonEmail = noop;
 const sendMissedTestFollowupEmail = noop;
 const sendStreakRiskAlertEmail = noop;

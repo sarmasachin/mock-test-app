@@ -180,7 +180,7 @@ router.post('/login', async (req, res) => {
       sendSecurityAccountAlertEmail({
         to: String(row.email || '').trim(),
         displayName: String(row.display_name || '').trim(),
-        subject: 'New login detected',
+        subject: 'Security Alert: New login on your account',
         eventType: 'New Login',
         eventDetail: `A new login was detected from IP ${String(req.ip || '')} using ${String(req.headers['user-agent'] || '').slice(0, 120)}.`,
       }).catch((mailErr) => {
@@ -278,7 +278,7 @@ router.post('/google', async (req, res) => {
       sendSecurityAccountAlertEmail({
         to: String(row.email || '').trim(),
         displayName: String(row.display_name || '').trim(),
-        subject: 'Google sign-in detected',
+        subject: 'Security Alert: Google sign-in on your account',
         eventType: 'Google Login',
         eventDetail: `A Google sign-in was detected from IP ${String(req.ip || '')}. If this was not you, secure your account now.`,
       }).catch((mailErr) => {
