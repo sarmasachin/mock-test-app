@@ -183,6 +183,7 @@ router.patch('/profile', async (req, res) => {
     if (isMailConfigured() && String(cur.email || '').trim().toLowerCase() !== String(nextEmail || '').trim().toLowerCase()) {
       sendSecurityAccountAlertEmail({
         to: String(nextEmail || '').trim(),
+        displayName: String(nextName || '').trim(),
         subject: 'Email updated on your account',
         eventType: 'Email Changed',
         eventDetail: `Your account email was changed from ${String(cur.email || '').trim()} to ${String(nextEmail || '').trim()}.`,
@@ -224,11 +225,13 @@ router.patch('/password', async (req, res) => {
       req.userId,
     ]);
     if (isMailConfigured()) {
-      const userRes = await pool.query(`SELECT email FROM users WHERE id = $1::uuid LIMIT 1`, [req.userId]);
+      const userRes = await pool.query(`SELECT email, display_name FROM users WHERE id = $1::uuid LIMIT 1`, [req.userId]);
       const em = String(userRes.rows[0]?.email || '').trim();
+      const dn = String(userRes.rows[0]?.display_name || '').trim();
       if (em) {
         sendSecurityAccountAlertEmail({
           to: em,
+          displayName: dn,
           subject: 'Password changed from profile',
           eventType: 'Password Changed',
           eventDetail: 'Your password was changed successfully from profile settings.',

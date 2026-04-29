@@ -179,6 +179,7 @@ router.post('/login', async (req, res) => {
     if (isMailConfigured() && row.email) {
       sendSecurityAccountAlertEmail({
         to: String(row.email || '').trim(),
+        displayName: String(row.display_name || '').trim(),
         subject: 'New login detected',
         eventType: 'New Login',
         eventDetail: `A new login was detected from IP ${String(req.ip || '')} using ${String(req.headers['user-agent'] || '').slice(0, 120)}.`,
@@ -276,6 +277,7 @@ router.post('/google', async (req, res) => {
     if (isMailConfigured() && row.email) {
       sendSecurityAccountAlertEmail({
         to: String(row.email || '').trim(),
+        displayName: String(row.display_name || '').trim(),
         subject: 'Google sign-in detected',
         eventType: 'Google Login',
         eventDetail: `A Google sign-in was detected from IP ${String(req.ip || '')}. If this was not you, secure your account now.`,
@@ -465,6 +467,7 @@ router.post('/password-reset/complete', async (req, res) => {
     if (isMailConfigured()) {
       sendSecurityAccountAlertEmail({
         to: em,
+        displayName: String(em.split('@')[0] || 'User'),
         subject: 'Password changed successfully',
         eventType: 'Password Changed',
         eventDetail: `Your password was changed successfully. If you did not perform this action, reset password immediately.`,
