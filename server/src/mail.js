@@ -9,6 +9,18 @@ function isMailConfigured() {
   return Boolean(user && pass && from);
 }
 
+function resolveFromAddress() {
+  const smtpUser = String(process.env.SMTP_USER || '').trim();
+  const configuredFrom = String(process.env.MAIL_FROM || '').trim();
+  // Inbox placement is better when From is authenticated with SMTP account.
+  if (!configuredFrom) return smtpUser;
+  return configuredFrom;
+}
+
+function resolveReplyToAddress() {
+  return String(process.env.MAIL_SUPPORT_EMAIL || process.env.SMTP_USER || '').trim();
+}
+
 function createTransport() {
   const host = process.env.SMTP_HOST || 'smtp.gmail.com';
   const port = parseInt(process.env.SMTP_PORT || '587', 10);
@@ -56,29 +68,34 @@ async function sendPasswordResetOtp(opts) {
   const footerContactText = supportEmail
     ? `Need help? Contact us at ${supportEmail}.`
     : 'Need help? Please contact support.';
-  const subject = process.env.MAIL_SUBJECT_RESET || 'MockTestApp — password reset code';
+  const subject = process.env.MAIL_SUBJECT_RESET || 'Your password reset code';
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject,
     text:
-      `Reset your password for ${brandName}.\n\n` +
-      `Here is your ${brandName} password reset code: ${otp}\n\n` +
+      `Password reset request.\n\n` +
+      `Your verification code is: ${otp}\n\n` +
       `This code is valid for 15 minutes and can only be used once.\n\n` +
       `If you did not request this reset, you can safely ignore this email.\n\n` +
       `Please do not share this code with anyone.\n\n` +
       footerContactText,
     html: `
-      <div style="background:#f6f8fa;padding:24px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#24292f;">
+      <div style="background:#f6f8fa;padding:24px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#24292f;word-break:break-word;overflow-wrap:anywhere;">
         <div style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #d0d7de;border-radius:12px;padding:28px;">
           <div style="text-align:center;margin:0 0 14px 0;">
             ${logoMarkup}
           </div>
-          <p style="margin:0 0 6px 0;font-size:34px;line-height:1.2;font-weight:700;text-align:center;">Password reset requested</p>
-          <p style="margin:0 0 20px 0;font-size:18px;line-height:1.5;color:#57606a;text-align:center;">Use this code to continue with your ${brandName} account.</p>
+          <p style="margin:0 0 6px 0;font-size:34px;line-height:1.2;font-weight:700;text-align:center;">Password reset code</p>
+          <p style="margin:0 0 20px 0;font-size:18px;line-height:1.5;color:#57606a;text-align:center;">Use this code to reset your password.</p>
           <div style="border:1px solid #d0d7de;border-radius:10px;padding:22px 20px;margin:0 0 16px 0;text-align:center;">
-            <p style="margin:0 0 10px 0;font-size:18px;line-height:1.5;">Here is your <strong>${brandName}</strong> password reset code:</p>
-            <p style="margin:0 0 16px 0;font-size:42px;line-height:1.1;font-weight:700;letter-spacing:0.16em;white-space:nowrap;word-break:keep-all;">${otpPretty}</p>
+            <p style="margin:0 0 10px 0;font-size:18px;line-height:1.5;">Your password reset code:</p>
+            <p style="margin:0 0 16px 0;text-align:center;">
+              <span style="display:inline-block;max-width:100%;font-size:32px;line-height:1.2;font-weight:700;letter-spacing:0.08em;white-space:normal;word-break:break-word;overflow-wrap:anywhere;">
+                ${otpPretty}
+              </span>
+            </p>
             <p style="margin:0 0 10px 0;font-size:16px;line-height:1.5;">This code is valid for <strong>15 minutes</strong> and can only be used once.</p>
             <p style="margin:0 0 10px 0;font-size:16px;line-height:1.5;">If you did not request this reset, you can safely ignore this email.</p>
             <p style="margin:0;font-size:16px;line-height:1.5;"><strong>Please do not share this code with anyone.</strong></p>
@@ -119,28 +136,33 @@ async function sendEmailVerificationOtp(opts) {
   const footerContactText = supportEmail
     ? `Need help? Contact us at ${supportEmail}.`
     : 'Need help? Please contact support.';
-  const subject = process.env.MAIL_SUBJECT_EMAIL_VERIFY || 'MockTestApp — email verification code';
+  const subject = process.env.MAIL_SUBJECT_EMAIL_VERIFY || 'Your email verification code';
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject,
     text:
-      `Please verify your identity for ${brandName}.\n\n` +
-      `Here is your ${brandName} verification code: ${otp}\n\n` +
+      `Email verification request.\n\n` +
+      `Your verification code is: ${otp}\n\n` +
       `This code is valid for 15 minutes and can only be used once.\n\n` +
       `Please do not share this code with anyone.\n\n` +
       footerContactText,
     html: `
-      <div style="background:#f6f8fa;padding:24px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#24292f;">
+      <div style="background:#f6f8fa;padding:24px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#24292f;word-break:break-word;overflow-wrap:anywhere;">
         <div style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #d0d7de;border-radius:12px;padding:28px;">
           <div style="text-align:center;margin:0 0 14px 0;">
             ${logoMarkup}
           </div>
-          <p style="margin:0 0 6px 0;font-size:34px;line-height:1.2;font-weight:700;text-align:center;">Please verify your identity</p>
-          <p style="margin:0 0 20px 0;font-size:18px;line-height:1.5;color:#57606a;text-align:center;">Use this code to verify your ${brandName} account.</p>
+          <p style="margin:0 0 6px 0;font-size:34px;line-height:1.2;font-weight:700;text-align:center;">Email verification code</p>
+          <p style="margin:0 0 20px 0;font-size:18px;line-height:1.5;color:#57606a;text-align:center;">Use this code to verify your email.</p>
           <div style="border:1px solid #d0d7de;border-radius:10px;padding:22px 20px;margin:0 0 16px 0;text-align:center;">
-            <p style="margin:0 0 10px 0;font-size:18px;line-height:1.5;">Here is your <strong>${brandName}</strong> authentication code:</p>
-            <p style="margin:0 0 16px 0;font-size:42px;line-height:1.1;font-weight:700;letter-spacing:0.16em;white-space:nowrap;word-break:keep-all;">${otpPretty}</p>
+            <p style="margin:0 0 10px 0;font-size:18px;line-height:1.5;">Your email verification code:</p>
+            <p style="margin:0 0 16px 0;text-align:center;">
+              <span style="display:inline-block;max-width:100%;font-size:32px;line-height:1.2;font-weight:700;letter-spacing:0.08em;white-space:normal;word-break:break-word;overflow-wrap:anywhere;">
+                ${otpPretty}
+              </span>
+            </p>
             <p style="margin:0 0 10px 0;font-size:16px;line-height:1.5;">This code is valid for <strong>15 minutes</strong> and can only be used once.</p>
             <p style="margin:0;font-size:16px;line-height:1.5;"><strong>Please do not share this code with anyone.</strong></p>
           </div>
@@ -186,7 +208,8 @@ async function sendWelcomeEmail(opts) {
     : 'Need help? Our support team is always with you.';
 
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject,
     text:
@@ -199,7 +222,7 @@ async function sendWelcomeEmail(opts) {
       `Start here: ${ctaLink}\n\n` +
       `${footerContactText}`,
     html: `
-      <div style="background:#f3f6fb;padding:26px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111827;">
+      <div style="background:#f3f6fb;padding:26px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111827;word-break:break-word;overflow-wrap:anywhere;">
         <div style="max-width:620px;margin:0 auto;background:#ffffff;border:1px solid #dbe3ef;border-radius:18px;overflow:hidden;">
           <div style="background:linear-gradient(135deg,#1d4ed8 0%,#2563eb 45%,#14b8a6 100%);padding:26px 22px;text-align:center;">
             ${logoMarkup}
@@ -251,14 +274,17 @@ async function sendCompleteProfileReminderEmail(opts) {
   const safeName = escapeHtml(displayName || 'Learner');
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || process.env.MAIL_FROM || '').trim();
   const appUrl = String(process.env.MAIL_APP_URL || '').trim();
-  const ctaLink = appUrl || 'https://play.google.com/store';
+  const profileDeepLink = String(process.env.MAIL_COMPLETE_PROFILE_DEEP_LINK || 'mocktestapp://complete-profile').trim();
+  const ctaLink = profileDeepLink || appUrl || 'https://play.google.com/store';
+  const fallbackLink = appUrl || 'https://play.google.com/store';
   const subject = process.env.MAIL_SUBJECT_PROFILE_REMINDER || `Complete your profile on ${brandName}`;
   const footerContactText = supportEmail
     ? `Need help? Contact us at ${supportEmail}.`
     : 'Need help? Our support team is always with you.';
 
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject,
     text:
@@ -268,10 +294,11 @@ async function sendCompleteProfileReminderEmail(opts) {
       `- Personalized test recommendations\n` +
       `- Better progress insights\n` +
       `- Relevant exam and job alerts\n\n` +
-      `Complete profile now: ${ctaLink}\n\n` +
+      `Complete profile now: ${ctaLink}\n` +
+      `If the button doesn't open the app, use this link: ${fallbackLink}\n\n` +
       `${footerContactText}`,
     html: `
-      <div style="background:#f3f6fb;padding:24px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111827;">
+      <div style="background:#f3f6fb;padding:24px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111827;word-break:break-word;overflow-wrap:anywhere;">
         <div style="max-width:620px;margin:0 auto;background:#ffffff;border:1px solid #dbe3ef;border-radius:18px;overflow:hidden;">
           <div style="background:linear-gradient(135deg,#0f766e 0%,#0ea5e9 100%);padding:24px 22px;text-align:center;">
             <p style="margin:0 0 6px 0;font-size:15px;line-height:1.4;color:#e6fffb;letter-spacing:0.08em;text-transform:uppercase;">Profile Reminder</p>
@@ -291,6 +318,12 @@ async function sendCompleteProfileReminderEmail(opts) {
                 Complete Profile
               </a>
             </div>
+            <p style="margin:0 0 8px 0;font-size:12px;line-height:1.6;color:#64748b;text-align:center;">
+              If the button does not open the app, open this link in your phone browser:
+            </p>
+            <p style="margin:0 0 12px 0;font-size:12px;line-height:1.6;text-align:center;">
+              <a href="${escapeHtml(fallbackLink)}" style="color:#2563eb;text-decoration:none;">${escapeHtml(fallbackLink)}</a>
+            </p>
             <p style="margin:0;font-size:13px;line-height:1.6;color:#6b7280;text-align:center;">
               It takes less than a minute and helps us serve you better.
             </p>
@@ -341,7 +374,8 @@ async function sendAdminContentAlertEmail(opts) {
     : 'Need help? Our support team is always with you.';
 
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject,
     text:
@@ -351,7 +385,7 @@ async function sendAdminContentAlertEmail(opts) {
       `${ctaLabel}: ${ctaUrl}\n\n` +
       `${footerContactText}`,
     html: `
-      <div style="background:#f3f6fb;padding:24px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111827;">
+      <div style="background:#f3f6fb;padding:24px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111827;word-break:break-word;overflow-wrap:anywhere;">
         <div style="max-width:620px;margin:0 auto;background:#ffffff;border:1px solid #dbe3ef;border-radius:18px;overflow:hidden;">
           <div style="background:linear-gradient(135deg,${palette.heroA} 0%,${palette.heroB} 100%);padding:22px;text-align:center;">
             <p style="margin:0 0 6px 0;font-size:14px;line-height:1.4;color:#ecfeff;letter-spacing:0.08em;text-transform:uppercase;">${palette.badge}</p>
@@ -411,7 +445,8 @@ async function sendResultUnlockedEmail(opts) {
   const safeUnlock = escapeHtml(unlockAtIso || new Date().toISOString());
 
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject,
     text:
@@ -423,7 +458,7 @@ async function sendResultUnlockedEmail(opts) {
       `Open app: ${appUrl}\n\n` +
       `${footerContactText}`,
     html: `
-      <div style="background:#f3f6fb;padding:24px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111827;">
+      <div style="background:#f3f6fb;padding:24px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111827;word-break:break-word;overflow-wrap:anywhere;">
         <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #dbe3ef;border-radius:18px;overflow:hidden;">
           <div style="background:linear-gradient(135deg,#7c3aed 0%,#2563eb 55%,#0ea5e9 100%);padding:24px 22px;text-align:center;">
             <p style="margin:0 0 6px 0;font-size:14px;line-height:1.4;color:#ede9fe;letter-spacing:0.08em;text-transform:uppercase;">Result Unlocked</p>
@@ -432,18 +467,24 @@ async function sendResultUnlockedEmail(opts) {
           <div style="padding:22px;">
             <p style="margin:0 0 8px 0;font-size:21px;line-height:1.3;font-weight:700;color:#111827;">${safeTestTitle}</p>
             <p style="margin:0 0 14px 0;font-size:14px;color:#64748b;">Unlocked at ${safeUnlock}</p>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-              <div style="flex:1;min-width:160px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:12px;">
-                <p style="margin:0 0 4px 0;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;">Score</p>
-                <p style="margin:0;font-size:26px;font-weight:800;color:#0f172a;">${correct}/${total}</p>
-                <p style="margin:4px 0 0 0;font-size:12px;color:#475569;">${scorePercent}% accuracy</p>
-              </div>
-              <div style="flex:1;min-width:160px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:12px;">
-                <p style="margin:0 0 4px 0;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;">Rank</p>
-                <p style="margin:0;font-size:26px;font-weight:800;color:#0f172a;">#${rank}</p>
-                <p style="margin:4px 0 0 0;font-size:12px;color:#475569;">out of ${participants} participants</p>
-              </div>
-            </div>
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 14px 0;border-collapse:separate;border-spacing:0;">
+              <tr>
+                <td style="width:50%;padding:0 5px 0 0;vertical-align:top;">
+                  <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:12px;">
+                    <p style="margin:0 0 4px 0;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;">Score</p>
+                    <p style="margin:0;font-size:24px;font-weight:800;color:#0f172a;">${correct}/${total}</p>
+                    <p style="margin:4px 0 0 0;font-size:12px;color:#475569;">${scorePercent}% accuracy</p>
+                  </div>
+                </td>
+                <td style="width:50%;padding:0 0 0 5px;vertical-align:top;">
+                  <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:12px;">
+                    <p style="margin:0 0 4px 0;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;">Rank</p>
+                    <p style="margin:0;font-size:24px;font-weight:800;color:#0f172a;">#${rank}</p>
+                    <p style="margin:4px 0 0 0;font-size:12px;color:#475569;">out of ${participants} participants</p>
+                  </div>
+                </td>
+              </tr>
+            </table>
             <div style="text-align:center;margin-top:6px;">
               <a href="${escapeHtml(appUrl)}" style="display:inline-block;background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;border-radius:999px;padding:12px 26px;">
                 View Detailed Result
@@ -489,7 +530,8 @@ async function sendMockTestStartingSoonEmail(opts) {
   const subject = `Starts in 1 Hour: ${testTitle}`.slice(0, 170);
 
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject,
     text:
@@ -502,7 +544,7 @@ async function sendMockTestStartingSoonEmail(opts) {
       `Open app and get ready: ${appUrl}\n\n` +
       `${footerContactText}`,
     html: `
-      <div style="background:#f5f6ff;padding:24px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#0f172a;">
+      <div style="background:#f5f6ff;padding:24px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#0f172a;word-break:break-word;overflow-wrap:anywhere;">
         <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #dbe3ef;border-radius:18px;overflow:hidden;">
           <div style="background:radial-gradient(circle at top left,#f59e0b 0%,#ef4444 40%,#7c3aed 100%);padding:24px 22px;text-align:center;">
             <p style="margin:0 0 6px 0;font-size:13px;line-height:1.4;color:#fff7ed;letter-spacing:0.1em;text-transform:uppercase;">Mock Test Alert</p>
@@ -548,11 +590,12 @@ async function sendMissedTestFollowupEmail(opts) {
   const name = escapeHtml(String(opts.displayName || 'Learner'));
   const title = escapeHtml(String(opts.testTitle || 'today mock test'));
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject: `You missed today: ${String(opts.testTitle || 'Mock Test').slice(0, 120)}`,
     text: `Hi ${String(opts.displayName || 'Learner')}, you missed ${String(opts.testTitle || 'today mock test')}. Retry now: ${appUrl}`,
-    html: `<div style="background:#fff7ed;padding:22px;font-family:Segoe UI,Arial,sans-serif"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #fed7aa;border-radius:16px;overflow:hidden"><div style="padding:20px;background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;text-align:center"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Missed Test Follow-up</p><h2 style="margin:8px 0 0 0">Hi ${name}, let's bounce back</h2></div><div style="padding:20px"><p style="margin:0 0 12px 0">Aaj ka test miss ho gaya: <strong>${title}</strong></p><p style="margin:0 0 14px 0">No worries. Abhi retry karke momentum wapas le aao.</p><a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#ea580c;color:#fff;padding:11px 20px;border-radius:999px;text-decoration:none;font-weight:700">Retry Now</a></div></div></div>`,
+    html: `<div style="background:#fff7ed;padding:22px;font-family:Segoe UI,Arial,sans-serif;word-break:break-word;overflow-wrap:anywhere"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #fed7aa;border-radius:16px;overflow:hidden"><div style="padding:20px;background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;text-align:center"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Missed Test Follow-up</p><h2 style="margin:8px 0 0 0">Hi ${name}, let's bounce back</h2></div><div style="padding:20px"><p style="margin:0 0 12px 0">Aaj ka test miss ho gaya: <strong>${title}</strong></p><p style="margin:0 0 14px 0">No worries. Abhi retry karke momentum wapas le aao.</p><a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#ea580c;color:#fff;padding:11px 20px;border-radius:999px;text-decoration:none;font-weight:700">Retry Now</a></div></div></div>`,
   });
 }
 
@@ -564,11 +607,12 @@ async function sendStreakRiskAlertEmail(opts) {
   const appUrl = String(process.env.MAIL_APP_URL || 'https://play.google.com/store').trim();
   const days = Math.max(2, Number(opts.inactiveDays || 2));
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject: `Streak Alert: ${days} days inactive`,
     text: `You have been inactive for ${days} days. Continue your streak: ${appUrl}`,
-    html: `<div style="background:#eff6ff;padding:22px;font-family:Segoe UI,Arial,sans-serif"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #bfdbfe;border-radius:16px"><div style="padding:22px;background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Streak Risk</p><h2 style="margin:8px 0 0 0">Don't break the streak</h2></div><div style="padding:20px"><p style="margin:0 0 10px 0">Aap ${days} din se inactive ho. Chhota sa session bhi streak bacha sakta hai.</p><a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#2563eb;color:#fff;padding:11px 20px;border-radius:999px;text-decoration:none;font-weight:700">Continue Streak</a></div></div></div>`,
+    html: `<div style="background:#eff6ff;padding:22px;font-family:Segoe UI,Arial,sans-serif;word-break:break-word;overflow-wrap:anywhere"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #bfdbfe;border-radius:16px"><div style="padding:22px;background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Streak Risk</p><h2 style="margin:8px 0 0 0">Don't break the streak</h2></div><div style="padding:20px"><p style="margin:0 0 10px 0">Aap ${days} din se inactive ho. Chhota sa session bhi streak bacha sakta hai.</p><a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#2563eb;color:#fff;padding:11px 20px;border-radius:999px;text-decoration:none;font-weight:700">Continue Streak</a></div></div></div>`,
   });
 }
 
@@ -582,11 +626,12 @@ async function sendWeeklyPerformanceReportEmail(opts) {
   const avg = Math.max(0, Math.min(100, Number(opts.avgPercent || 0)));
   const weak = escapeHtml(String(opts.weakTopic || 'General Practice'));
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject: `Weekly Report: ${attempts} attempts, ${avg}% avg`,
     text: `Weekly report: attempts=${attempts}, avg=${avg}%, weak topic=${String(opts.weakTopic || 'General Practice')}. Open app: ${appUrl}`,
-    html: `<div style="background:#f0fdf4;padding:22px;font-family:Segoe UI,Arial,sans-serif"><div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #bbf7d0;border-radius:16px;overflow:hidden"><div style="padding:22px;background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff;text-align:center"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Weekly Performance</p><h2 style="margin:8px 0 0 0">Your progress snapshot</h2></div><div style="padding:20px"><div style="display:flex;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:130px;background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:10px"><small>Attempts</small><h3 style="margin:4px 0">${attempts}</h3></div><div style="flex:1;min-width:130px;background:#ecfeff;border:1px solid #a5f3fc;border-radius:12px;padding:10px"><small>Average</small><h3 style="margin:4px 0">${avg}%</h3></div><div style="flex:1;min-width:130px;background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:10px"><small>Weak Topic</small><h3 style="margin:4px 0;font-size:18px">${weak}</h3></div></div><div style="margin-top:14px"><a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#16a34a;color:#fff;padding:11px 20px;border-radius:999px;text-decoration:none;font-weight:700">Improve This Week</a></div></div></div></div>`,
+    html: `<div style="background:#f0fdf4;padding:22px;font-family:Segoe UI,Arial,sans-serif;word-break:break-word;overflow-wrap:anywhere"><div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #bbf7d0;border-radius:16px;overflow:hidden"><div style="padding:22px;background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff;text-align:center"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Weekly Performance</p><h2 style="margin:8px 0 0 0">Your progress snapshot</h2></div><div style="padding:20px"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:0 8px;"><tr><td style="width:33.33%;padding-right:6px;vertical-align:top;"><div style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:10px"><small>Attempts</small><h3 style="margin:4px 0">${attempts}</h3></div></td><td style="width:33.33%;padding:0 3px;vertical-align:top;"><div style="background:#ecfeff;border:1px solid #a5f3fc;border-radius:12px;padding:10px"><small>Average</small><h3 style="margin:4px 0">${avg}%</h3></div></td><td style="width:33.33%;padding-left:6px;vertical-align:top;"><div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:10px"><small>Weak Topic</small><h3 style="margin:4px 0;font-size:18px">${weak}</h3></div></td></tr></table><div style="margin-top:14px"><a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#16a34a;color:#fff;padding:11px 20px;border-radius:999px;text-decoration:none;font-weight:700">Improve This Week</a></div></div></div></div>`,
   });
 }
 
@@ -600,11 +645,12 @@ async function sendRankMilestoneEmail(opts) {
   const improvedBy = Math.max(0, Number(opts.improvedBy || 0));
   const reason = escapeHtml(String(opts.reason || 'Rank milestone unlocked'));
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject: `Rank Milestone: #${rank} (${improvedBy}+ jump)`,
     text: `${String(opts.testTitle || 'Mock Test')}: rank #${rank}, improved by ${improvedBy}. ${reason}. Open app: ${appUrl}`,
-    html: `<div style="background:#faf5ff;padding:22px;font-family:Segoe UI,Arial,sans-serif"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #e9d5ff;border-radius:16px;overflow:hidden"><div style="padding:22px;background:linear-gradient(135deg,#7c3aed,#ec4899);color:#fff;text-align:center"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Rank Milestone</p><h2 style="margin:8px 0 0 0">Outstanding jump</h2></div><div style="padding:20px"><p style="margin:0 0 8px 0"><strong>${escapeHtml(String(opts.testTitle || 'Mock Test'))}</strong></p><p style="margin:0 0 8px 0">Current Rank: <strong>#${rank}</strong></p><p style="margin:0 0 12px 0">Improvement: <strong>+${improvedBy}</strong> places</p><p style="margin:0 0 14px 0;color:#6b21a8">${reason}</p><a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#7c3aed;color:#fff;padding:11px 20px;border-radius:999px;text-decoration:none;font-weight:700">View Leaderboard</a></div></div></div>`,
+    html: `<div style="background:#faf5ff;padding:22px;font-family:Segoe UI,Arial,sans-serif;word-break:break-word;overflow-wrap:anywhere"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #e9d5ff;border-radius:16px;overflow:hidden"><div style="padding:22px;background:linear-gradient(135deg,#7c3aed,#ec4899);color:#fff;text-align:center"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Rank Milestone</p><h2 style="margin:8px 0 0 0">Outstanding jump</h2></div><div style="padding:20px"><p style="margin:0 0 8px 0"><strong>${escapeHtml(String(opts.testTitle || 'Mock Test'))}</strong></p><p style="margin:0 0 8px 0">Current Rank: <strong>#${rank}</strong></p><p style="margin:0 0 12px 0">Improvement: <strong>+${improvedBy}</strong> places</p><p style="margin:0 0 14px 0;color:#6b21a8">${reason}</p><a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#7c3aed;color:#fff;padding:11px 20px;border-radius:999px;text-decoration:none;font-weight:700">View Leaderboard</a></div></div></div>`,
   });
 }
 
@@ -618,11 +664,12 @@ async function sendNewContentByInterestEmail(opts) {
   const title = escapeHtml(String(opts.title || 'New update'));
   const message = escapeHtml(String(opts.message || 'New content matching your preparation track is live.'));
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject: `New for your interest: ${String(opts.title || 'Update').slice(0, 120)}`,
     text: `${String(opts.title || 'Update')}\n${String(opts.message || '')}\nOpen app: ${appUrl}`,
-    html: `<div style="background:#ecfeff;padding:22px;font-family:Segoe UI,Arial,sans-serif"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #a5f3fc;border-radius:16px;overflow:hidden"><div style="padding:22px;background:linear-gradient(135deg,#0f766e,#14b8a6);color:#fff"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">${badge}</p><h2 style="margin:8px 0 0 0">New content picked for you</h2></div><div style="padding:20px"><h3 style="margin:0 0 8px 0">${title}</h3><p style="margin:0 0 14px 0">${message}</p><a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#0f766e;color:#fff;padding:11px 20px;border-radius:999px;text-decoration:none;font-weight:700">Open Recommended Content</a></div></div></div>`,
+    html: `<div style="background:#ecfeff;padding:22px;font-family:Segoe UI,Arial,sans-serif;word-break:break-word;overflow-wrap:anywhere"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #a5f3fc;border-radius:16px;overflow:hidden"><div style="padding:22px;background:linear-gradient(135deg,#0f766e,#14b8a6);color:#fff"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">${badge}</p><h2 style="margin:8px 0 0 0">New content picked for you</h2></div><div style="padding:20px"><h3 style="margin:0 0 8px 0">${title}</h3><p style="margin:0 0 14px 0">${message}</p><a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#0f766e;color:#fff;padding:11px 20px;border-radius:999px;text-decoration:none;font-weight:700">Open Recommended Content</a></div></div></div>`,
   });
 }
 
@@ -634,11 +681,12 @@ async function sendReEngagementEmail(opts) {
   const appUrl = String(process.env.MAIL_APP_URL || 'https://play.google.com/store').trim();
   const days = Math.max(1, Number(opts.inactiveDays || 7));
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject: `We miss you - ${days} days away`,
     text: `It's been ${days} days. Come back and restart your prep: ${appUrl}`,
-    html: `<div style="background:#f8fafc;padding:22px;font-family:Segoe UI,Arial,sans-serif"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #cbd5e1;border-radius:16px;overflow:hidden"><div style="padding:22px;background:linear-gradient(135deg,#334155,#0f172a);color:#fff;text-align:center"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Re-engagement</p><h2 style="margin:8px 0 0 0">Your goals are waiting</h2></div><div style="padding:20px"><p style="margin:0 0 12px 0">Aap ${days} din se app se door ho. Sirf 15 min ka session momentum wapas laa sakta hai.</p><a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#0f172a;color:#fff;padding:11px 20px;border-radius:999px;text-decoration:none;font-weight:700">Resume Preparation</a></div></div></div>`,
+    html: `<div style="background:#f8fafc;padding:22px;font-family:Segoe UI,Arial,sans-serif;word-break:break-word;overflow-wrap:anywhere"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #cbd5e1;border-radius:16px;overflow:hidden"><div style="padding:22px;background:linear-gradient(135deg,#334155,#0f172a);color:#fff;text-align:center"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Re-engagement</p><h2 style="margin:8px 0 0 0">Your goals are waiting</h2></div><div style="padding:20px"><p style="margin:0 0 12px 0">Aap ${days} din se app se door ho. Sirf 15 min ka session momentum wapas laa sakta hai.</p><a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#0f172a;color:#fff;padding:11px 20px;border-radius:999px;text-decoration:none;font-weight:700">Resume Preparation</a></div></div></div>`,
   });
 }
 
@@ -650,11 +698,12 @@ async function sendSecurityAccountAlertEmail(opts) {
   const eventType = escapeHtml(String(opts.eventType || 'account_event'));
   const eventDetail = escapeHtml(String(opts.eventDetail || 'Account activity detected.'));
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject: `Security Alert: ${String(opts.subject || 'Account activity').slice(0, 120)}`,
     text: `${String(opts.subject || 'Account activity')}\n${String(opts.eventDetail || '')}`,
-    html: `<div style="background:#fef2f2;padding:22px;font-family:Segoe UI,Arial,sans-serif"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #fecaca;border-radius:16px;overflow:hidden"><div style="padding:22px;background:linear-gradient(135deg,#dc2626,#b91c1c);color:#fff"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Security Alert</p><h2 style="margin:8px 0 0 0">${eventType}</h2></div><div style="padding:20px"><p style="margin:0 0 12px 0">${eventDetail}</p><p style="margin:0;color:#7f1d1d;font-size:13px">If this was not you, reset password immediately and contact support.</p></div></div></div>`,
+    html: `<div style="background:#fef2f2;padding:22px;font-family:Segoe UI,Arial,sans-serif;word-break:break-word;overflow-wrap:anywhere"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #fecaca;border-radius:16px;overflow:hidden"><div style="padding:22px;background:linear-gradient(135deg,#dc2626,#b91c1c);color:#fff"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Security Alert</p><h2 style="margin:8px 0 0 0">${eventType}</h2></div><div style="padding:20px"><p style="margin:0 0 12px 0">${eventDetail}</p><p style="margin:0;color:#7f1d1d;font-size:13px">If this was not you, reset password immediately and contact support.</p></div></div></div>`,
   });
 }
 
@@ -669,11 +718,12 @@ async function sendSupportJourneyEmail(opts) {
   const toneA = isResolved ? '#16a34a' : '#0ea5e9';
   const toneB = isResolved ? '#15803d' : '#2563eb';
   await transporter.sendMail({
-    from: process.env.MAIL_FROM,
+    from: resolveFromAddress(),
+    replyTo: resolveReplyToAddress(),
     to,
     subject: `Support Update: ${title}`,
     text: `${title}\n${String(opts.subject || 'Support')}\n${String(opts.message || '')}`,
-    html: `<div style="background:#f8fafc;padding:22px;font-family:Segoe UI,Arial,sans-serif"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #dbeafe;border-radius:16px;overflow:hidden"><div style="padding:22px;background:linear-gradient(135deg,${toneA},${toneB});color:#fff"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Support Journey</p><h2 style="margin:8px 0 0 0">${escapeHtml(title)}</h2></div><div style="padding:20px"><p style="margin:0 0 8px 0"><strong>${escapeHtml(String(opts.subject || 'Support Request'))}</strong></p><p style="margin:0">${escapeHtml(String(opts.message || 'Thank you for reaching out.'))}</p></div></div></div>`,
+    html: `<div style="background:#f8fafc;padding:22px;font-family:Segoe UI,Arial,sans-serif;word-break:break-word;overflow-wrap:anywhere"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #dbeafe;border-radius:16px;overflow:hidden"><div style="padding:22px;background:linear-gradient(135deg,${toneA},${toneB});color:#fff"><p style="margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Support Journey</p><h2 style="margin:8px 0 0 0">${escapeHtml(title)}</h2></div><div style="padding:20px"><p style="margin:0 0 8px 0"><strong>${escapeHtml(String(opts.subject || 'Support Request'))}</strong></p><p style="margin:0">${escapeHtml(String(opts.message || 'Thank you for reaching out.'))}</p></div></div></div>`,
   });
 }
 

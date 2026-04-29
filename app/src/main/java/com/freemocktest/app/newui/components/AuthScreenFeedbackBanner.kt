@@ -1,6 +1,8 @@
 package com.freemocktest.app.newui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -71,12 +73,26 @@ fun AuthScreenFeedbackBanner(
             modifier = Modifier.padding(14.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            Icon(
-                imageVector = if (feedback.isError) Icons.Rounded.ReportProblem else successIcon,
-                contentDescription = null,
-                tint = if (feedback.isError) palette.error else palette.success,
-                modifier = Modifier.size(26.dp),
-            )
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .background(
+                        color = if (feedback.isError) {
+                            palette.error.copy(alpha = 0.14f)
+                        } else {
+                            palette.success.copy(alpha = 0.14f)
+                        },
+                        shape = RoundedCornerShape(999.dp),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (feedback.isError) Icons.Rounded.ReportProblem else successIcon,
+                    contentDescription = null,
+                    tint = if (feedback.isError) palette.error else palette.success,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
             Spacer(Modifier.size(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(

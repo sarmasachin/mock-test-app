@@ -4,6 +4,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.NoCredentialException
 import com.freemocktest.app.BuildConfig
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -24,7 +25,7 @@ object GoogleSignInHelper {
         if (serverClientId.isEmpty()) {
             return@withContext Result.failure(
                 IllegalStateException(
-                    "Add mocktest.googleWebClientId to local.properties (Web client ID from Google Cloud Console).",
+                    "Google Sign-In is not configured in this build. Please contact support.",
                 ),
             )
         }
@@ -47,15 +48,24 @@ object GoogleSignInHelper {
                     val parsed = GoogleIdTokenCredential.createFrom(cred.data)
                     Result.success(parsed.idToken)
                 } catch (_: GoogleIdTokenParsingException) {
-                    Result.failure(IllegalStateException("Could not read Google sign-in data"))
+                    Result.failure(IllegalStateException("We could not read your Google sign-in information. Please try again."))
                 }
             } else {
-                Result.failure(IllegalStateException("Unexpected credential type from Google"))
+                Result.failure(IllegalStateException("Unexpected Google sign-in response. Please try again."))
             }
         } catch (e: GetCredentialException) {
-            Result.failure(Exception(e.message ?: "Google Sign-In was cancelled or failed"))
+            val msg = when {
+                e is NoCredentialException -> noCredentialHelpMessage()
+                e.message?.contains("no credential", ignoreCase = true) == true -> noCredentialHelpMessage()
+                else -> e.message ?: "Google sign-in was cancelled. Please try again."
+            }
+            Result.failure(Exception(msg))
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
+
+    /** Returned when Google cannot provide account data for this app on this device. */
+    private fun noCredentialHelpMessage(): String =
+        "No Google account data is available for this app on this device. Please try another Google account or contact support."
 }

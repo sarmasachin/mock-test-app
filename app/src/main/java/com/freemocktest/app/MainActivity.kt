@@ -2,6 +2,7 @@ package com.freemocktest.app
 
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.os.Build
 import androidx.activity.ComponentActivity
@@ -38,6 +39,22 @@ class MainActivity : ComponentActivity() {
         val route = intent?.getStringExtra("push_deep_link")?.trim().orEmpty()
         if (route.isNotBlank()) {
             PushNavigationBridge.publish(route)
+            return
+        }
+        val deeplinkRoute = intent?.data?.toAppRoute()
+        if (!deeplinkRoute.isNullOrBlank()) {
+            PushNavigationBridge.publish(deeplinkRoute)
+        }
+    }
+
+    private fun Uri.toAppRoute(): String? {
+        if (!scheme.equals("mocktestapp", ignoreCase = true)) return null
+        val hostValue = host?.trim()?.lowercase().orEmpty()
+        val pathValue = path.orEmpty().trim().lowercase()
+        return when {
+            hostValue == "complete-profile" -> "complete_profile"
+            hostValue == "open" && pathValue == "/complete-profile" -> "complete_profile"
+            else -> null
         }
     }
 

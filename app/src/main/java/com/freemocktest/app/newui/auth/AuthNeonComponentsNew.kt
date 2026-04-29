@@ -53,6 +53,7 @@ fun NeonSearchableListField(
     onValueChange: (String) -> Unit,
     label: String,
     options: List<String>,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     errorText: String?,
     isError: Boolean,
@@ -69,7 +70,7 @@ fun NeonSearchableListField(
     }
     val showSuggestions = enabled && focused && filtered.isNotEmpty()
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
@@ -160,12 +161,13 @@ fun NeonTextField(
     onValueChange: (String) -> Unit,
     label: String,
     isPassword: Boolean,
+    modifier: Modifier = Modifier,
     errorText: String?,
     isError: Boolean,
 ) {
     val p = mockTestPalette()
     var showPassword by remember { mutableStateOf(false) }
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,

@@ -1,9 +1,13 @@
 package com.freemocktest.app.newui.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ReportProblem
@@ -47,11 +51,23 @@ fun AppSnackbarHostNew(
             contentColor = content,
         ) {
             Row(modifier = Modifier.padding(horizontal = 6.dp)) {
-                Icon(
-                    imageVector = if (isSuccess) Icons.Rounded.CheckCircle else Icons.Rounded.ReportProblem,
-                    contentDescription = null,
-                    tint = iconTint,
-                )
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .background(
+                            color = if (isSuccess) p.success.copy(alpha = 0.14f) else p.error.copy(alpha = 0.16f),
+                            shape = RoundedCornerShape(999.dp),
+                        ),
+                ) {
+                    Icon(
+                        imageVector = if (isSuccess) Icons.Rounded.CheckCircle else Icons.Rounded.ReportProblem,
+                        contentDescription = null,
+                        tint = iconTint,
+                        modifier = Modifier
+                            .size(16.dp)
+                            .padding(5.dp),
+                    )
+                }
                 Spacer(Modifier.width(8.dp))
                 Text(
                     text = data.visuals.message,

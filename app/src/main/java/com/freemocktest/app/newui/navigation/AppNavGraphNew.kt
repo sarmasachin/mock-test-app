@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.freemocktest.app.data.AuthRepository
@@ -23,6 +24,7 @@ import com.freemocktest.app.newui.auth.AuthRouteNew
 import com.freemocktest.app.newui.auth.CompleteProfileScreenNew
 import com.freemocktest.app.newui.auth.ForgotPasswordScreenNew
 import com.freemocktest.app.newui.legal.TermsOfServiceScreenNew
+import com.freemocktest.app.notifications.PushNavigationBridge
 
 internal object RoutesNew {
     const val BOOTSTRAP = "bootstrap"
@@ -63,6 +65,7 @@ internal object RoutesNew {
 @Composable
 fun AppNavGraphNew() {
     val navController = rememberNavController()
+    val pendingPushRoute by PushNavigationBridge.pendingRoute.collectAsState()
     // Do not call navController.navigate() from inside Auth's click handler while that route is
     // being popped (popUpTo AUTH inclusive). That can trigger lifecycle / snapshot crashes on some
     // devices. Instead: flip a flag here; perform navigation from this stable LaunchedEffect.
@@ -81,6 +84,17 @@ fun AppNavGraphNew() {
             Log.e("AppNav", "Auth -> Home navigation failed", e)
         }
         pendingNavigateToHome = false
+    }
+
+    LaunchedEffect(pendingPushRoute) {
+        val route = pendingPushRoute?.trim().orEmpty().lowercase()
+        if (route != RoutesNew.COMPLETE_PROFILE) return@LaunchedEffect
+        runCatching {
+            navController.navigate(RoutesNew.COMPLETE_PROFILE) {
+                launchSingleTop = true
+            }
+        }
+        PushNavigationBridge.consume()
     }
 
     Box(

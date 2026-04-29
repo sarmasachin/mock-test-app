@@ -805,6 +805,7 @@ fun ProfileEmailVerificationScreen(
     var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
     var verificationCompleted by remember { mutableStateOf(false) }
     var verifyInProgress by remember { mutableStateOf(false) }
+    var otpRequestInProgress by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val isVerifiedNow = emailVerified || verificationCompleted
 
@@ -872,13 +873,25 @@ fun ProfileEmailVerificationScreen(
             if (!otpRequested && !isVerifiedNow) {
                 Button(
                     onClick = {
+                        if (otpRequestInProgress) return@Button
                         scope.launch {
+                            otpRequestInProgress = true
                             AuthRepository.requestEmailVerificationOtp().fold(
-                                onSuccess = {
-                                    otpRequested = true
-                                    resendSeconds = 30
-                                    inlineType = InlineMessageType.Success
-                                    inlineMessage = "OTP sent to your email"
+                                onSuccess = { msg ->
+                                    val alreadyVerified = msg.contains("already verified", ignoreCase = true)
+                                    if (alreadyVerified) {
+                                        AppPreferencesRepository.setEmailVerified(true)
+                                        verificationCompleted = true
+                                        otpRequested = false
+                                        resendSeconds = 0
+                                        inlineType = InlineMessageType.Success
+                                        inlineMessage = "Your email is already verified."
+                                    } else {
+                                        otpRequested = true
+                                        resendSeconds = 30
+                                        inlineType = InlineMessageType.Success
+                                        inlineMessage = "OTP sent to your email"
+                                    }
                                 },
                                 onFailure = { e ->
                                     inlineType = InlineMessageType.Error
@@ -888,13 +901,19 @@ fun ProfileEmailVerificationScreen(
                                     )
                                 },
                             )
+                            otpRequestInProgress = false
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = p.accent),
                     shape = RoundedCornerShape(12.dp),
+                    enabled = !otpRequestInProgress,
                 ) {
-                    Text("Send OTP", color = Color.White, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (otpRequestInProgress) "Sending..." else "Send OTP",
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
             }
 
@@ -967,13 +986,24 @@ fun ProfileEmailVerificationScreen(
                 Spacer(Modifier.height(8.dp))
                 TextButton(
                     onClick = {
-                        if (resendSeconds > 0) return@TextButton
+                        if (resendSeconds > 0 || otpRequestInProgress) return@TextButton
                         scope.launch {
+                            otpRequestInProgress = true
                             AuthRepository.requestEmailVerificationOtp().fold(
-                                onSuccess = {
-                                    resendSeconds = 30
-                                    inlineType = InlineMessageType.Success
-                                    inlineMessage = "OTP sent to your email"
+                                onSuccess = { msg ->
+                                    val alreadyVerified = msg.contains("already verified", ignoreCase = true)
+                                    if (alreadyVerified) {
+                                        AppPreferencesRepository.setEmailVerified(true)
+                                        verificationCompleted = true
+                                        otpRequested = false
+                                        resendSeconds = 0
+                                        inlineType = InlineMessageType.Success
+                                        inlineMessage = "Your email is already verified."
+                                    } else {
+                                        resendSeconds = 30
+                                        inlineType = InlineMessageType.Success
+                                        inlineMessage = "OTP sent to your email"
+                                    }
                                 },
                                 onFailure = { e ->
                                     inlineType = InlineMessageType.Error
@@ -983,11 +1013,20 @@ fun ProfileEmailVerificationScreen(
                                     )
                                 },
                             )
+                            otpRequestInProgress = false
                         }
                     },
-                    enabled = resendSeconds == 0,
+                    enabled = resendSeconds == 0 && !otpRequestInProgress,
                 ) {
-                    Text(if (resendSeconds > 0) "Resend OTP (${resendSeconds}s)" else "Resend OTP")
+                    Text(
+                        if (otpRequestInProgress) {
+                            "Sending..."
+                        } else if (resendSeconds > 0) {
+                            "Resend OTP (${resendSeconds}s)"
+                        } else {
+                            "Resend OTP"
+                        },
+                    )
                 }
             }
 
