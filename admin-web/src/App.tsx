@@ -362,6 +362,32 @@ const api = axios.create({
   timeout: 15000,
 });
 
+function getInitialAdminAuthState() {
+  if (typeof window === 'undefined') {
+    return { token: '', isAdmin: false, isSuperAdmin: false, identifier: '' };
+  }
+  try {
+    const raw = window.localStorage.getItem(ADMIN_AUTH_STORAGE_KEY);
+    if (!raw) return { token: '', isAdmin: false, isSuperAdmin: false, identifier: '' };
+    const parsed = JSON.parse(raw) as {
+      token?: string;
+      isAdmin?: boolean;
+      isSuperAdmin?: boolean;
+      identifier?: string;
+    };
+    const token = String(parsed?.token || '');
+    if (!token) return { token: '', isAdmin: false, isSuperAdmin: false, identifier: '' };
+    return {
+      token,
+      isAdmin: parsed?.isAdmin !== false,
+      isSuperAdmin: Boolean(parsed?.isSuperAdmin),
+      identifier: String(parsed?.identifier || ''),
+    };
+  } catch (_err) {
+    return { token: '', isAdmin: false, isSuperAdmin: false, identifier: '' };
+  }
+}
+
 function normalizeBoolean(value: unknown, fallback = true) {
   if (value === true || value === false) return value;
   if (typeof value === 'string') {
@@ -451,16 +477,17 @@ function parseQuestionImportText(format: 'csv' | 'excel' | 'json', rawText: stri
 }
 
 function App() {
-  const [token, setToken] = useState<string>('');
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
-  const [authBooting, setAuthBooting] = useState(true);
-  const [identifier, setIdentifier] = useState('');
+  const initialAdminAuth = useMemo(() => getInitialAdminAuthState(), []);
+  const [token, setToken] = useState<string>(initialAdminAuth.token);
+  const [isAdmin, setIsAdmin] = useState(initialAdminAuth.isAdmin);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(initialAdminAuth.isSuperAdmin);
+  const [, setAuthBooting] = useState(true);
+  const [identifier, setIdentifier] = useState(initialAdminAuth.identifier);
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'info' | 'error' | 'success'>('info');
-  const [forgotOpen, setForgotOpen] = useState(false);
+  const [authView, setAuthView] = useState<'login' | 'forgot'>('login');
   const [forgotIdentifier, setForgotIdentifier] = useState('');
   const [forgotOtp, setForgotOtp] = useState('');
   const [forgotNewPassword, setForgotNewPassword] = useState('');
@@ -698,7 +725,7 @@ function App() {
       setForgotOtp('');
       setForgotNewPassword('');
       setForgotConfirmPassword('');
-      setForgotOpen(false);
+      setAuthView('login');
       setPassword('');
     } catch (err: any) {
       setForgotMessageType('error');
@@ -707,8 +734,6 @@ function App() {
       setForgotResetting(false);
     }
   }
-
-  if (authBooting) return null;
 
   if (!isAdmin) {
     return (
@@ -720,139 +745,140 @@ function App() {
         </div>
         <div className="auth-shell">
           <div className="auth-card login-card">
-            <h2>एडमिन लॉगिन</h2>
-            <p className="sub">प्रवेश के लिए क्रेडेंशियल्स दर्ज करें</p>
-            <form onSubmit={handleLogin} className="auth-form">
-              <div className="input-group">
-                <label>ईमेल / मोबाइल</label>
-                <div className="input-box">
-                  <i aria-hidden="true">✉</i>
-                  <input
-                    value={identifier}
-                    onChange={(e) => setIdentifier(e.target.value)}
-                    placeholder="ईमेल/मोबाइल दर्ज करें"
-                    autoComplete="username"
-                    required
-                  />
-                </div>
-              </div>
-              <div className="input-group">
-                <label>पासवर्ड</label>
-                <div className="input-box">
-                  <i aria-hidden="true">🔒</i>
-                  <input
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="पासवर्ड दर्ज करें"
-                    type="password"
-                    autoComplete="current-password"
-                    required
-                  />
-                </div>
-              </div>
-              <button type="submit" className="login-btn" disabled={loading}>
-                {loading ? 'लॉगिन हो रहा है...' : 'लॉगिन करें  >'}
-              </button>
-            </form>
-            <button
-              type="button"
-              className="link-like-btn"
-              onClick={() => {
-                setForgotOpen((p) => !p);
-                setForgotMessage('');
-                setForgotMessageType('info');
-                setForgotIdentifier(String(identifier || '').trim());
-              }}
-            >
-              {forgotOpen ? 'Close Forgot Password' : 'Forgot Password?'}
-            </button>
-            {message && <p className={`auth-message ${messageType} ${messageType === 'error' ? 'error-p' : ''}`}>{message}</p>}
+            {authView === 'login' ? (
+              <>
+                <h2>एडमिन लॉगिन</h2>
+                <p className="sub">प्रवेश के लिए क्रेडेंशियल्स दर्ज करें</p>
+                <form onSubmit={handleLogin} className="auth-form">
+                  <div className="input-group">
+                    <label>ईमेल / मोबाइल</label>
+                    <div className="input-box">
+                      <i aria-hidden="true">✉</i>
+                      <input
+                        value={identifier}
+                        onChange={(e) => setIdentifier(e.target.value)}
+                        placeholder="ईमेल/मोबाइल दर्ज करें"
+                        autoComplete="username"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div className="input-group">
+                    <label>पासवर्ड</label>
+                    <div className="input-box">
+                      <i aria-hidden="true">🔒</i>
+                      <input
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="पासवर्ड दर्ज करें"
+                        type="password"
+                        autoComplete="current-password"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <button type="submit" className="login-btn" disabled={loading}>
+                    {loading ? 'लॉगिन हो रहा है...' : 'लॉगिन करें  >'}
+                  </button>
+                </form>
+                <button
+                  type="button"
+                  className="link-like-btn"
+                  onClick={() => {
+                    setAuthView('forgot');
+                    setForgotMessage('');
+                    setForgotMessageType('info');
+                    setForgotIdentifier(String(identifier || '').trim());
+                  }}
+                >
+                  Forgot Password?
+                </button>
+                {message && <p className={`auth-message ${messageType} ${messageType === 'error' ? 'error-p' : ''}`}>{message}</p>}
+              </>
+            ) : (
+              <>
+                <h2>Forgot Password</h2>
+                <p className="sub">Admin reset OTP आपके registered email पर आएगा.</p>
+                <form onSubmit={handleAdminForgotPasswordRequest} className="auth-form">
+                  <div className="input-group">
+                    <label>ईमेल / मोबाइल</label>
+                    <div className="input-box">
+                      <i aria-hidden="true">✉</i>
+                      <input
+                        value={forgotIdentifier}
+                        onChange={(e) => setForgotIdentifier(e.target.value)}
+                        placeholder="ईमेल/मोबाइल दर्ज करें"
+                        autoComplete="username"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <button type="submit" className="login-btn" disabled={forgotSending}>
+                    {forgotSending ? 'OTP भेज रहा है...' : 'Send OTP'}
+                  </button>
+                </form>
+                <form onSubmit={handleAdminForgotPasswordComplete} className="auth-form">
+                  <div className="input-group">
+                    <label>OTP</label>
+                    <div className="input-box">
+                      <i aria-hidden="true">#</i>
+                      <input
+                        value={forgotOtp}
+                        onChange={(e) => setForgotOtp(e.target.value)}
+                        placeholder="6-digit OTP"
+                        inputMode="numeric"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div className="input-group">
+                    <label>New Password</label>
+                    <div className="input-box">
+                      <i aria-hidden="true">🔒</i>
+                      <input
+                        value={forgotNewPassword}
+                        onChange={(e) => setForgotNewPassword(e.target.value)}
+                        placeholder="Naya password"
+                        type="password"
+                        autoComplete="new-password"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div className="input-group">
+                    <label>Confirm Password</label>
+                    <div className="input-box">
+                      <i aria-hidden="true">🔒</i>
+                      <input
+                        value={forgotConfirmPassword}
+                        onChange={(e) => setForgotConfirmPassword(e.target.value)}
+                        placeholder="Confirm password"
+                        type="password"
+                        autoComplete="new-password"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <button type="submit" className="login-btn" disabled={forgotResetting}>
+                    {forgotResetting ? 'Reset ho raha hai...' : 'Verify OTP & Reset Password'}
+                  </button>
+                </form>
+                {forgotMessage && (
+                  <p className={`auth-message ${forgotMessageType} ${forgotMessageType === 'error' ? 'error-p' : ''}`}>
+                    {forgotMessage}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  className="link-like-btn"
+                  onClick={() => setAuthView('login')}
+                >
+                  Back to Login
+                </button>
+              </>
+            )}
           </div>
         </div>
-        {forgotOpen && (
-          <div className="forgot-modal-overlay" onClick={() => setForgotOpen(false)}>
-            <div className="auth-card login-card forgot-modal-card" onClick={(e) => e.stopPropagation()}>
-              <h2>Forgot Password</h2>
-              <p className="sub">Admin reset OTP आपके registered email पर आएगा.</p>
-              <form onSubmit={handleAdminForgotPasswordRequest} className="auth-form">
-                <div className="input-group">
-                  <label>ईमेल / मोबाइल</label>
-                  <div className="input-box">
-                    <i aria-hidden="true">✉</i>
-                    <input
-                      value={forgotIdentifier}
-                      onChange={(e) => setForgotIdentifier(e.target.value)}
-                      placeholder="ईमेल/मोबाइल दर्ज करें"
-                      autoComplete="username"
-                      required
-                    />
-                  </div>
-                </div>
-                <button type="submit" className="login-btn" disabled={forgotSending}>
-                  {forgotSending ? 'OTP भेज रहा है...' : 'Send OTP'}
-                </button>
-              </form>
-              <form onSubmit={handleAdminForgotPasswordComplete} className="auth-form">
-                <div className="input-group">
-                  <label>OTP</label>
-                  <div className="input-box">
-                    <i aria-hidden="true">#</i>
-                    <input
-                      value={forgotOtp}
-                      onChange={(e) => setForgotOtp(e.target.value)}
-                      placeholder="6-digit OTP"
-                      inputMode="numeric"
-                      required
-                    />
-                  </div>
-                </div>
-                <div className="input-group">
-                  <label>New Password</label>
-                  <div className="input-box">
-                    <i aria-hidden="true">🔒</i>
-                    <input
-                      value={forgotNewPassword}
-                      onChange={(e) => setForgotNewPassword(e.target.value)}
-                      placeholder="Naya password"
-                      type="password"
-                      autoComplete="new-password"
-                      required
-                    />
-                  </div>
-                </div>
-                <div className="input-group">
-                  <label>Confirm Password</label>
-                  <div className="input-box">
-                    <i aria-hidden="true">🔒</i>
-                    <input
-                      value={forgotConfirmPassword}
-                      onChange={(e) => setForgotConfirmPassword(e.target.value)}
-                      placeholder="Confirm password"
-                      type="password"
-                      autoComplete="new-password"
-                      required
-                    />
-                  </div>
-                </div>
-                <button type="submit" className="login-btn" disabled={forgotResetting}>
-                  {forgotResetting ? 'Reset ho raha hai...' : 'Verify OTP & Reset Password'}
-                </button>
-              </form>
-              {forgotMessage && (
-                <p className={`auth-message ${forgotMessageType} ${forgotMessageType === 'error' ? 'error-p' : ''}`}>
-                  {forgotMessage}
-                </p>
-              )}
-              <button
-                type="button"
-                className="link-like-btn"
-                onClick={() => setForgotOpen(false)}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        )}
       </div>
     );
   }
@@ -1147,7 +1173,6 @@ function TestsTab({
   const [questions, setQuestions] = useState<QuestionItem[]>([]);
   const [showQuestionForm, setShowQuestionForm] = useState(false);
   const [questionForm, setQuestionForm] = useState({
-    position: '1',
     stem: '',
     choiceA: '',
     choiceB: '',
@@ -1170,6 +1195,14 @@ function TestsTab({
   const [questionsPage, setQuestionsPage] = useState(1);
   const TEST_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
   const SLOT_LABEL_RE = /^(0[1-9]|1[0-2]):([0-5][0-9])\s?(AM|PM)$/i;
+
+  function nextQuestionPositionFrom(itemsList: QuestionItem[]) {
+    const maxPos = itemsList.reduce((max, item) => {
+      const p = Number(item.position || 0);
+      return Number.isInteger(p) && p > max ? p : max;
+    }, 0);
+    return String(maxPos + 1);
+  }
 
   function normalizeAndValidateTestPayload(input: {
     title: string;
@@ -1672,11 +1705,11 @@ function TestsTab({
         onSelectQuestionTest(test.id);
       }
       const res = await apiClient.get(`/admin/tests/${test.id}/questions`);
-      setQuestions(res.data?.items || []);
+      const nextItems = Array.isArray(res.data?.items) ? res.data.items : [];
+      setQuestions(nextItems);
       setQuestionsPage(1);
       setEditingQuestionId(null);
       setQuestionForm({
-        position: '1',
         stem: '',
         choiceA: '',
         choiceB: '',
@@ -1699,7 +1732,6 @@ function TestsTab({
       setError('Select a test first');
       return;
     }
-    const position = Number(questionForm.position);
     const stem = questionForm.stem.trim();
     const choiceA = questionForm.choiceA.trim();
     const choiceB = questionForm.choiceB.trim();
@@ -1707,12 +1739,6 @@ function TestsTab({
     const choiceD = questionForm.choiceD.trim();
     const correctIndex = Number(questionForm.correctIndex);
     const explanation = questionForm.explanation.trim();
-    if (editingQuestionId && (!Number.isInteger(position) || position <= 0)) {
-      setQbMessageType('error');
-      setQbMessage('Position must be a positive integer');
-      setError('Position must be a positive integer');
-      return;
-    }
     if (!stem) {
       setQbMessageType('error');
       setQbMessage('Question statement is required');
@@ -1731,7 +1757,13 @@ function TestsTab({
       setError('Please select a valid correct answer');
       return;
     }
-    const safePosition = Number.isInteger(position) && position > 0 ? position : 1;
+    const createPosition = Number(nextQuestionPositionFrom(questions));
+    const editingPosition = Number(
+      questions.find((item) => item.id === editingQuestionId)?.position || 0,
+    );
+    const safePosition = editingQuestionId
+      ? (Number.isInteger(editingPosition) && editingPosition > 0 ? editingPosition : 1)
+      : (Number.isInteger(createPosition) && createPosition > 0 ? createPosition : 1);
     const payload = {
       position: safePosition,
       stem,
@@ -1766,7 +1798,6 @@ function TestsTab({
     setShowQuestionForm(true);
     setEditingQuestionId(item.id);
     setQuestionForm({
-      position: String(item.position),
       stem: item.stem,
       choiceA: item.choice_a,
       choiceB: item.choice_b,
@@ -2400,7 +2431,13 @@ function TestsTab({
             <button
               type="button"
               className="qb-create-toggle"
-              onClick={() => setShowQuestionForm((p) => !p)}
+              onClick={() => {
+                setShowQuestionForm((p) => !p);
+                setEditingQuestionId(null);
+                setQuestionForm((prev) => ({
+                  ...prev,
+                }));
+              }}
             >
               <span className="qb-create-label">Create New Question</span>
               <span className="qb-toggle-icon" aria-hidden="true">
@@ -2427,18 +2464,6 @@ function TestsTab({
                       </option>
                     ))}
                   </select>
-                </label>
-                <label>
-                  Position (Auto managed)
-                  <input
-                    type="number"
-                    min={1}
-                    value={questionForm.position}
-                    readOnly
-                    title="Position is assigned automatically"
-                    placeholder="Auto"
-                    required
-                  />
                 </label>
                 <label>
                   Question Statement
@@ -2526,7 +2551,6 @@ function TestsTab({
                       onClick={() => {
                         setEditingQuestionId(null);
                         setQuestionForm({
-                          position: '1',
                           stem: '',
                           choiceA: '',
                           choiceB: '',
