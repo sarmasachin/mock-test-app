@@ -40,6 +40,7 @@ type Tab =
   | 'examCategories'
   | 'analyticsInsights'
   | 'userManagementAdvanced'
+  | 'emailDeliveryControls'
   | 'settings'
   | 'auditLogs'
   | 'users';
@@ -154,6 +155,10 @@ type AppSettings = {
 const EMAIL_EVENT_TOGGLE_FIELDS: Array<{ key: string; label: string }> = [
   { key: 'welcome', label: 'Welcome Email' },
   { key: 'security_alert', label: 'Security Alert' },
+  { key: 'admin_login_alert', label: 'Admin Login Alert' },
+  { key: 'help_support_ack', label: 'Help & Support Acknowledgement' },
+  { key: 'feedback_ack', label: 'Feedback Acknowledgement' },
+  { key: 'issue_report_ack', label: 'Issue Report Acknowledgement' },
   { key: 'profile_reminder', label: 'Profile Reminder' },
   { key: 'admin_content_alert', label: 'Admin Content Alert' },
   { key: 'result_unlocked', label: 'Result Unlocked' },
@@ -311,6 +316,7 @@ const TAB_LABELS: Record<Tab, string> = {
   examCategories: 'Exam Categories',
   analyticsInsights: 'Analytics & Insights',
   userManagementAdvanced: 'User Management Advanced',
+  emailDeliveryControls: 'Email Delivery Controls',
   settings: 'Settings',
   auditLogs: 'Audit Logs',
   users: 'Users',
@@ -340,6 +346,7 @@ const TAB_ICONS: Record<Tab, string> = {
   examCategories: 'EX',
   analyticsInsights: 'AN',
   userManagementAdvanced: 'UM',
+  emailDeliveryControls: 'EM',
   settings: 'ST',
   auditLogs: 'LG',
   users: 'US',
@@ -453,6 +460,14 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'info' | 'error' | 'success'>('info');
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotOtp, setForgotOtp] = useState('');
+  const [forgotNewPassword, setForgotNewPassword] = useState('');
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
+  const [forgotSending, setForgotSending] = useState(false);
+  const [forgotResetting, setForgotResetting] = useState(false);
+  const [forgotMessage, setForgotMessage] = useState('');
+  const [forgotMessageType, setForgotMessageType] = useState<'info' | 'error' | 'success'>('info');
   const [tab, setTab] = useState<Tab>('dashboard');
   const [selectedQuestionTestId, setSelectedQuestionTestId] = useState<string>('');
   const sideNavRef = useRef<HTMLElement | null>(null);
@@ -567,6 +582,13 @@ function App() {
     });
   }, [tab]);
 
+  useEffect(() => {
+    // Prevent Question Builder sticky-selection state from affecting All Tests view.
+    if (tab === 'allTests' && selectedQuestionTestId) {
+      setSelectedQuestionTestId('');
+    }
+  }, [tab, selectedQuestionTestId]);
+
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -579,17 +601,24 @@ function App() {
       });
       const accessToken = String(loginRes.data?.accessToken || '');
       if (!accessToken) throw new Error('Token missing in login response');
-      const meRes = await api.get('/me', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!meRes.data?.user?.isAdmin) {
+      const loginUser = loginRes.data?.user || null;
+      let resolvedIsAdmin = Boolean(loginUser?.isAdmin);
+      let resolvedIsSuperAdmin = Boolean(loginUser?.isSuperAdmin);
+      if (!loginUser || loginUser?.isAdmin === undefined) {
+        const meRes = await api.get('/me', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        resolvedIsAdmin = Boolean(meRes.data?.user?.isAdmin);
+        resolvedIsSuperAdmin = Boolean(meRes.data?.user?.isSuperAdmin);
+      }
+      if (!resolvedIsAdmin) {
         setMessageType('error');
         setMessage('This account is not allowed for admin panel.');
         return;
       }
-      saveStoredAuth(accessToken, Boolean(meRes.data?.user?.isSuperAdmin), identifier);
+      saveStoredAuth(accessToken, resolvedIsSuperAdmin, identifier, resolvedIsAdmin);
       setIsAdmin(true);
-      setIsSuperAdmin(Boolean(meRes.data?.user?.isSuperAdmin));
+      setIsSuperAdmin(resolvedIsSuperAdmin);
       setToken(accessToken);
       setMessageType('success');
       setMessage('Login successful.');
@@ -598,6 +627,83 @@ function App() {
       setMessage(err?.response?.data?.error || 'Login failed. Check ID and password.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleAdminForgotPasswordRequest(e: FormEvent) {
+    e.preventDefault();
+    const nextIdentifier = String(identifier || '').trim();
+    if (!nextIdentifier) {
+      setForgotMessageType('error');
+      setForgotMessage('Email ya mobile required hai.');
+      return;
+    }
+    setForgotSending(true);
+    setForgotMessage('');
+    setForgotMessageType('info');
+    try {
+      const res = await api.post('/auth/admin/password-reset/request', {
+        identifier: nextIdentifier,
+      });
+      if (res.data?.ok === false) {
+        setForgotMessageType('error');
+        setForgotMessage(String(res.data?.error || 'Admin account nahi mila.'));
+        return;
+      }
+      setForgotMessageType('success');
+      setForgotMessage(String(res.data?.message || 'OTP भेज दिया गया है.'));
+    } catch (err: any) {
+      setForgotMessageType('error');
+      setForgotMessage(err?.response?.data?.error || 'OTP bhejne me issue aaya.');
+    } finally {
+      setForgotSending(false);
+    }
+  }
+
+  async function handleAdminForgotPasswordComplete(e: FormEvent) {
+    e.preventDefault();
+    const nextIdentifier = String(identifier || '').trim();
+    if (!nextIdentifier) {
+      setForgotMessageType('error');
+      setForgotMessage('Email ya mobile required hai.');
+      return;
+    }
+    if (forgotOtp.replace(/\D/g, '').length !== 6) {
+      setForgotMessageType('error');
+      setForgotMessage('Valid 6-digit OTP dalo.');
+      return;
+    }
+    if (forgotNewPassword.length < 4) {
+      setForgotMessageType('error');
+      setForgotMessage('Naya password kam se kam 4 characters ka hona chahiye.');
+      return;
+    }
+    if (forgotNewPassword !== forgotConfirmPassword) {
+      setForgotMessageType('error');
+      setForgotMessage('Confirm password match nahi kar raha.');
+      return;
+    }
+    setForgotResetting(true);
+    setForgotMessage('');
+    setForgotMessageType('info');
+    try {
+      await api.post('/auth/admin/password-reset/complete', {
+        identifier: nextIdentifier,
+        otp: forgotOtp,
+        newPassword: forgotNewPassword,
+      });
+      setForgotMessageType('success');
+      setForgotMessage('Password reset ho gaya. Ab naye password se login karein.');
+      setForgotOtp('');
+      setForgotNewPassword('');
+      setForgotConfirmPassword('');
+      setForgotOpen(false);
+      setPassword('');
+    } catch (err: any) {
+      setForgotMessageType('error');
+      setForgotMessage(err?.response?.data?.error || 'Password reset failed.');
+    } finally {
+      setForgotResetting(false);
     }
   }
 
@@ -647,6 +753,78 @@ function App() {
                 {loading ? 'लॉगिन हो रहा है...' : 'लॉगिन करें  >'}
               </button>
             </form>
+            <button
+              type="button"
+              className="link-like-btn"
+              onClick={() => {
+                setForgotOpen((p) => !p);
+                setForgotMessage('');
+                setForgotMessageType('info');
+              }}
+            >
+              {forgotOpen ? 'Close Forgot Password' : 'Forgot Password?'}
+            </button>
+            {forgotOpen && (
+              <div className="forgot-wrap">
+                <p className="sub">OTP आपके admin email पर आएगा.</p>
+                <form onSubmit={handleAdminForgotPasswordRequest} className="auth-form">
+                  <button type="submit" className="login-btn" disabled={forgotSending}>
+                    {forgotSending ? 'OTP भेज रहा है...' : 'Send OTP'}
+                  </button>
+                </form>
+                <form onSubmit={handleAdminForgotPasswordComplete} className="auth-form">
+                  <div className="input-group">
+                    <label>OTP</label>
+                    <div className="input-box">
+                      <i aria-hidden="true">#</i>
+                      <input
+                        value={forgotOtp}
+                        onChange={(e) => setForgotOtp(e.target.value)}
+                        placeholder="6-digit OTP"
+                        inputMode="numeric"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div className="input-group">
+                    <label>New Password</label>
+                    <div className="input-box">
+                      <i aria-hidden="true">🔒</i>
+                      <input
+                        value={forgotNewPassword}
+                        onChange={(e) => setForgotNewPassword(e.target.value)}
+                        placeholder="Naya password"
+                        type="password"
+                        autoComplete="new-password"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div className="input-group">
+                    <label>Confirm Password</label>
+                    <div className="input-box">
+                      <i aria-hidden="true">🔒</i>
+                      <input
+                        value={forgotConfirmPassword}
+                        onChange={(e) => setForgotConfirmPassword(e.target.value)}
+                        placeholder="Confirm password"
+                        type="password"
+                        autoComplete="new-password"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <button type="submit" className="login-btn" disabled={forgotResetting}>
+                    {forgotResetting ? 'Reset ho raha hai...' : 'Verify OTP & Reset Password'}
+                  </button>
+                </form>
+                {forgotMessage && (
+                  <p className={`auth-message ${forgotMessageType} ${forgotMessageType === 'error' ? 'error-p' : ''}`}>
+                    {forgotMessage}
+                  </p>
+                )}
+              </div>
+            )}
             {message && <p className={`auth-message ${messageType} ${messageType === 'error' ? 'error-p' : ''}`}>{message}</p>}
           </div>
         </div>
@@ -663,7 +841,7 @@ function App() {
             <h2 className="brand-title">Admin Panel</h2>
           </div>
           <nav ref={sideNavRef} className="side-nav">
-            {(['dashboard', 'analyticsInsights', 'allTests', 'questionBuilder', 'pollSettings', 'pushNotificationSettings', 'leaderboard', 'profile', 'feedback', 'helpSupport', 'reportIssue', 'achievement', 'privacyPolicy', 'termsOfUse', 'dailyDigest', 'dailyQuiz', 'articles', 'homeContent', 'notificationScheduling', 'publishScheduling', 'submitApplicationContent', 'instructionContent', 'examCategories', 'settings', 'auditLogs', 'users', 'userManagementAdvanced'] as Tab[]).map(
+            {(['dashboard', 'analyticsInsights', 'allTests', 'questionBuilder', 'pollSettings', 'pushNotificationSettings', 'leaderboard', 'profile', 'feedback', 'helpSupport', 'reportIssue', 'achievement', 'privacyPolicy', 'termsOfUse', 'dailyDigest', 'dailyQuiz', 'articles', 'homeContent', 'notificationScheduling', 'publishScheduling', 'submitApplicationContent', 'instructionContent', 'examCategories', 'emailDeliveryControls', 'settings', 'auditLogs', 'users', 'userManagementAdvanced'] as Tab[]).map(
               (name) => (
               <button key={name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>
                 <span>{TAB_ICONS[name]}</span>
@@ -698,6 +876,7 @@ function App() {
           {tab === 'leaderboard' && <LeaderboardTab />}
           {tab === 'allTests' && (
             <TestsTab
+              key="all-tests-tab"
               apiClient={authedApi}
               mode="allTests"
               selectedQuestionTestId={selectedQuestionTestId}
@@ -710,6 +889,7 @@ function App() {
           )}
           {tab === 'questionBuilder' && (
             <TestsTab
+              key="question-builder-tab"
               apiClient={authedApi}
               mode="questionBuilder"
               selectedQuestionTestId={selectedQuestionTestId}
@@ -735,6 +915,7 @@ function App() {
           {tab === 'submitApplicationContent' && <SubmitApplicationContentTab apiClient={authedApi} />}
           {tab === 'instructionContent' && <InstructionContentTab apiClient={authedApi} />}
           {tab === 'examCategories' && <ExamCategoriesTab apiClient={authedApi} />}
+          {tab === 'emailDeliveryControls' && <SettingsTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
           {tab === 'settings' && <SettingsTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
           {tab === 'auditLogs' && <AuditLogsTab apiClient={authedApi} />}
           {tab === 'users' && <UsersTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
@@ -1501,7 +1682,7 @@ function TestsTab({
     const choiceD = questionForm.choiceD.trim();
     const correctIndex = Number(questionForm.correctIndex);
     const explanation = questionForm.explanation.trim();
-    if (!Number.isInteger(position) || position <= 0) {
+    if (editingQuestionId && (!Number.isInteger(position) || position <= 0)) {
       setQbMessageType('error');
       setQbMessage('Position must be a positive integer');
       setError('Position must be a positive integer');
@@ -1526,7 +1707,6 @@ function TestsTab({
       return;
     }
     const payload = {
-      position,
       stem,
       choiceA,
       choiceB,
@@ -1535,6 +1715,7 @@ function TestsTab({
       correctIndex,
       explanation,
       isPublished: questionForm.isPublished,
+      ...(editingQuestionId ? { position } : {}),
     };
     try {
       setError('');

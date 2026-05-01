@@ -13,6 +13,7 @@ const {
   sendSecurityAccountAlertEmail,
 } = require('../mail');
 const { verifyGoogleIdToken, isGoogleAuthConfigured } = require('../googleAuth');
+const { sendAdminForgotPasswordOtpEmail } = require('../mailer/events/adminForgotPasswordOtp');
 
 const router = express.Router();
 
@@ -57,6 +58,8 @@ function pickSixDigit() {
 
 const PASSWORD_RESET_OTP_MINUTES = () =>
   parseInt(process.env.PASSWORD_RESET_OTP_MINUTES || '15', 10);
+const ADMIN_PASSWORD_RESET_OTP_MINUTES = () =>
+  parseInt(process.env.ADMIN_PASSWORD_RESET_OTP_MINUTES || '15', 10);
 
 function isValidPhone(input) {
   const digits = String(input || '').replace(/\D/g, '').slice(0, 10);
@@ -64,6 +67,31 @@ function isValidPhone(input) {
   const allSameDigit = new Set(digits.split('')).size === 1;
   const firstFiveSame = new Set(digits.slice(0, 5).split('')).size === 1;
   return !allSameDigit && !firstFiveSame;
+}
+
+async function findAdminByIdentifier(identifierRaw) {
+  const idRaw = String(identifierRaw || '').trim();
+  if (!idRaw) return null;
+  if (idRaw.includes('@')) {
+    const { rows } = await pool.query(
+      `SELECT id, email, display_name, is_admin
+       FROM users
+       WHERE email_normalized = lower(trim($1))
+       LIMIT 1`,
+      [idRaw],
+    );
+    return rows[0] || null;
+  }
+  const digits = idRaw.replace(/\D/g, '').slice(0, 10);
+  if (!isValidPhone(digits)) return null;
+  const { rows } = await pool.query(
+    `SELECT id, email, display_name, is_admin
+     FROM users
+     WHERE phone = $1
+     LIMIT 1`,
+    [digits],
+  );
+  return rows[0] || null;
 }
 
 router.post('/register', async (req, res) => {
@@ -480,6 +508,134 @@ router.post('/password-reset/complete', async (req, res) => {
     await client.query('ROLLBACK').catch(() => {});
     console.error(e);
     return res.status(500).json({ error: 'Password reset failed' });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * POST /v1/auth/admin/password-reset/request
+ * Body: { identifier } where identifier is email or phone
+ */
+router.post('/admin/password-reset/request', async (req, res) => {
+  const identifier = String((req.body || {}).identifier || '').trim();
+  if (!identifier) {
+    return res.status(400).json({ error: 'Email or mobile is required' });
+  }
+  try {
+    const admin = await findAdminByIdentifier(identifier);
+    if (!admin || !admin.is_admin) {
+      return res.status(200).json({
+        ok: false,
+        error: 'Admin account not found for this email/mobile.',
+      });
+    }
+    const adminEmail = String(admin.email || '').trim().toLowerCase();
+    if (!adminEmail || !adminEmail.includes('@')) {
+      return res.status(400).json({ error: 'Admin account must have a valid email for OTP delivery.' });
+    }
+
+    const otp = String(pickSixDigit());
+    const tokenHash = sha256Hex(otp);
+    const expires = new Date();
+    expires.setMinutes(expires.getMinutes() + ADMIN_PASSWORD_RESET_OTP_MINUTES());
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE user_one_time_tokens SET used_at = now()
+         WHERE user_id = $1::uuid AND purpose = 'admin_password_reset' AND used_at IS NULL`,
+        [admin.id],
+      );
+      await client.query(
+        `INSERT INTO user_one_time_tokens (user_id, purpose, token_hash, expires_at)
+         VALUES ($1::uuid, 'admin_password_reset', $2, $3)`,
+        [admin.id, tokenHash, expires.toISOString()],
+      );
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    await sendAdminForgotPasswordOtpEmail({
+      to: adminEmail,
+      otp,
+      displayName: String(admin.display_name || adminEmail).trim(),
+      minutes: ADMIN_PASSWORD_RESET_OTP_MINUTES(),
+    });
+    return res.status(200).json({
+      ok: true,
+      message: `Admin OTP sent to ${adminEmail}.`,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Could not send admin reset OTP' });
+  }
+});
+
+/**
+ * POST /v1/auth/admin/password-reset/complete
+ * Body: { identifier, otp, newPassword }
+ */
+router.post('/admin/password-reset/complete', async (req, res) => {
+  const identifier = String((req.body || {}).identifier || '').trim();
+  const otpRaw = String((req.body || {}).otp || '').replace(/\D/g, '');
+  const newPw = String((req.body || {}).newPassword || '');
+  if (!identifier) {
+    return res.status(400).json({ error: 'Email or mobile is required' });
+  }
+  if (otpRaw.length !== 6) {
+    return res.status(400).json({ error: 'Enter the 6-digit OTP' });
+  }
+  if (newPw.length < 4) {
+    return res.status(400).json({ error: 'Password must be at least 4 characters' });
+  }
+  const tokenHash = sha256Hex(otpRaw);
+  const client = await pool.connect();
+  try {
+    const admin = await findAdminByIdentifier(identifier);
+    if (!admin || !admin.is_admin) {
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    }
+    const tok = await client.query(
+      `SELECT id FROM user_one_time_tokens
+       WHERE user_id = $1::uuid
+         AND purpose = 'admin_password_reset'
+         AND token_hash = $2
+         AND used_at IS NULL
+         AND expires_at > now()
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [admin.id, tokenHash],
+    );
+    const tokenRow = tok.rows[0];
+    if (!tokenRow) {
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    }
+    const passwordHash = await bcrypt.hash(newPw, 12);
+    await client.query('BEGIN');
+    await client.query(`UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2::uuid`, [
+      passwordHash,
+      admin.id,
+    ]);
+    await client.query(`UPDATE user_one_time_tokens SET used_at = now() WHERE id = $1`, [tokenRow.id]);
+    await client.query(
+      `UPDATE user_one_time_tokens SET used_at = now()
+       WHERE user_id = $1::uuid AND purpose = 'admin_password_reset' AND used_at IS NULL AND id <> $2`,
+      [admin.id, tokenRow.id],
+    );
+    await client.query(`UPDATE user_refresh_sessions SET revoked_at = now() WHERE user_id = $1::uuid AND revoked_at IS NULL`, [
+      admin.id,
+    ]);
+    await client.query('COMMIT');
+    return res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(e);
+    return res.status(500).json({ error: 'Admin password reset failed' });
   } finally {
     client.release();
   }

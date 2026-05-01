@@ -1,7 +1,7 @@
 'use strict';
 
 const { createTransportForPrefix } = require('../transport');
-const { buildSecurityAlertEmail } = require('../templates/securityTemplate');
+const { buildAdminLoginSecurityEmail } = require('../templates/adminLoginSecurityTemplate');
 
 async function sendSecurityAccountAlertEmail(opts) {
   const to = String(opts?.to || '').trim();
@@ -20,7 +20,16 @@ async function sendSecurityAccountAlertEmail(opts) {
     process.env.MAIL_REPLY_TO_SECURITY || process.env.MAIL_SUPPORT_EMAIL || securityUser,
   ).trim();
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || from || '').trim();
-  const tpl = buildSecurityAlertEmail({ displayName, eventType, eventDetail, supportEmail });
+  const accountActionUrl = String(process.env.MAIL_SECURITY_ACTION_URL || '').trim();
+  const brandName = String(process.env.MAIL_BRAND_NAME || 'MockTest').trim();
+  const tpl = buildAdminLoginSecurityEmail({
+    displayName,
+    eventType,
+    eventDetail,
+    supportEmail,
+    accountActionUrl,
+    brandName,
+  });
   await transporter.sendMail({
     from,
     replyTo,

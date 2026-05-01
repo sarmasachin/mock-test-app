@@ -13,10 +13,15 @@ const { sendStreakRiskAlertEmail: sendStreakRiskEvent } = require('./mailer/even
 const { sendWeeklyPerformanceReportEmail: sendWeeklyPerfEvent } = require('./mailer/events/weeklyPerformance');
 const { sendRankMilestoneEmail: sendRankMilestoneEvent } = require('./mailer/events/rankMilestone');
 const { sendBirthdayEmail: sendBirthdayEvent } = require('./mailer/events/birthday');
+const { buildSupportJourneyEmail } = require('./mailer/templates/supportJourneyTemplate');
 
 const EMAIL_EVENT_KEYS = {
   welcome: 'welcome',
   securityAlert: 'security_alert',
+  adminLoginAlert: 'admin_login_alert',
+  helpSupportAck: 'help_support_ack',
+  feedbackAck: 'feedback_ack',
+  issueReportAck: 'issue_report_ack',
   profileReminder: 'profile_reminder',
   adminContentAlert: 'admin_content_alert',
   resultUnlocked: 'result_unlocked',
@@ -278,23 +283,47 @@ async function sendWelcomeEmail(opts) {
 }
 
 async function sendSecurityAccountAlertEmail(opts) {
-  if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.securityAlert))) return undefined;
+  const eventType = String(opts?.eventType || '').toLowerCase();
+  const subject = String(opts?.subject || '').toLowerCase();
+  const isLoginAlert = eventType.includes('login') || subject.includes('login');
+  if (isLoginAlert) {
+    if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.adminLoginAlert))) return undefined;
+  } else if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.securityAlert))) {
+    return undefined;
+  }
   return sendSecurityAlertEvent(opts);
 }
 
 async function sendSupportJourneyEmail(opts) {
   const to = String(opts?.to || '').trim();
-  const subject = `Support Update: ${String(opts?.subject || 'Request update').trim()}`;
-  const message = String(opts?.message || 'We have received your request.').trim();
+  const rawSubject = String(opts?.subject || 'Request update').trim();
+  const subject = `Support Update: ${rawSubject}`;
+  const statusMessage = String(opts?.message || 'We have received your request.').trim();
+  const userMessage = String(opts?.userMessage || '').trim();
+  const displayName = String(opts?.displayName || 'User').trim();
+  const normalizedSubject = rawSubject.toLowerCase();
+  if (normalizedSubject.includes('feedback')) {
+    if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.feedbackAck))) return undefined;
+  } else if (normalizedSubject.includes('issue')) {
+    if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.issueReportAck))) return undefined;
+  } else if (normalizedSubject.includes('help') || normalizedSubject.includes('support')) {
+    if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.helpSupportAck))) return undefined;
+  }
+  const brandName = String(process.env.MAIL_BRAND_NAME || 'MockTest').trim();
+  const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || resolveFromAddress() || '').trim();
+  const tpl = buildSupportJourneyEmail({
+    displayName,
+    subject: rawSubject,
+    statusMessage,
+    userMessage,
+    supportEmail,
+    brandName,
+  });
   await sendMail({
     to,
     subject,
-    text: message,
-    html: `
-      <div style="font-family:Segoe UI,Arial,sans-serif;line-height:1.5;color:#111">
-        <p>${escapeHtml(message)}</p>
-      </div>
-    `,
+    text: tpl.text,
+    html: tpl.html,
   });
 }
 

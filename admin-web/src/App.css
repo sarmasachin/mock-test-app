@@ -1512,3 +1512,19 @@ button:active {
   justify-content: center;
   gap: 10px;
 }
+
+.auth-page .link-like-btn {
+  margin-top: 12px;
+  background: transparent;
+  border: none;
+  color: #93c5fd;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.auth-page .forgot-wrap {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.35);
+}

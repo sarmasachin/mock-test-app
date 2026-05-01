@@ -63,6 +63,10 @@ const SETTINGS_KEYS = [
 const DEFAULT_EMAIL_EVENT_TOGGLES = {
   welcome: true,
   security_alert: true,
+  admin_login_alert: true,
+  help_support_ack: true,
+  feedback_ack: true,
+  issue_report_ack: true,
   profile_reminder: true,
   admin_content_alert: true,
   result_unlocked: true,
@@ -996,8 +1000,9 @@ async function getSettingsMap() {
   };
 }
 
-function normalizeQuestionPayload(body) {
+function normalizeQuestionPayload(body, options = {}) {
   const payload = body || {};
+  const requirePosition = options.requirePosition !== false;
   const position = Number(payload.position);
   const stem = String(payload.stem || '').trim();
   const choiceA = String(payload.choiceA || '').trim();
@@ -1008,7 +1013,7 @@ function normalizeQuestionPayload(body) {
   const explanation = String(payload.explanation || '').trim();
   const isPublished = payload.isPublished !== false;
 
-  if (!Number.isInteger(position) || position <= 0) {
+  if (requirePosition && (!Number.isInteger(position) || position <= 0)) {
     return { error: 'position must be a positive integer' };
   }
   if (!stem) return { error: 'stem is required' };
@@ -2025,7 +2030,7 @@ router.get('/tests/:id/questions', async (req, res) => {
 router.post('/tests/:id/questions', async (req, res) => {
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid test id' });
-  const parsed = normalizeQuestionPayload(req.body);
+  const parsed = normalizeQuestionPayload(req.body, { requirePosition: false });
   if (parsed.error) return res.status(400).json({ error: parsed.error });
   const q = parsed.value;
   try {

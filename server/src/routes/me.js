@@ -407,6 +407,8 @@ router.post('/support', async (req, res) => {
         status: 'received',
         subject: 'Help & Support',
         message: 'We have received your support request. Our team will review it shortly.',
+        userMessage: message,
+        displayName: String(user.display_name || user.email || 'User'),
       }).catch((mailErr) => {
         console.error('support_received_email_failed', mailErr && (mailErr.message || mailErr));
       });
@@ -444,6 +446,8 @@ router.post('/feedback', async (req, res) => {
         status: 'received',
         subject: 'Feedback',
         message: 'Thanks for your feedback. We have received it and will review it soon.',
+        userMessage: message,
+        displayName: String(user.display_name || user.email || 'User'),
       }).catch((mailErr) => {
         console.error('feedback_received_email_failed', mailErr && (mailErr.message || mailErr));
       });
@@ -481,6 +485,8 @@ router.post('/report-issue', async (req, res) => {
         status: 'received',
         subject: 'Issue Report',
         message: 'Issue report received. We are on it and will update you once resolved.',
+        userMessage: message,
+        displayName: String(user.display_name || user.email || 'User'),
       }).catch((mailErr) => {
         console.error('issue_received_email_failed', mailErr && (mailErr.message || mailErr));
       });
