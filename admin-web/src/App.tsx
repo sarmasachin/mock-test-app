@@ -471,12 +471,18 @@ function App() {
     window.localStorage.removeItem(ADMIN_AUTH_STORAGE_KEY);
   }
 
-  function saveStoredAuth(nextToken: string, nextIsSuperAdmin: boolean, nextIdentifier: string) {
+  function saveStoredAuth(
+    nextToken: string,
+    nextIsSuperAdmin: boolean,
+    nextIdentifier: string,
+    nextIsAdmin = true,
+  ) {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(
       ADMIN_AUTH_STORAGE_KEY,
       JSON.stringify({
         token: nextToken,
+        isAdmin: nextIsAdmin,
         isSuperAdmin: nextIsSuperAdmin,
         identifier: nextIdentifier,
       }),
@@ -496,13 +502,23 @@ function App() {
         return;
       }
       try {
-        const parsed = JSON.parse(raw) as { token?: string; isSuperAdmin?: boolean; identifier?: string };
+        const parsed = JSON.parse(raw) as {
+          token?: string;
+          isAdmin?: boolean;
+          isSuperAdmin?: boolean;
+          identifier?: string;
+        };
         const persistedToken = String(parsed?.token || '');
         if (!persistedToken) {
           clearStoredAuth();
           if (isActive) setAuthBooting(false);
           return;
         }
+        // Restore persisted admin session first; verify against backend afterward.
+        setToken(persistedToken);
+        setIsAdmin(normalizeBoolean(parsed?.isAdmin, true));
+        setIsSuperAdmin(Boolean(parsed?.isSuperAdmin));
+        if (parsed?.identifier) setIdentifier(String(parsed.identifier));
         const meRes = await api.get('/me', {
           headers: { Authorization: `Bearer ${persistedToken}` },
         });
@@ -519,12 +535,15 @@ function App() {
         setIsAdmin(true);
         setIsSuperAdmin(Boolean(meRes.data?.user?.isSuperAdmin));
         if (parsed?.identifier) setIdentifier(String(parsed.identifier));
-      } catch (_err) {
-        clearStoredAuth();
-        if (!isActive) return;
-        setToken('');
-        setIsAdmin(false);
-        setIsSuperAdmin(false);
+      } catch (err: any) {
+        const status = Number(err?.response?.status || 0);
+        if (status === 401 || status === 403) {
+          clearStoredAuth();
+          if (!isActive) return;
+          setToken('');
+          setIsAdmin(false);
+          setIsSuperAdmin(false);
+        }
       } finally {
         if (isActive) setAuthBooting(false);
       }
@@ -582,18 +601,7 @@ function App() {
     }
   }
 
-  if (authBooting) {
-    return (
-      <div className="page auth-page">
-        <div className="auth-shell">
-          <div className="auth-card login-card">
-            <h2>Checking session...</h2>
-            <p className="sub">Please wait</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (authBooting) return null;
 
   if (!isAdmin) {
     return (
