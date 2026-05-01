@@ -18,6 +18,7 @@ import com.freemocktest.app.data.remote.AuthUserDto
 import com.freemocktest.app.data.remote.RetrofitProvider
 import com.freemocktest.app.data.remote.TextMessageBody
 import com.freemocktest.app.data.remote.ApplyTestResponse
+import com.freemocktest.app.data.remote.TestWaitlistStatusResponse
 import com.freemocktest.app.notifications.PushTokenRegistrar
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
@@ -432,6 +433,8 @@ object AuthRepository {
         correct: Int,
         total: Int,
         completedAtMillis: Long,
+        testCatalogId: String,
+        clientSubmissionId: String,
     ) = withContext(Dispatchers.IO) {
         loadStoredTokens()
         if (accessTokenMem.isNullOrBlank()) {
@@ -444,7 +447,8 @@ object AuthRepository {
                     correct = correct,
                     total = total,
                     completedAtMillis = completedAtMillis,
-                    testCatalogId = null,
+                    testCatalogId = testCatalogId,
+                    clientSubmissionId = clientSubmissionId,
                 ),
             )
         } catch (e: Exception) {
@@ -462,6 +466,24 @@ object AuthRepository {
         }
         try {
             val resp = RetrofitProvider.appApi.applyForTest(testId.trim())
+            Result.success(resp)
+        } catch (e: HttpException) {
+            Result.failure(Exception(parseHttpError(e)))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun getTestWaitlistStatus(testId: String): Result<TestWaitlistStatusResponse> = withContext(Dispatchers.IO) {
+        loadStoredTokens()
+        if (accessTokenMem.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("Sign in required"))
+        }
+        if (testId.isBlank()) {
+            return@withContext Result.failure(Exception("Test details not found"))
+        }
+        try {
+            val resp = RetrofitProvider.appApi.getTestWaitlistStatus(testId.trim())
             Result.success(resp)
         } catch (e: HttpException) {
             Result.failure(Exception(parseHttpError(e)))

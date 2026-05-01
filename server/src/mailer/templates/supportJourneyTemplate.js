@@ -17,6 +17,13 @@ function prettifyType(rawSubject) {
   return 'Support Update';
 }
 
+function normalizeJourneyStatus(raw) {
+  const status = String(raw || '').trim().toLowerCase();
+  if (status === 'in_progress') return 'in_progress';
+  if (status === 'resolved') return 'resolved';
+  return 'received';
+}
+
 function buildSupportJourneyEmail({
   displayName,
   subject,
@@ -24,7 +31,9 @@ function buildSupportJourneyEmail({
   userMessage,
   supportEmail,
   brandName,
+  journeyStatus,
 }) {
+  const normalizedJourneyStatus = normalizeJourneyStatus(journeyStatus);
   const safeBrandName = escapeHtml(String(brandName || 'MockTest').trim() || 'MockTest');
   const safeName = escapeHtml(String(displayName || 'User').trim() || 'User');
   const safeSubject = escapeHtml(String(subject || 'Support Update').trim() || 'Support Update');
@@ -32,6 +41,32 @@ function buildSupportJourneyEmail({
   const safeUserMessage = escapeHtml(String(userMessage || '').trim());
   const safeType = escapeHtml(prettifyType(subject));
   const safeSupportEmail = escapeHtml(String(supportEmail || '').trim());
+  const statusConfig = normalizedJourneyStatus === 'resolved'
+    ? {
+        label: 'Resolved',
+        accentBg: 'linear-gradient(135deg,#14532d,#16a34a)',
+        badgeBg: '#dcfce7',
+        badgeColor: '#166534',
+        cardBg: '#f0fdf4',
+        cardBorder: '#bbf7d0',
+      }
+    : normalizedJourneyStatus === 'in_progress'
+    ? {
+        label: 'In Progress',
+        accentBg: 'linear-gradient(135deg,#1e3a8a,#2563eb)',
+        badgeBg: '#dbeafe',
+        badgeColor: '#1d4ed8',
+        cardBg: '#eff6ff',
+        cardBorder: '#bfdbfe',
+      }
+    : {
+        label: 'Received',
+        accentBg: 'linear-gradient(135deg,#0f172a,#1d4ed8)',
+        badgeBg: '#dbeafe',
+        badgeColor: '#1e3a8a',
+        cardBg: '#f8fafc',
+        cardBorder: '#dbe2ea',
+      };
   const footerHelpText = safeSupportEmail
     ? `Need help? Contact us at ${safeSupportEmail}.`
     : 'Need help? Our support team is ready to assist you.';
@@ -43,6 +78,7 @@ function buildSupportJourneyEmail({
     text:
       `${safeType} - ${String(subject || 'Support Update').trim()}\n\n` +
       `Hi ${String(displayName || 'User').trim() || 'User'},\n\n` +
+      `Status: ${statusConfig.label}\n\n` +
       `${plainStatusMessage}\n\n` +
       (plainUserMessage ? `User Message: ${plainUserMessage}\n\n` : '') +
       `${safeSupportEmail ? `Support: ${String(supportEmail || '').trim()}\n\n` : ''}` +
@@ -54,7 +90,7 @@ function buildSupportJourneyEmail({
             <td align="center" style="padding:24px 12px;">
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="620" style="width:100%;max-width:620px;background:#ffffff;border:1px solid #d9e2ef;border-radius:16px;overflow:hidden;">
                 <tr>
-                  <td style="background:linear-gradient(135deg,#0f172a,#1d4ed8);padding:20px 24px;color:#ffffff;">
+                  <td style="background:${statusConfig.accentBg};padding:20px 24px;color:#ffffff;">
                     <p style="margin:0;font-size:12px;line-height:1.4;letter-spacing:0.08em;text-transform:uppercase;opacity:0.9;">${safeBrandName}</p>
                     <h1 style="margin:8px 0 0 0;font-size:23px;line-height:1.3;font-weight:700;">${safeSubject}</h1>
                   </td>
@@ -65,6 +101,14 @@ function buildSupportJourneyEmail({
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 14px 0;">
                       <tr>
                         <td style="display:inline-block;padding:6px 10px;border-radius:999px;background:#dbeafe;color:#1e3a8a;font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">${safeType}</td>
+                      </tr>
+                    </table>
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 14px 0;background:${statusConfig.cardBg};border:1px solid ${statusConfig.cardBorder};border-radius:12px;">
+                      <tr>
+                        <td style="padding:12px 14px;">
+                          <p style="margin:0 0 8px 0;color:#0f172a;font-size:13px;line-height:1.5;font-weight:700;">Request Status</p>
+                          <span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${statusConfig.badgeBg};color:${statusConfig.badgeColor};font-size:12px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;">${statusConfig.label}</span>
+                        </td>
                       </tr>
                     </table>
                     <p style="margin:0 0 14px 0;color:#334155;font-size:15px;line-height:1.7;">${safeStatusMessage}</p>

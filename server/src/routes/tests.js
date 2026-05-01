@@ -35,6 +35,11 @@ function isApplicationFromOlderCycle(row, appliedAtIso) {
   if (!appliedAtIso) return false;
   const appliedAt = new Date(appliedAtIso);
   if (Number.isNaN(appliedAt.getTime())) return false;
+  const cycleStartedRaw = String(row.last_cycle_started_at || '').trim();
+  const cycleStartedMs = Date.parse(cycleStartedRaw);
+  if (Number.isFinite(cycleStartedMs)) {
+    return appliedAt.getTime() < cycleStartedMs;
+  }
   const now = new Date();
   const nowStartMs = toStartOfDayMs(now);
   const resolved = resolveExamDate(row);
@@ -105,6 +110,107 @@ function normalizeTestAdvancedConfig(rawValue) {
     fullscreenRequired: raw.fullscreenRequired === true,
     copyPasteBlocked: raw.copyPasteBlocked === true,
     notifyOnPublish: raw.notifyOnPublish !== false,
+  };
+}
+
+function hashStringToSeed(text) {
+  const str = String(text || '');
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i += 1) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function seededRandomFactory(seedValue) {
+  let a = (Number(seedValue) >>> 0) || 1;
+  return () => {
+    a += 0x6D2B79F5;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function seededShuffle(list, rng) {
+  const arr = Array.isArray(list) ? [...list] : [];
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
+}
+
+function applyPerUserShuffleToQuestions(rows, seedText, options) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const seed = hashStringToSeed(seedText);
+  const rng = seededRandomFactory(seed);
+  const shuffleQuestions = options && options.shuffleQuestions === true;
+  const shuffleOptions = options && options.shuffleOptions === true;
+
+  const withBaseIndex = safeRows.map((row, idx) => ({ row, baseIndex: idx }));
+  const ordered = shuffleQuestions ? seededShuffle(withBaseIndex, rng) : withBaseIndex;
+
+  return ordered.map(({ row }, newPosition) => {
+    const sourceOptions = [
+      String(row.choice_a || ''),
+      String(row.choice_b || ''),
+      String(row.choice_c || ''),
+      String(row.choice_d || ''),
+    ].map((x) => x.trim());
+    const sourceCorrect = Number(row.correct_index || 0);
+    if (!shuffleOptions) {
+      return {
+        id: Number(row.id),
+        position: Number(newPosition + 1),
+        questionPrompt: String(row.stem || ''),
+        options: sourceOptions,
+        correctIndex: sourceCorrect,
+        explanation: String(row.explanation || ''),
+      };
+    }
+    const indexed = sourceOptions.map((opt, idx) => ({ opt, idx }));
+    const shuffled = seededShuffle(indexed, rng);
+    const newOptions = shuffled.map((x) => x.opt);
+    const newCorrectIndex = shuffled.findIndex((x) => x.idx === sourceCorrect);
+    return {
+      id: Number(row.id),
+      position: Number(newPosition + 1),
+      questionPrompt: String(row.stem || ''),
+      options: newOptions,
+      correctIndex: Math.max(0, newCorrectIndex),
+      explanation: String(row.explanation || ''),
+    };
+  });
+}
+
+async function readWaitlistPosition(client, testId, waitlistId) {
+  const rankRes = await client.query(
+    `SELECT COUNT(*)::int AS position
+     FROM test_waitlist
+     WHERE test_id = $1::uuid
+       AND status = 'waiting'
+       AND (created_at, id) <= (
+         SELECT created_at, id
+         FROM test_waitlist
+         WHERE id = $2::bigint
+         LIMIT 1
+       )`,
+    [testId, waitlistId],
+  );
+  const totalRes = await client.query(
+    `SELECT COUNT(*)::int AS total
+     FROM test_waitlist
+     WHERE test_id = $1::uuid AND status = 'waiting'`,
+    [testId],
+  );
+  return {
+    waitingPosition: Number(rankRes.rows?.[0]?.position || 0),
+    waitingTotal: Number(totalRes.rows?.[0]?.total || 0),
   };
 }
 
@@ -222,6 +328,55 @@ router.get('/:id/questions', async (req, res) => {
   }
 });
 
+router.get('/:id/questions-attempt', requireAuth, async (req, res) => {
+  const id = String(req.params.id || '').trim();
+  if (!id) return res.status(400).json({ error: 'test id required' });
+  try {
+    const [testRes, advancedMapRaw] = await Promise.all([
+      pool.query(
+        `SELECT id, is_published, last_cycle_started_at
+         FROM tests
+         WHERE id = $1::uuid
+         LIMIT 1`,
+        [id],
+      ),
+      pool.query(`SELECT setting_value FROM app_settings WHERE setting_key = 'testAdvancedConfigs' LIMIT 1`),
+    ]);
+    const test = testRes.rows[0];
+    if (!test || test.is_published !== true) {
+      return res.status(404).json({ error: 'Test not found' });
+    }
+    let advancedMap = {};
+    try {
+      const parsed = JSON.parse(String(advancedMapRaw.rows?.[0]?.setting_value || '{}'));
+      advancedMap = parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_e) {
+      advancedMap = {};
+    }
+    const advancedConfig = normalizeTestAdvancedConfig(advancedMap[id]);
+    const rowsRes = await pool.query(
+      `SELECT id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation
+       FROM questions
+       WHERE test_id = $1::uuid AND is_published = true
+       ORDER BY position ASC, id ASC`,
+      [id],
+    );
+    const cycleKey = String(test.last_cycle_started_at || '').trim() || 'no_cycle';
+    const seedText = `${req.userId}:${id}:${cycleKey}`;
+    const items = applyPerUserShuffleToQuestions(rowsRes.rows || [], seedText, {
+      shuffleQuestions: advancedConfig.shuffleQuestions === true,
+      shuffleOptions: advancedConfig.shuffleOptions === true,
+    });
+    return res.json({ items });
+  } catch (e) {
+    if (e.code === '22P02') {
+      return res.status(400).json({ error: 'Invalid test id' });
+    }
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load attempt questions' });
+  }
+});
+
 router.post('/:id/apply', requireAuth, async (req, res) => {
   const id = String(req.params.id || '').trim();
   if (!id) return res.status(400).json({ error: 'test id required' });
@@ -229,7 +384,7 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
   try {
     await client.query('BEGIN');
     const testRes = await client.query(
-      `SELECT id, title, capacity_total, enrolled_count, exam_date, dynamic_date_enabled, date_cycle_days
+      `SELECT id, title, capacity_total, enrolled_count, exam_date, dynamic_date_enabled, date_cycle_days, last_cycle_started_at
        FROM tests
        WHERE id = $1::uuid
        LIMIT 1
@@ -252,6 +407,12 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
     const currentEnrolled = Math.max(0, Number(test.enrolled_count || 0));
     const existing = alreadyRes.rows[0];
     if (existing && !isApplicationFromOlderCycle(test, existing.applied_at)) {
+      await client.query(
+        `UPDATE test_waitlist
+         SET status = 'cancelled'
+         WHERE user_id = $1::uuid AND test_id = $2::uuid AND status = 'waiting'`,
+        [req.userId, id],
+      );
       await client.query('COMMIT');
       const remaining = capacity > 0 ? Math.max(0, capacity - currentEnrolled) : 0;
       return res.json({
@@ -266,6 +427,12 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
       });
     }
     if (existing) {
+      await client.query(
+        `UPDATE test_waitlist
+         SET status = 'cancelled'
+         WHERE user_id = $1::uuid AND test_id = $2::uuid AND status = 'waiting'`,
+        [req.userId, id],
+      );
       await client.query(
         `UPDATE test_applications
          SET applied_at = now()
@@ -286,9 +453,49 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
       });
     }
     if (capacity > 0 && currentEnrolled >= capacity) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ error: 'No seats left for this test' });
+      let waitlistId = null;
+      const existingWaitRes = await client.query(
+        `SELECT id
+         FROM test_waitlist
+         WHERE user_id = $1::uuid
+           AND test_id = $2::uuid
+           AND status = 'waiting'
+         LIMIT 1`,
+        [req.userId, id],
+      );
+      if (existingWaitRes.rows[0]) {
+        waitlistId = Number(existingWaitRes.rows[0].id);
+      } else {
+        const insWaitRes = await client.query(
+          `INSERT INTO test_waitlist (user_id, test_id, status)
+           VALUES ($1::uuid, $2::uuid, 'waiting')
+           RETURNING id`,
+          [req.userId, id],
+        );
+        waitlistId = Number(insWaitRes.rows?.[0]?.id || 0);
+      }
+      const waitSnapshot = await readWaitlistPosition(client, id, waitlistId);
+      await client.query('COMMIT');
+      return res.status(202).json({
+        ok: true,
+        alreadyApplied: false,
+        waitlisted: true,
+        message: 'All seats are filled. You are added to waiting list.',
+        testId: String(test.id),
+        testTitle: String(test.title || 'Test'),
+        enrolledCount: currentEnrolled,
+        capacityTotal: capacity,
+        remainingSeats: 0,
+        waitingPosition: waitSnapshot.waitingPosition,
+        waitingTotal: waitSnapshot.waitingTotal,
+      });
     }
+    await client.query(
+      `UPDATE test_waitlist
+       SET status = 'cancelled'
+       WHERE user_id = $1::uuid AND test_id = $2::uuid AND status = 'waiting'`,
+      [req.userId, id],
+    );
     await client.query(
       `INSERT INTO test_applications (user_id, test_id) VALUES ($1::uuid, $2::uuid)`,
       [req.userId, id],
@@ -325,6 +532,51 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
     }
     console.error(e);
     return res.status(500).json({ error: 'Failed to apply for test' });
+  } finally {
+    client.release();
+  }
+});
+
+router.get('/:id/waitlist-status', requireAuth, async (req, res) => {
+  const id = String(req.params.id || '').trim();
+  if (!id) return res.status(400).json({ error: 'test id required' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const testRes = await client.query(
+      `SELECT id FROM tests WHERE id = $1::uuid LIMIT 1`,
+      [id],
+    );
+    if (!testRes.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Test not found' });
+    }
+    const rowRes = await client.query(
+      `SELECT id
+       FROM test_waitlist
+       WHERE user_id = $1::uuid AND test_id = $2::uuid AND status = 'waiting'
+       LIMIT 1`,
+      [req.userId, id],
+    );
+    const row = rowRes.rows[0];
+    if (!row) {
+      await client.query('COMMIT');
+      return res.json({ waitlisted: false, waitingPosition: 0, waitingTotal: 0 });
+    }
+    const waitSnapshot = await readWaitlistPosition(client, id, Number(row.id));
+    await client.query('COMMIT');
+    return res.json({
+      waitlisted: true,
+      waitingPosition: waitSnapshot.waitingPosition,
+      waitingTotal: waitSnapshot.waitingTotal,
+    });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (e.code === '22P02') {
+      return res.status(400).json({ error: 'Invalid test id' });
+    }
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to fetch waitlist status' });
   } finally {
     client.release();
   }

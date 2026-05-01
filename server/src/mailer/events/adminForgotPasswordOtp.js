@@ -12,8 +12,8 @@ function createAdminForgotPasswordTransport() {
   const host = String(process.env.SMTP_ADMIN_FP_HOST || 'smtp.gmail.com').trim();
   const port = parseInt(process.env.SMTP_ADMIN_FP_PORT || '587', 10);
   const secure = readBool(process.env.SMTP_ADMIN_FP_SECURE, false);
-  const user = String(process.env.SMTP_ADMIN_FP_USER || '').trim();
-  const pass = String(process.env.SMTP_ADMIN_FP_PASS || '').trim();
+  const user = String(process.env.SMTP_ADMIN_FP_USER || process.env.SMTP_USER || '').trim();
+  const pass = String(process.env.SMTP_ADMIN_FP_PASS || process.env.SMTP_PASS || '').trim();
   const connectionTimeout = parseInt(process.env.SMTP_ADMIN_FP_CONNECTION_TIMEOUT_MS || '10000', 10);
   const greetingTimeout = parseInt(process.env.SMTP_ADMIN_FP_GREETING_TIMEOUT_MS || '10000', 10);
   const socketTimeout = parseInt(process.env.SMTP_ADMIN_FP_SOCKET_TIMEOUT_MS || '15000', 10);
@@ -45,7 +45,7 @@ async function sendAdminForgotPasswordOtpEmail(opts) {
   const displayName = String(opts?.displayName || 'Admin').trim();
   const minutes = Number(opts?.minutes || 15);
   const brandName = String(process.env.MAIL_BRAND_NAME || 'MockTest').trim();
-  const fromUser = String(process.env.SMTP_ADMIN_FP_USER || '').trim();
+  const fromUser = String(process.env.SMTP_ADMIN_FP_USER || process.env.SMTP_USER || '').trim();
   const from = String(process.env.MAIL_FROM_ADMIN_FP || fromUser).trim();
   const replyTo = String(process.env.MAIL_REPLY_TO_ADMIN_FP || process.env.MAIL_SUPPORT_EMAIL || from).trim();
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || replyTo || from).trim();

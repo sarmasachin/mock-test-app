@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 /**
  * Persists completed test rows (Room). Initialized from [MockTestApp].
@@ -31,6 +32,7 @@ object TestHistoryRepository {
     suspend fun recordAttempt(
         userKey: String,
         testName: String,
+        testCatalogId: String,
         correct: Int,
         total: Int,
         completedAtMillis: Long = System.currentTimeMillis(),
@@ -51,12 +53,18 @@ object TestHistoryRepository {
                         completedAtMillis = completedAtMillis,
                     ),
                 )
+                val submissionId = UUID.nameUUIDFromBytes(
+                    "$safeUserKey|$testCatalogId|$testName|$completedAtMillis|$correct|$total"
+                        .toByteArray(Charsets.UTF_8),
+                ).toString()
                 try {
                     AuthRepository.postAttemptRemote(
                         testName = testName,
                         correct = correct,
                         total = total,
                         completedAtMillis = completedAtMillis,
+                        testCatalogId = testCatalogId,
+                        clientSubmissionId = submissionId,
                     )
                 } catch (e: Exception) {
                     Log.w(TAG, "Server sync failed or skipped", e)

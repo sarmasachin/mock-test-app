@@ -13,7 +13,9 @@ const needsSsl =
 
 const poolConfig = {
   connectionString,
-  max: 10,
+  max: Math.max(1, Number(process.env.DB_POOL_MAX || 25)),
+  idleTimeoutMillis: Math.max(1000, Number(process.env.DB_IDLE_TIMEOUT_MS || 30000)),
+  connectionTimeoutMillis: Math.max(1000, Number(process.env.DB_CONNECT_TIMEOUT_MS || 10000)),
 };
 if (needsSsl) {
   // Managed Postgres providers (Render/Neon/Supabase/Railway) usually require TLS.

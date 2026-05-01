@@ -44,6 +44,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
+import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.data.TestHistoryRepository
 import com.freemocktest.app.newui.alerts.ExamAlertFeedImageSeedPrefix
 import com.freemocktest.app.newui.alerts.ExamAlertScreenNew
@@ -499,9 +500,18 @@ fun MainBottomNavHost(
                             drawerProfile.userIdFormatted ?: "guest"
                         }
                         scope.launch {
+                            val catalogId = ContentRepository.loadTestByTitle(name.ifBlank { "Test" })
+                                ?.id
+                                ?.trim()
+                                .orEmpty()
+                            if (catalogId.isBlank()) {
+                                Toast.makeText(context, "Test details missing. Please retry.", Toast.LENGTH_SHORT).show()
+                                return@launch
+                            }
                             TestHistoryRepository.recordAttempt(
                                 userKey = attemptsUserKey,
                                 testName = name.ifBlank { "Test" },
+                                testCatalogId = catalogId,
                                 correct = correct,
                                 total = total,
                             )

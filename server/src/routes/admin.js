@@ -785,7 +785,7 @@ async function regenerateTestFromSubcategoryPool(testId) {
   if (!base || !String(base.subcategory || '').trim()) return { regenerated: false, reason: 'missing_subcategory' };
   const needed = Math.max(1, Number(base.question_count || 0));
   const poolRes = await pool.query(
-    `SELECT q.id, q.stem, q.choice_a, q.choice_b, q.choice_c, q.choice_d, q.correct_index, q.explanation
+    `SELECT q.id, q.stem, q.choice_a, q.choice_b, q.choice_c, q.choice_d, q.correct_index, q.explanation, q.created_at
      FROM questions q
      INNER JOIN tests t ON t.id = q.test_id
      WHERE t.subcategory = $1
@@ -794,7 +794,45 @@ async function regenerateTestFromSubcategoryPool(testId) {
   );
   const poolRows = poolRes.rows || [];
   if (!poolRows.length) return { regenerated: false, reason: 'empty_pool' };
-  const selected = shuffleArray(poolRows).slice(0, Math.min(needed, poolRows.length));
+  const maxPick = Math.min(needed, poolRows.length);
+  const newWindowDays = 7;
+  const newRatio = 0.7;
+  const cutoffMs = Date.now() - newWindowDays * 24 * 60 * 60 * 1000;
+  const newRows = [];
+  const oldRows = [];
+  for (const row of poolRows) {
+    const createdAtMs = Date.parse(String(row.created_at || ''));
+    if (Number.isFinite(createdAtMs) && createdAtMs >= cutoffMs) {
+      newRows.push(row);
+    } else {
+      oldRows.push(row);
+    }
+  }
+
+  let targetNew = Math.min(newRows.length, Math.round(maxPick * newRatio));
+  let targetOld = maxPick - targetNew;
+
+  if (oldRows.length < targetOld) {
+    const oldDeficit = targetOld - oldRows.length;
+    targetOld = oldRows.length;
+    targetNew = Math.min(newRows.length, targetNew + oldDeficit);
+  }
+  if (newRows.length < targetNew) {
+    const newDeficit = targetNew - newRows.length;
+    targetNew = newRows.length;
+    targetOld = Math.min(oldRows.length, targetOld + newDeficit);
+  }
+
+  const selectedNew = shuffleArray(newRows).slice(0, targetNew);
+  const selectedOld = shuffleArray(oldRows).slice(0, targetOld);
+  let selected = shuffleArray([...selectedNew, ...selectedOld]).slice(0, maxPick);
+
+  if (selected.length < maxPick) {
+    const pickedIds = new Set(selected.map((x) => String(x.id)));
+    const remaining = shuffleArray(poolRows).filter((x) => !pickedIds.has(String(x.id)));
+    selected = [...selected, ...remaining.slice(0, maxPick - selected.length)];
+  }
+
   if (!selected.length) return { regenerated: false, reason: 'no_selection' };
   const client = await pool.connect();
   try {
@@ -1688,7 +1726,7 @@ router.patch('/settings', async (req, res) => {
       termsOfUseContentUpdated: normalizedTermsOfUseContent !== null,
     });
     if (isMailConfigured()) {
-      const notifyResolved = async (beforePayload, afterPayload) => {
+      const notifyStatusUpdate = async (beforePayload, afterPayload) => {
         const beforeItems = Array.isArray(beforePayload?.items) ? beforePayload.items : [];
         const afterItems = Array.isArray(afterPayload?.items) ? afterPayload.items : [];
         const beforeMap = new Map(beforeItems.map((x) => [String(x.id || ''), String(x.status || 'new')]));
@@ -1698,6 +1736,16 @@ router.patch('/settings', async (req, res) => {
           const prev = String(beforeMap.get(id) || 'new').toLowerCase();
           const email = String(item.userEmail || '').trim();
           if (!email) continue;
+          if (status === 'in_progress' && prev !== 'in_progress') {
+            await sendSupportJourneyEmail({
+              to: email,
+              status: 'in_progress',
+              subject: String(item.subject || 'Support Request'),
+              message: 'Your request is now in progress. Our team is actively working on it, and we expect the next update within 24-48 hours.',
+            }).catch((mailErr) => {
+              console.error('support_in_progress_email_failed', id, mailErr && (mailErr.message || mailErr));
+            });
+          }
           if (status === 'resolved' && prev !== 'resolved') {
             await sendSupportJourneyEmail({
               to: email,
@@ -1711,13 +1759,13 @@ router.patch('/settings', async (req, res) => {
         }
       };
       if (normalizedFeedbackInbox !== null) {
-        await notifyResolved(previousFeedbackInbox, normalizedFeedbackInbox.value);
+        await notifyStatusUpdate(previousFeedbackInbox, normalizedFeedbackInbox.value);
       }
       if (normalizedHelpSupportInbox !== null) {
-        await notifyResolved(previousHelpSupportInbox, normalizedHelpSupportInbox.value);
+        await notifyStatusUpdate(previousHelpSupportInbox, normalizedHelpSupportInbox.value);
       }
       if (normalizedReportIssueInbox !== null) {
-        await notifyResolved(previousReportIssueInbox, normalizedReportIssueInbox.value);
+        await notifyStatusUpdate(previousReportIssueInbox, normalizedReportIssueInbox.value);
       }
     }
     if (normalizedDailyQuizSettings !== null) {
@@ -1884,6 +1932,12 @@ router.post('/tests', async (req, res) => {
       ],
     );
     if (data.isPublished) {
+      await pool.query(
+        `UPDATE tests
+         SET last_cycle_started_at = now(), updated_at = now()
+         WHERE id = $1::uuid`,
+        [rows[0].id],
+      );
       await regenerateTestFromSubcategoryPool(rows[0].id);
       if (advancedConfig.notifyOnPublish !== false) {
         await enqueueNotification(req.userId, {
@@ -1985,6 +2039,12 @@ router.patch('/tests/:id', async (req, res) => {
     );
     if (!rows[0]) return res.status(404).json({ error: 'Test not found' });
     if (!beforeRow.is_published && rows[0].is_published) {
+      await pool.query(
+        `UPDATE tests
+         SET last_cycle_started_at = now(), updated_at = now()
+         WHERE id = $1::uuid`,
+        [rows[0].id],
+      );
       await regenerateTestFromSubcategoryPool(rows[0].id);
       if (advancedConfig.notifyOnPublish !== false) {
         await enqueueNotification(req.userId, {

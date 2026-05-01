@@ -89,6 +89,10 @@ fun ApplyForTestScreenNew(
     var appliedInfo by remember { mutableStateOf("0") }
     var remainingSeatsInfo by remember { mutableStateOf("0 seats left") }
     var submitError by remember { mutableStateOf<String?>(null) }
+    var submitWarning by remember { mutableStateOf<String?>(null) }
+    var isWaitlisted by remember { mutableStateOf(false) }
+    var waitingPosition by remember { mutableIntStateOf(0) }
+    var waitingTotal by remember { mutableIntStateOf(0) }
     var isSubmitting by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
     var refreshTick by remember { mutableIntStateOf(0) }
@@ -140,6 +144,17 @@ fun ApplyForTestScreenNew(
             "${remaining.coerceAtLeast(0)} seats left"
         } else {
             test?.remainingSeatsLabel?.ifBlank { "0 seats left" } ?: "0 seats left"
+        }
+        if (testId.isNotBlank()) {
+            AuthRepository.getTestWaitlistStatus(testId).onSuccess { status ->
+                isWaitlisted = status.waitlisted
+                waitingPosition = status.waitingPosition.coerceAtLeast(0)
+                waitingTotal = status.waitingTotal.coerceAtLeast(0)
+            }
+        } else {
+            isWaitlisted = false
+            waitingPosition = 0
+            waitingTotal = 0
         }
     }
     DisposableEffect(lifecycleOwner) {
@@ -223,6 +238,15 @@ fun ApplyForTestScreenNew(
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
+                    if (isWaitlisted) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "Waiting list active: Position $waitingPosition of $waitingTotal",
+                            color = Color(0xFF92400E),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                     Spacer(Modifier.height(6.dp))
                     // Keep a stable slot so the action button does not jump while refresh state toggles.
                     Text(
@@ -272,6 +296,7 @@ fun ApplyForTestScreenNew(
                             onClick = {
                                 if (isSubmitting) return@Button
                                 submitError = null
+                                submitWarning = null
                                 if (testId.isBlank()) {
                                     submitError = "Test details unavailable. Please reopen this page."
                                     return@Button
@@ -286,13 +311,21 @@ fun ApplyForTestScreenNew(
                                         val remaining = response.remainingSeats.coerceAtLeast(0)
                                         appliedInfo = if (capacity > 0) "$enrolled/$capacity" else "$enrolled"
                                         remainingSeatsInfo = "$remaining seats left"
-                                        shouldQueueSeriesOnConfirm = !response.alreadyApplied
+                                        isWaitlisted = response.waitlisted
+                                        waitingPosition = response.waitingPosition.coerceAtLeast(0)
+                                        waitingTotal = response.waitingTotal.coerceAtLeast(0)
+                                        shouldQueueSeriesOnConfirm = !response.alreadyApplied && !response.waitlisted
                                         successMessage = when {
                                             response.message?.isNotBlank() == true -> response.message
                                             response.alreadyApplied -> "You have already applied for this test."
                                             else -> successMessage
                                         }
-                                        showSuccessDialog = true
+                                        if (response.waitlisted) {
+                                            submitWarning = successMessage
+                                            showSuccessDialog = false
+                                        } else {
+                                            showSuccessDialog = true
+                                        }
                                     }.onFailure { error ->
                                         submitError = error.message?.ifBlank { "Unable to submit application." }
                                             ?: "Unable to submit application."
@@ -337,6 +370,15 @@ fun ApplyForTestScreenNew(
                             Text(
                                 text = msg,
                                 color = Color(0xFFB91C1C),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        submitWarning?.let { msg ->
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = msg,
+                                color = Color(0xFF92400E),
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
                             )

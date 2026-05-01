@@ -663,7 +663,7 @@ function App() {
     const nextIdentifier = String(forgotIdentifier || '').trim();
     if (!nextIdentifier) {
       setForgotMessageType('error');
-      setForgotMessage('Email ya mobile required hai.');
+      setForgotMessage('Email or mobile is required.');
       return;
     }
     setForgotSending(true);
@@ -675,14 +675,14 @@ function App() {
       });
       if (res.data?.ok === false) {
         setForgotMessageType('error');
-        setForgotMessage(String(res.data?.error || 'Admin account nahi mila.'));
+        setForgotMessage(String(res.data?.error || 'Admin account was not found.'));
         return;
       }
       setForgotMessageType('success');
-      setForgotMessage(String(res.data?.message || 'OTP भेज दिया गया है.'));
+      setForgotMessage(String(res.data?.message || 'OTP sent successfully.'));
     } catch (err: any) {
       setForgotMessageType('error');
-      setForgotMessage(err?.response?.data?.error || 'OTP bhejne me issue aaya.');
+      setForgotMessage(err?.response?.data?.error || 'Could not send OTP right now.');
     } finally {
       setForgotSending(false);
     }
@@ -693,22 +693,22 @@ function App() {
     const nextIdentifier = String(forgotIdentifier || '').trim();
     if (!nextIdentifier) {
       setForgotMessageType('error');
-      setForgotMessage('Email ya mobile required hai.');
+      setForgotMessage('Email or mobile is required.');
       return;
     }
     if (forgotOtp.replace(/\D/g, '').length !== 6) {
       setForgotMessageType('error');
-      setForgotMessage('Valid 6-digit OTP dalo.');
+      setForgotMessage('Enter a valid 6-digit OTP.');
       return;
     }
     if (forgotNewPassword.length < 4) {
       setForgotMessageType('error');
-      setForgotMessage('Naya password kam se kam 4 characters ka hona chahiye.');
+      setForgotMessage('New password must be at least 4 characters.');
       return;
     }
     if (forgotNewPassword !== forgotConfirmPassword) {
       setForgotMessageType('error');
-      setForgotMessage('Confirm password match nahi kar raha.');
+      setForgotMessage('Confirm password does not match.');
       return;
     }
     setForgotResetting(true);
@@ -721,7 +721,7 @@ function App() {
         newPassword: forgotNewPassword,
       });
       setForgotMessageType('success');
-      setForgotMessage('Password reset ho gaya. Ab naye password se login karein.');
+      setForgotMessage('Password reset successful. Please login with your new password.');
       setForgotOtp('');
       setForgotNewPassword('');
       setForgotConfirmPassword('');
@@ -775,30 +775,30 @@ function App() {
             </div>
             {authView === 'login' ? (
               <>
-                <h2>एडमिन लॉगिन</h2>
-                <p className="sub">प्रवेश के लिए क्रेडेंशियल्स दर्ज करें</p>
+                <h2>Admin Login</h2>
+                <p className="sub">Enter your credentials to continue.</p>
                 <form onSubmit={handleLogin} className="auth-form">
                   <div className="input-group">
-                    <label>ईमेल / मोबाइल</label>
+                    <label>Email / Mobile</label>
                     <div className="input-box">
                       <i aria-hidden="true">✉</i>
                       <input
                         value={identifier}
                         onChange={(e) => setIdentifier(e.target.value)}
-                        placeholder="ईमेल/मोबाइल दर्ज करें"
+                        placeholder="Enter email or mobile"
                         autoComplete="username"
                         required
                       />
                     </div>
                   </div>
                   <div className="input-group">
-                    <label>पासवर्ड</label>
+                    <label>Password</label>
                     <div className="input-box">
                       <i aria-hidden="true">🔒</i>
                       <input
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
-                        placeholder="पासवर्ड दर्ज करें"
+                        placeholder="Enter password"
                         type="password"
                         autoComplete="current-password"
                         required
@@ -806,7 +806,7 @@ function App() {
                     </div>
                   </div>
                   <button type="submit" className="login-btn" disabled={loading}>
-                    {loading ? 'लॉगिन हो रहा है...' : 'लॉगिन करें  >'}
+                    {loading ? 'Logging in...' : 'Login'}
                   </button>
                 </form>
                 {message && <p className={`auth-message ${messageType} ${messageType === 'error' ? 'error-p' : ''}`}>{message}</p>}
@@ -814,23 +814,23 @@ function App() {
             ) : (
               <>
                 <h2>Forgot Password</h2>
-                <p className="sub">Admin reset OTP आपके registered email पर आएगा.</p>
+                <p className="sub">Use your admin email or mobile to request an OTP.</p>
                 <form onSubmit={handleAdminForgotPasswordRequest} className="auth-form">
                   <div className="input-group">
-                    <label>ईमेल / मोबाइल</label>
+                    <label>Email / Mobile</label>
                     <div className="input-box">
                       <i aria-hidden="true">✉</i>
                       <input
                         value={forgotIdentifier}
                         onChange={(e) => setForgotIdentifier(e.target.value)}
-                        placeholder="ईमेल/मोबाइल दर्ज करें"
+                        placeholder="Enter email or mobile"
                         autoComplete="username"
                         required
                       />
                     </div>
                   </div>
                   <button type="submit" className="login-btn" disabled={forgotSending}>
-                    {forgotSending ? 'OTP भेज रहा है...' : 'Send OTP'}
+                    {forgotSending ? 'Sending OTP...' : 'Send OTP'}
                   </button>
                 </form>
                 <form onSubmit={handleAdminForgotPasswordComplete} className="auth-form">
@@ -854,7 +854,7 @@ function App() {
                       <input
                         value={forgotNewPassword}
                         onChange={(e) => setForgotNewPassword(e.target.value)}
-                        placeholder="Naya password"
+                        placeholder="Enter new password"
                         type="password"
                         autoComplete="new-password"
                         required
@@ -868,7 +868,7 @@ function App() {
                       <input
                         value={forgotConfirmPassword}
                         onChange={(e) => setForgotConfirmPassword(e.target.value)}
-                        placeholder="Confirm password"
+                        placeholder="Re-enter new password"
                         type="password"
                         autoComplete="new-password"
                         required
@@ -876,7 +876,7 @@ function App() {
                     </div>
                   </div>
                   <button type="submit" className="login-btn" disabled={forgotResetting}>
-                    {forgotResetting ? 'Reset ho raha hai...' : 'Verify OTP & Reset Password'}
+                    {forgotResetting ? 'Resetting password...' : 'Verify OTP & Reset Password'}
                   </button>
                 </form>
                 {forgotMessage && (
@@ -1171,6 +1171,7 @@ function TestsTab({
   const [sendEmailOnPublish, setSendEmailOnPublish] = useState(false);
   const [opsTestId, setOpsTestId] = useState('');
   const [search, setSearch] = useState('');
+  const [questionBuilderSearch, setQuestionBuilderSearch] = useState('');
   const [editingId, setEditingId] = useState('');
   const [kind, setKind] = useState<TestKind>('mock');
   const [isPublished, setIsPublished] = useState(true);
@@ -1904,6 +1905,16 @@ function TestsTab({
     const start = (safeQuestionsPage - 1) * QUESTIONS_PER_PAGE;
     return displayedQuestions.slice(start, start + QUESTIONS_PER_PAGE);
   }, [displayedQuestions, safeQuestionsPage]);
+  const filteredQuestionBuilderItems = useMemo(() => {
+    const q = questionBuilderSearch.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((item) => {
+      const title = String(item.title || '').toLowerCase();
+      const slug = String(item.slug || '').toLowerCase();
+      const kindText = String(item.test_kind || '').toLowerCase();
+      return title.includes(q) || slug.includes(q) || kindText.includes(q);
+    });
+  }, [items, questionBuilderSearch]);
   const selectedOpsTest = useMemo(() => items.find((x) => x.id === opsTestId) || null, [items, opsTestId]);
 
   return (
@@ -2152,6 +2163,11 @@ function TestsTab({
 
       {mode === 'questionBuilder' && (
         <div className="inline-form">
+          <input
+            value={questionBuilderSearch}
+            onChange={(e) => setQuestionBuilderSearch(e.target.value)}
+            placeholder="Search test in question builder..."
+          />
           <select
             value={selectedTest?.id || ''}
             onChange={(e) => {
@@ -2160,7 +2176,7 @@ function TestsTab({
             }}
           >
             <option value="">Select Test</option>
-            {items.map((item) => (
+            {filteredQuestionBuilderItems.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.title} ({item.test_kind})
               </option>
@@ -3864,6 +3880,9 @@ function SupportInboxSettingsTab({
   const [message, setMessage] = useState('');
   const [status, setStatus] = useState<SupportInboxItem['status']>('new');
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [page, setPage] = useState(1);
 
   useEffect(() => {
@@ -3874,6 +3893,8 @@ function SupportInboxSettingsTab({
   async function load() {
     try {
       setError('');
+      setSuccess('');
+      setLoading(true);
       const res = await apiClient.get('/admin/settings');
       const rawItems = res.data?.settings?.[settingsKey]?.items;
       const mapped = Array.isArray(rawItems)
@@ -3888,22 +3909,30 @@ function SupportInboxSettingsTab({
         : [];
       setItems(mapped);
       setPage(1);
+      setSuccess(`${title} records refreshed successfully.`);
     } catch (err: any) {
       setError(err?.response?.data?.error || `Failed to load ${title}`);
+    } finally {
+      setLoading(false);
     }
   }
 
-  async function saveAll(nextItems: SupportInboxItem[]) {
+  async function saveAll(nextItems: SupportInboxItem[], successText: string) {
     try {
       setError('');
+      setSuccess('');
+      setSaving(true);
       await apiClient.patch('/admin/settings', {
         [settingsKey]: {
           items: nextItems,
         },
       });
       setItems(nextItems);
+      setSuccess(successText);
     } catch (err: any) {
       setError(err?.response?.data?.error || `Failed to save ${title}`);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -3927,7 +3956,7 @@ function SupportInboxSettingsTab({
       },
       ...items,
     ];
-    await saveAll(nextItems);
+    await saveAll(nextItems, `${title} record added successfully.`);
     setUser('');
     setSubject('');
     setMessage('');
@@ -3938,12 +3967,12 @@ function SupportInboxSettingsTab({
   async function removeItem(id: string) {
     if (!window.confirm('Delete this record?')) return;
     const nextItems = items.filter((x) => x.id !== id);
-    await saveAll(nextItems);
+    await saveAll(nextItems, `${title} record deleted successfully.`);
   }
 
   async function updateStatus(id: string, nextStatus: SupportInboxItem['status']) {
     const nextItems = items.map((x) => (x.id === id ? { ...x, status: nextStatus } : x));
-    await saveAll(nextItems);
+    await saveAll(nextItems, `${title} status updated successfully.`);
   }
 
   const totalPages = Math.max(1, Math.ceil(items.length / ITEMS_PER_PAGE));
@@ -3967,11 +3996,14 @@ function SupportInboxSettingsTab({
           <option value="in_progress">in_progress</option>
           <option value="resolved">resolved</option>
         </select>
-        <button type="submit">Add</button>
-        <button type="button" className="ghost" onClick={load}>
-          Reload
+        <button type="submit" className="support-inbox-btn" disabled={loading || saving}>
+          {saving ? 'Saving...' : 'Add'}
+        </button>
+        <button type="button" className="ghost support-inbox-btn" onClick={load} disabled={loading || saving}>
+          {loading ? 'Reloading...' : 'Reload'}
         </button>
       </form>
+      {success && <p className="success-msg">{success}</p>}
       {error && <p className="error">{error}</p>}
       <div className="list table support-table">
         <div className="row row-head">

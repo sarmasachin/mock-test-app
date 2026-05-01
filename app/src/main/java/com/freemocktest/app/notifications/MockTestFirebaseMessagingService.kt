@@ -28,6 +28,12 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
             .ifBlank { message.data["message"]?.trim().orEmpty() }
         if (body.isBlank()) return
         val deepLink = message.data["deepLink"]?.trim().orEmpty()
+        LocalNotificationInbox.save(
+            context = applicationContext,
+            title = title,
+            message = body,
+            deepLink = deepLink,
+        )
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             if (deepLink.isNotBlank()) putExtra("push_deep_link", deepLink)

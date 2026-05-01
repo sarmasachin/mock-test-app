@@ -1,0 +1,94 @@
+MockTestApp API Phase Runbook (Safe Rollout)
+===========================================
+
+Scope
+-----
+- Phase-1: strict + idempotent attempts submit
+- Phase-2: DB pool tuning + per-user burst protection
+- Phase-3: global burst protection
+- Phase-4: idempotent replay bypass (duplicate retry does not consume limiter)
+
+Pre-deploy checklist
+--------------------
+1) Ensure DATABASE_URL and JWT_SECRET are set.
+2) Pull latest backend code.
+3) Validate syntax:
+   - node --check src/index.js
+   - node --check src/routes/attempts.js
+   - node --check src/routes/tests.js
+4) Restart API process.
+5) Verify /health returns 200.
+
+Recommended baseline env values
+-------------------------------
+Small server (2 vCPU / 4 GB)
+- DB_POOL_MAX=20
+- DB_IDLE_TIMEOUT_MS=30000
+- DB_CONNECT_TIMEOUT_MS=10000
+- ATTEMPT_SUBMIT_WINDOW_MS=10000
+- ATTEMPT_SUBMIT_MAX_PER_WINDOW=8
+- ATTEMPT_SUBMIT_GLOBAL_MAX_PER_WINDOW=350
+
+Medium server (4 vCPU / 8 GB)
+- DB_POOL_MAX=35
+- DB_IDLE_TIMEOUT_MS=30000
+- DB_CONNECT_TIMEOUT_MS=10000
+- ATTEMPT_SUBMIT_WINDOW_MS=10000
+- ATTEMPT_SUBMIT_MAX_PER_WINDOW=10
+- ATTEMPT_SUBMIT_GLOBAL_MAX_PER_WINDOW=900
+
+Large server (8 vCPU / 16 GB)
+- DB_POOL_MAX=50
+- DB_IDLE_TIMEOUT_MS=30000
+- DB_CONNECT_TIMEOUT_MS=10000
+- ATTEMPT_SUBMIT_WINDOW_MS=10000
+- ATTEMPT_SUBMIT_MAX_PER_WINDOW=12
+- ATTEMPT_SUBMIT_GLOBAL_MAX_PER_WINDOW=1800
+
+Post-deploy smoke tests
+-----------------------
+1) Health:
+   - GET /health => 200
+2) Validation:
+   - POST /v1/attempts without testCatalogId/clientSubmissionId => 400
+3) Idempotency:
+   - POST same payload twice with same clientSubmissionId
+   - first => 201, second => 200
+   - same id in both responses
+4) Replay header:
+   - second response should include X-Idempotent-Replay: true
+5) Burst protection:
+   - send > per-user limit rapidly
+   - expect 429 with Retry-After
+
+Operational alert conditions
+----------------------------
+- /v1/attempts 5xx rate > 1% for 5 minutes
+- /v1/attempts p95 latency > 1500ms for 10 minutes
+- 429 rate > 40% for 10 minutes (possible tuning needed)
+- DB connection timeout errors detected in logs
+
+Safe tuning rules
+-----------------
+- If 429 too high but CPU/DB healthy:
+  increase ATTEMPT_SUBMIT_GLOBAL_MAX_PER_WINDOW by +20%
+- If DB waits/timeouts increase:
+  reduce ATTEMPT_SUBMIT_GLOBAL_MAX_PER_WINDOW by -20%
+  and/or reduce DB_POOL_MAX by -15%
+- Change one parameter at a time, observe 10-15 minutes.
+
+Rollback plan
+-------------
+1) Keep code unchanged, lower pressure first:
+   - reduce ATTEMPT_SUBMIT_GLOBAL_MAX_PER_WINDOW
+   - keep idempotent replay path enabled
+2) If DB still unstable:
+   - reduce DB_POOL_MAX
+3) Restart API
+4) Re-run smoke tests
+
+Notes
+-----
+- Duplicate retries should never create duplicate attempt rows.
+- Replay path is safe and intentionally bypasses limiter quota.
+- Unique new submissions remain rate-limited to protect database.

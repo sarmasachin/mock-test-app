@@ -31,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.ContentRepository
+import com.freemocktest.app.notifications.LocalNotificationInbox
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import java.time.ZonedDateTime
@@ -49,6 +51,7 @@ fun NotificationsScreenNew(
     onBack: () -> Unit,
     onOpenDeepLink: (String) -> Unit,
 ) {
+    val context = LocalContext.current
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     var notifications by remember { mutableStateOf<List<ContentRepository.PushNotificationItemRemote>>(emptyList()) }
@@ -56,7 +59,11 @@ fun NotificationsScreenNew(
 
     LaunchedEffect(Unit) {
         loadingNotifications = true
-        val rows = runCatching { ContentRepository.loadNotifications() }.getOrDefault(emptyList())
+        val remoteRows = runCatching { ContentRepository.loadNotifications() }.getOrDefault(emptyList())
+        val localRows = LocalNotificationInbox.read(context)
+        val rows = (localRows + remoteRows)
+            .distinctBy { it.id.trim() }
+            .sortedByDescending { it.createdAt.orEmpty() }
         notifications = rows
         AppPreferencesRepository.markNotificationsSeen(rows.map { it.id })
         loadingNotifications = false

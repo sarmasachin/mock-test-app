@@ -5,6 +5,49 @@ const { pool } = require('../db');
 
 const router = express.Router();
 
+function normalizePollDurationMinutes(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1440;
+  return Math.max(1, Math.min(10080, Math.floor(n)));
+}
+
+function isPollActiveNow(item, nowMs) {
+  const createdAtRaw = String((item || {}).createdAt || '').trim();
+  const createdAtMs = Date.parse(createdAtRaw);
+  if (!Number.isFinite(createdAtMs)) return true;
+  const durationMinutes = normalizePollDurationMinutes((item || {}).durationMinutes);
+  const expiresAtMs = createdAtMs + durationMinutes * 60 * 1000;
+  return nowMs < expiresAtMs;
+}
+
+function sanitizePollSettings(raw) {
+  const safe = raw && typeof raw === 'object' ? raw : {};
+  const itemsRaw = Array.isArray(safe.items) ? safe.items : [];
+  const nowMs = Date.now();
+  const items = itemsRaw
+    .map((item, idx) => {
+      const x = item || {};
+      const options = (Array.isArray(x.options) ? x.options : [])
+        .map((v) => String(v || '').trim())
+        .filter(Boolean)
+        .slice(0, 8);
+      return {
+        id: String(x.id || `poll-${idx + 1}`).trim(),
+        question: String(x.question || '').trim(),
+        options,
+        allowMultiple: Boolean(x.allowMultiple),
+        durationMinutes: normalizePollDurationMinutes(x.durationMinutes),
+        enabled: x.enabled !== false,
+        createdAt: String(x.createdAt || '').trim() || new Date().toISOString(),
+      };
+    })
+    .filter((x) => x.id && x.question && x.options.length >= 2 && x.enabled && isPollActiveNow(x, nowMs));
+  return {
+    showHomePopup: safe.showHomePopup !== false,
+    items,
+  };
+}
+
 function sanitizeHomeContent(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const sectionsRaw = Array.isArray(raw.sections) ? raw.sections : [];
@@ -114,9 +157,9 @@ router.get('/content', async (_req, res) => {
     }
     try {
       const parsed = JSON.parse(String(map.pollSettings || '{}'));
-      parsedPollSettings = parsed && typeof parsed === 'object' ? parsed : { items: [] };
+      parsedPollSettings = sanitizePollSettings(parsed);
     } catch (_e) {
-      parsedPollSettings = { items: [] };
+      parsedPollSettings = { showHomePopup: true, items: [] };
     }
     try {
       const parsed = JSON.parse(String(map.pushNotificationSettings || '{}'));

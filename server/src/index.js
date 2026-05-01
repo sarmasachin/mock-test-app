@@ -118,12 +118,54 @@ async function ensureOptionalColumns() {
        ADD COLUMN IF NOT EXISTS badge_text VARCHAR(40) NOT NULL DEFAULT 'Live'`,
     );
     await pool.query(
+      `ALTER TABLE tests
+       ADD COLUMN IF NOT EXISTS last_cycle_started_at TIMESTAMPTZ`,
+    );
+    await pool.query(
+      `UPDATE tests
+       SET last_cycle_started_at = now()
+       WHERE is_published = true AND last_cycle_started_at IS NULL`,
+    );
+    await pool.query(
       `CREATE TABLE IF NOT EXISTS test_applications (
          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
          test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
          applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),
          PRIMARY KEY (user_id, test_id)
        )`,
+    );
+    await pool.query(
+      `ALTER TABLE test_attempts
+       ADD COLUMN IF NOT EXISTS client_submission_id VARCHAR(120)`,
+    );
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_test_attempts_submission_unique
+       ON test_attempts (user_id, test_catalog_id, client_submission_id)
+       WHERE test_catalog_id IS NOT NULL AND client_submission_id IS NOT NULL`,
+    );
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_test_attempts_submission_unique_all
+       ON test_attempts (user_id, test_catalog_id, client_submission_id)`,
+    );
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS test_waitlist (
+         id BIGSERIAL PRIMARY KEY,
+         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+         status TEXT NOT NULL DEFAULT 'waiting',
+         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+         promoted_at TIMESTAMPTZ NULL,
+         CONSTRAINT test_waitlist_status_check CHECK (status IN ('waiting', 'promoted', 'cancelled'))
+       )`,
+    );
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_test_waitlist_unique_waiting
+       ON test_waitlist (user_id, test_id)
+       WHERE status = 'waiting'`,
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_test_waitlist_test_status_created
+       ON test_waitlist (test_id, status, created_at)`,
     );
     await pool.query(
       `ALTER TABLE questions
@@ -228,6 +270,98 @@ async function regenerateTestFromSubcategoryPool(testId) {
   }
 }
 
+async function promoteWaitlistForTest(testId) {
+  const id = String(testId || '').trim();
+  if (!id) return { promotedCount: 0, waitingLeft: 0 };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const testRes = await client.query(
+      `SELECT id, capacity_total, enrolled_count
+       FROM tests
+       WHERE id = $1::uuid
+       LIMIT 1
+       FOR UPDATE`,
+      [id],
+    );
+    const test = testRes.rows[0];
+    if (!test) {
+      await client.query('COMMIT');
+      return { promotedCount: 0, waitingLeft: 0 };
+    }
+    const capacity = Math.max(0, Number(test.capacity_total || 0));
+    const currentEnrolled = Math.max(0, Number(test.enrolled_count || 0));
+    let availableSeats = capacity > 0 ? Math.max(0, capacity - currentEnrolled) : Number.MAX_SAFE_INTEGER;
+    if (availableSeats <= 0) {
+      await client.query('COMMIT');
+      return { promotedCount: 0, waitingLeft: 0 };
+    }
+
+    const waitRes = await client.query(
+      `SELECT id, user_id
+       FROM test_waitlist
+       WHERE test_id = $1::uuid AND status = 'waiting'
+       ORDER BY created_at ASC, id ASC
+       FOR UPDATE`,
+      [id],
+    );
+    const waitingRows = waitRes.rows || [];
+    if (!waitingRows.length) {
+      await client.query('COMMIT');
+      return { promotedCount: 0, waitingLeft: 0 };
+    }
+
+    const toPromote = waitingRows.slice(0, Math.min(availableSeats, waitingRows.length));
+    let promotedCount = 0;
+    const promotedIds = [];
+    for (const row of toPromote) {
+      const insertRes = await client.query(
+        `INSERT INTO test_applications (user_id, test_id)
+         VALUES ($1::uuid, $2::uuid)
+         ON CONFLICT (user_id, test_id) DO NOTHING`,
+        [String(row.user_id), id],
+      );
+      if (insertRes.rowCount > 0) {
+        promotedCount += 1;
+        promotedIds.push(Number(row.id));
+      }
+      availableSeats -= 1;
+      if (availableSeats <= 0) break;
+    }
+
+    if (promotedIds.length > 0) {
+      await client.query(
+        `UPDATE test_waitlist
+         SET status = 'promoted', promoted_at = now()
+         WHERE id = ANY($1::bigint[])`,
+        [promotedIds],
+      );
+    }
+    if (promotedCount > 0) {
+      await client.query(
+        `UPDATE tests
+         SET enrolled_count = enrolled_count + $2, updated_at = now()
+         WHERE id = $1::uuid`,
+        [id, promotedCount],
+      );
+    }
+    const leftRes = await client.query(
+      `SELECT COUNT(*)::int AS total
+       FROM test_waitlist
+       WHERE test_id = $1::uuid AND status = 'waiting'`,
+      [id],
+    );
+    const waitingLeft = Number(leftRes.rows?.[0]?.total || 0);
+    await client.query('COMMIT');
+    return { promotedCount, waitingLeft };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 async function processPublishSchedules() {
   try {
     const settingsRes = await pool.query(
@@ -258,7 +392,13 @@ async function processPublishSchedules() {
       }
       if (item.entityType === 'test') {
         await regenerateTestFromSubcategoryPool(String(item.entityId || ''));
-        await pool.query(`UPDATE tests SET is_published = true WHERE id = $1::uuid`, [String(item.entityId || '')]);
+        await pool.query(
+          `UPDATE tests
+           SET is_published = true, last_cycle_started_at = now(), updated_at = now()
+           WHERE id = $1::uuid`,
+          [String(item.entityId || '')],
+        );
+        await promoteWaitlistForTest(String(item.entityId || ''));
       } else if (item.entityType === 'article') {
         await pool.query(`UPDATE news_articles SET is_published = true WHERE id = $1::uuid`, [String(item.entityId || '')]);
       }
@@ -284,6 +424,126 @@ async function processPublishSchedules() {
   } catch (e) {
     if (e && e.code === '42P01') return;
     console.error('publish_scheduler_error', e);
+  }
+}
+
+async function processTestCycleAutoReschedule() {
+  try {
+    const settingsRes = await pool.query(
+      `SELECT setting_value FROM app_settings WHERE setting_key = 'publishScheduling' LIMIT 1`,
+    );
+    let payload = { items: [] };
+    if (settingsRes.rows[0]) {
+      try {
+        payload = JSON.parse(String(settingsRes.rows[0].setting_value || '{}')) || { items: [] };
+      } catch (_e) {
+        payload = { items: [] };
+      }
+    }
+    const items = Array.isArray(payload.items) ? [...payload.items] : [];
+    const nowMs = Date.now();
+    let changedSettings = false;
+
+    const testsRes = await pool.query(
+      `SELECT id, duration_minutes, last_cycle_started_at
+       FROM tests
+       WHERE is_published = true
+         AND COALESCE(duration_minutes, 0) > 0
+         AND last_cycle_started_at IS NOT NULL`,
+    );
+
+    for (const row of testsRes.rows || []) {
+      const testId = String(row.id || '').trim();
+      if (!testId) continue;
+      const startedMs = Date.parse(String(row.last_cycle_started_at || ''));
+      if (!Number.isFinite(startedMs)) continue;
+      const durationMinutes = Math.max(1, Number(row.duration_minutes || 0));
+      const cycleEndMs = startedMs + durationMinutes * 60 * 1000;
+      if (nowMs < cycleEndMs) continue;
+      const scheduleAtIso = new Date(cycleEndMs + 30 * 60 * 1000).toISOString();
+
+      const hasPendingSchedule = items.some(
+        (x) =>
+          String((x || {}).entityType || '').toLowerCase() === 'test' &&
+          String((x || {}).entityId || '') === testId &&
+          String((x || {}).status || '') === 'scheduled',
+      );
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const lockedRes = await client.query(
+          `SELECT id, is_published, duration_minutes, last_cycle_started_at
+           FROM tests
+           WHERE id = $1::uuid
+           LIMIT 1
+           FOR UPDATE`,
+          [testId],
+        );
+        const locked = lockedRes.rows[0];
+        if (!locked || locked.is_published !== true) {
+          await client.query('COMMIT');
+          continue;
+        }
+        const lockedStartedMs = Date.parse(String(locked.last_cycle_started_at || ''));
+        const lockedDurationMinutes = Math.max(1, Number(locked.duration_minutes || 0));
+        const lockedCycleEndMs = Number.isFinite(lockedStartedMs)
+          ? lockedStartedMs + lockedDurationMinutes * 60 * 1000
+          : Number.NaN;
+        if (!Number.isFinite(lockedCycleEndMs) || Date.now() < lockedCycleEndMs) {
+          await client.query('COMMIT');
+          continue;
+        }
+
+        await client.query(
+          `UPDATE tests
+           SET is_published = false, enrolled_count = 0, updated_at = now()
+           WHERE id = $1::uuid`,
+          [testId],
+        );
+        await client.query(`DELETE FROM test_applications WHERE test_id = $1::uuid`, [testId]);
+        await client.query(
+          `UPDATE test_waitlist
+           SET status = 'cancelled'
+           WHERE test_id = $1::uuid AND status = 'waiting'`,
+          [testId],
+        );
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally {
+        client.release();
+      }
+
+      if (!hasPendingSchedule) {
+        items.unshift({
+          id: `publish-${Date.now()}-${testId.slice(0, 8)}`,
+          entityType: 'test',
+          entityId: testId,
+          scheduleAt: scheduleAtIso,
+          notifyOnPublish: true,
+          status: 'scheduled',
+          createdAt: new Date().toISOString(),
+          processedAt: '',
+        });
+        changedSettings = true;
+      }
+    }
+
+    if (changedSettings) {
+      await pool.query(
+        `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+         VALUES ('publishScheduling', $1, NULL)
+         ON CONFLICT (setting_key)
+         DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = now()`,
+        [JSON.stringify({ items })],
+      );
+    }
+  } catch (e) {
+    if (e && e.code === '42P01') return;
+    if (e && e.code === '42703') return;
+    console.error('test_cycle_auto_reschedule_error', e);
   }
 }
 
@@ -963,6 +1223,9 @@ async function processBirthdayEmails() {
 
 setInterval(() => {
   processPublishSchedules();
+}, 60000);
+setInterval(() => {
+  processTestCycleAutoReschedule();
 }, 60000);
 setInterval(() => {
   processProfileReminderEmails();

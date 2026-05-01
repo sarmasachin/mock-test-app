@@ -4,7 +4,7 @@ MockTestApp — PostgreSQL (production database)
 Stack: use PostgreSQL only for this app. The MySQL folder is not kept in sync
 with 002/003; use PostgreSQL for a full schema.
 
-What postgres/*.sql creates (run in order: 001 → 002 → 003 → 004 → 005 → 006 → 007 → 008 → 009 → 010 → 011 → 012)
+What postgres/*.sql creates (run in order: 001 → 002 → 003 → 004 → 005 → 006 → 007 → 008 → 009 → 010 → 011 → 012 → 013)
 ----------------------------------------------------------------
 001_init.sql
   - users: unique case-insensitive email (email_normalized), password_hash,
@@ -60,6 +60,9 @@ What postgres/*.sql creates (run in order: 001 → 002 → 003 → 004 → 005 �
 012_admin_controls.sql
   - Adds app_settings table, admin_audit_logs table, and user soft-ban fields.
 
+013_admin_password_reset_token_purpose.sql
+  - Expands user_one_time_tokens purpose CHECK to include admin_password_reset.
+
 Quick local database (Docker)
 -----------------------------
 From the database/ folder:
@@ -103,6 +106,7 @@ Manual install (no Docker)
    psql -h HOST -U mocktestapp_rw -d mocktestapp -f postgres/010_super_admin_role.sql
    psql -h HOST -U mocktestapp_rw -d mocktestapp -f postgres/011_daily_digest_content.sql
    psql -h HOST -U mocktestapp_rw -d mocktestapp -f postgres/012_admin_controls.sql
+   psql -h HOST -U mocktestapp_rw -d mocktestapp -f postgres/013_admin_password_reset_token_purpose.sql
 
 3. Backend rules:
    - password_hash = bcrypt/argon2 only (never store plain passwords).

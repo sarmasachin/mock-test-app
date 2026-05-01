@@ -41,7 +41,11 @@ PATCH /v1/me/password Authorization: Bearer <access>
   Body: { "currentPassword", "newPassword" } (min length 4 for newPassword)
 DELETE /v1/me        Authorization: Bearer <access>   (204 = account removed; cascades related rows)
 POST /v1/attempts    Authorization: Bearer <access>
-  Body: { "testName", "correct", "total", "completedAtMillis"?, "testCatalogId"? (UUID) }
+  Body: { "testName", "correct", "total", "testCatalogId" (UUID), "clientSubmissionId", "completedAtMillis"? }
+  Notes:
+  - testCatalogId and clientSubmissionId are required.
+  - Duplicate submit replay with same clientSubmissionId is idempotent (returns same attempt).
+  - Endpoint is protected by per-user and global burst limits.
 
 GET /v1/news?feedKind=news|job|exam&limit=30&offset=0   (public, no auth)
 GET /v1/news/:articleId                                 (public)
@@ -65,6 +69,24 @@ GET /v1/admin/articles        (admin auth)
 POST /v1/admin/articles       (admin auth)
 
 GET /health
+
+Submit burst protection (Phase-3/4)
+-----------------------------------
+- ATTEMPT_SUBMIT_WINDOW_MS (default 10000)
+- ATTEMPT_SUBMIT_MAX_PER_WINDOW (default 8)
+- ATTEMPT_SUBMIT_GLOBAL_MAX_PER_WINDOW (default 500)
+
+DB pool tuning (Phase-2)
+------------------------
+- DB_POOL_MAX (default 25)
+- DB_IDLE_TIMEOUT_MS (default 30000)
+- DB_CONNECT_TIMEOUT_MS (default 10000)
+
+Headers from attempts endpoint
+------------------------------
+- Retry-After: present when 429 is returned
+- X-RateLimit-Remaining: remaining per-user quota in current window
+- X-Idempotent-Replay: "true" when duplicate submission is replayed safely
 
 Admin role note:
 - users.is_admin must be true for /v1/admin/* endpoints.

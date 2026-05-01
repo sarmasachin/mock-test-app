@@ -43,6 +43,14 @@ interface AppApiService {
     @POST("tests/{testId}/apply")
     suspend fun applyForTest(@Path("testId") testId: String): ApplyTestResponse
 
+    @GET("tests/{testId}/questions-attempt")
+    suspend fun getAttemptQuestions(
+        @Path("testId") testId: String,
+    ): TestQuestionsResponse
+
+    @GET("tests/{testId}/waitlist-status")
+    suspend fun getTestWaitlistStatus(@Path("testId") testId: String): TestWaitlistStatusResponse
+
     @POST("polls/{pollId}/vote")
     suspend fun postPollVote(
         @Path("pollId") pollId: String,

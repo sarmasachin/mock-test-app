@@ -5,6 +5,55 @@ const { pool } = require('../db');
 
 const router = express.Router();
 
+function normalizePollDurationMinutes(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1440;
+  return Math.max(1, Math.min(10080, Math.floor(n)));
+}
+
+function isPollActiveNow(item, nowMs) {
+  const createdAtRaw = String((item || {}).createdAt || '').trim();
+  const createdAtMs = Date.parse(createdAtRaw);
+  if (!Number.isFinite(createdAtMs)) return true;
+  const durationMinutes = normalizePollDurationMinutes((item || {}).durationMinutes);
+  const expiresAtMs = createdAtMs + durationMinutes * 60 * 1000;
+  return nowMs < expiresAtMs;
+}
+
+function normalizePollSettings(raw) {
+  const safe = raw && typeof raw === 'object' ? raw : {};
+  const itemsRaw = Array.isArray(safe.items) ? safe.items : [];
+  const items = itemsRaw.map((item, idx) => {
+    const x = item || {};
+    const options = (Array.isArray(x.options) ? x.options : [])
+      .map((v) => String(v || '').trim())
+      .filter(Boolean)
+      .slice(0, 8);
+    return {
+      id: String(x.id || `poll-${idx + 1}`).trim(),
+      question: String(x.question || '').trim(),
+      options,
+      allowMultiple: Boolean(x.allowMultiple),
+      durationMinutes: normalizePollDurationMinutes(x.durationMinutes),
+      enabled: x.enabled !== false,
+      createdAt: String(x.createdAt || '').trim() || new Date().toISOString(),
+    };
+  });
+  return { items };
+}
+
+function findActivePollById(items, pollId) {
+  const nowMs = Date.now();
+  return items.find(
+    (x) =>
+      String((x || {}).id || '').trim() === pollId &&
+      (x || {}).enabled !== false &&
+      Array.isArray(x.options) &&
+      x.options.length >= 2 &&
+      isPollActiveNow(x, nowMs),
+  );
+}
+
 async function ensurePollVotesTable() {
   await pool.query(
     `CREATE TABLE IF NOT EXISTS poll_votes (
@@ -26,7 +75,7 @@ async function loadPollSettings() {
     const parsed = JSON.parse(String(rows[0].setting_value || '{}'));
     if (!parsed || typeof parsed !== 'object') return { items: [] };
     if (!Array.isArray(parsed.items)) return { items: [] };
-    return parsed;
+    return normalizePollSettings(parsed);
   } catch (_e) {
     return { items: [] };
   }
@@ -52,7 +101,7 @@ router.get('/:pollId/vote-status', async (req, res) => {
   try {
     await ensurePollVotesTable();
     const settings = await loadPollSettings();
-    const poll = settings.items.find((x) => String((x || {}).id || '').trim() === pollId && (x || {}).enabled !== false);
+    const poll = findActivePollById(settings.items, pollId);
     if (!poll) return res.status(404).json({ error: 'Poll not found' });
     const options = Array.isArray(poll.options) ? poll.options : [];
     if (!options.length) return res.status(400).json({ error: 'Poll has no options' });
@@ -97,7 +146,7 @@ router.post('/:pollId/vote', async (req, res) => {
   try {
     await ensurePollVotesTable();
     const settings = await loadPollSettings();
-    const poll = settings.items.find((x) => String((x || {}).id || '').trim() === pollId && (x || {}).enabled !== false);
+    const poll = findActivePollById(settings.items, pollId);
     if (!poll) return res.status(404).json({ error: 'Poll not found' });
 
     const options = Array.isArray(poll.options) ? poll.options : [];

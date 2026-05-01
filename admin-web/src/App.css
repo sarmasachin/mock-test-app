@@ -519,6 +519,19 @@ button:active {
   grid-template-columns: 0.8fr 1fr 1.8fr 0.9fr 0.8fr;
 }
 
+.support-inbox-btn {
+  min-height: 44px;
+  padding: 10px 18px;
+  font-size: 0.9rem;
+}
+
+.panel-card form.inline-form button[type='submit'],
+.panel-card form.inline-form button.ghost {
+  min-height: 42px;
+  padding: 10px 16px;
+  font-size: 0.88rem;
+}
+
 .profile-menu-row {
   grid-template-columns: 1fr 1.4fr 1fr 120px 90px 70px 70px 90px 90px;
 }
@@ -1404,7 +1417,7 @@ button:active {
 .auth-page .login-card {
   width: 100%;
   max-width: 420px;
-  padding: 50px 40px;
+  padding: 36px 32px;
   background: rgba(20, 35, 70, 0.33);
   backdrop-filter: blur(25px) saturate(180%);
   -webkit-backdrop-filter: blur(25px) saturate(180%);
@@ -1413,13 +1426,15 @@ button:active {
   box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.62);
   color: white;
   text-align: center;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
 }
 
 .auth-page .auth-switch-tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-bottom: 20px;
+  gap: 6px;
+  margin-bottom: 14px;
   padding: 4px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.08);
@@ -1430,7 +1445,7 @@ button:active {
   border: none;
   border-radius: 10px;
   padding: 10px 8px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   background: transparent;
   color: #cbd5e1;
@@ -1450,9 +1465,9 @@ button:active {
 
 .auth-page .login-card h1,
 .auth-page .login-card h2 {
-  font-size: 38px;
+  font-size: clamp(26px, 3.4vw, 32px);
   font-weight: 800;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   background: linear-gradient(to right, #fff, #94a3b8);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -1460,20 +1475,20 @@ button:active {
 
 .auth-page .sub {
   color: #94a3b8;
-  font-size: 15px;
-  margin-bottom: 35px;
-  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 16px;
+  font-weight: 500;
 }
 
 .auth-page .input-group {
-  margin-bottom: 25px;
+  margin-bottom: 16px;
   text-align: left;
 }
 
 .auth-page .input-group label {
   display: block;
   margin-bottom: 8px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: #cbd5e1;
 }
@@ -1500,7 +1515,7 @@ button:active {
   border: none;
   padding: 16px 16px 16px 50px;
   color: white;
-  font-size: 15px;
+  font-size: 14px;
   outline: none;
   font-weight: 600;
 }
@@ -1518,11 +1533,11 @@ button:active {
   border: none;
   padding: 18px;
   border-radius: 18px;
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 700;
   cursor: pointer;
   transition: 0.3s;
-  margin-top: 15px;
+  margin-top: 8px;
   box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.3);
 }
 

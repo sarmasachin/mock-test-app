@@ -287,7 +287,13 @@ object ContentRepository {
             val test = loadTestByTitle(safeName)
             val testId = test?.id?.trim().orEmpty()
             if (testId.isBlank()) return@withContext emptyList()
-            val rows = RetrofitProvider.publicApi.getTestQuestions(testId).items
+            val rows = try {
+                // Prefer authenticated, per-user shuffled order.
+                RetrofitProvider.appApi.getAttemptQuestions(testId).items
+            } catch (_: Exception) {
+                // Fallback keeps app functional if session expired or endpoint unavailable.
+                RetrofitProvider.publicApi.getTestQuestions(testId).items
+            }
             rows.mapNotNull { row ->
                 val prompt = row.questionPrompt.trim()
                 val options = row.options.map { it.trim() }.filter { it.isNotBlank() }

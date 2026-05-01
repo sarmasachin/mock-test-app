@@ -102,6 +102,7 @@ data class AttemptRequest(
     val total: Int,
     @SerializedName("completedAtMillis") val completedAtMillis: Long? = null,
     @SerializedName("testCatalogId") val testCatalogId: String? = null,
+    @SerializedName("clientSubmissionId") val clientSubmissionId: String,
 )
 
 data class AttemptResponse(
@@ -390,12 +391,21 @@ data class LeaderboardByTestResponse(
 data class ApplyTestResponse(
     val ok: Boolean = false,
     @SerializedName("alreadyApplied") val alreadyApplied: Boolean = false,
+    @SerializedName("waitlisted") val waitlisted: Boolean = false,
     val message: String? = null,
     @SerializedName("testId") val testId: String? = null,
     @SerializedName("testTitle") val testTitle: String? = null,
     @SerializedName("enrolledCount") val enrolledCount: Int = 0,
     @SerializedName("capacityTotal") val capacityTotal: Int = 0,
     @SerializedName("remainingSeats") val remainingSeats: Int = 0,
+    @SerializedName("waitingPosition") val waitingPosition: Int = 0,
+    @SerializedName("waitingTotal") val waitingTotal: Int = 0,
+)
+
+data class TestWaitlistStatusResponse(
+    @SerializedName("waitlisted") val waitlisted: Boolean = false,
+    @SerializedName("waitingPosition") val waitingPosition: Int = 0,
+    @SerializedName("waitingTotal") val waitingTotal: Int = 0,
 )
 
 data class LeaderboardFilterTestDto(

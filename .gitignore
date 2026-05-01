@@ -22,6 +22,7 @@ server/node_modules/
 
 # Secrets
 server/.env
+admin-web/.env
 *.jks
 *.keystore
 

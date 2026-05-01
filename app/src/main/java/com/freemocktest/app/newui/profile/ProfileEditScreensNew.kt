@@ -1298,12 +1298,30 @@ fun ProfileHelpSupportScreen(
             }
             if (inlineMessage.isNotBlank()) {
                 Spacer(Modifier.height(10.dp))
-                Text(
-                    text = inlineMessage,
-                    color = if (inlineType == InlineMessageType.Success) Color(0xFF16A34A) else p.error,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            if (inlineType == InlineMessageType.Success) Color(0xFFDCFCE7) else Color(0xFFFEE2E2),
+                            RoundedCornerShape(12.dp),
+                        )
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                 )
+                {
+                    Text(
+                        text = if (inlineType == InlineMessageType.Success) "Status: Success" else "Status: Failed",
+                        color = if (inlineType == InlineMessageType.Success) Color(0xFF166534) else Color(0xFF991B1B),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = inlineMessage,
+                        color = if (inlineType == InlineMessageType.Success) Color(0xFF166534) else Color(0xFF991B1B),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             }
             Spacer(Modifier.height(20.dp))
             Button(
@@ -1336,7 +1354,9 @@ fun ProfileHelpSupportScreen(
                         }
                     }
                 },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = p.accent),
                 shape = RoundedCornerShape(12.dp),
             ) {
@@ -1344,6 +1364,7 @@ fun ProfileHelpSupportScreen(
                     if (submitted) "Send another response" else "Submit",
                     color = Color.White,
                     fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
                 )
             }
         }

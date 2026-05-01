@@ -274,11 +274,29 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   const [newItem, setNewItem] = useState({ title: '', message: '', target: 'all' as PushItem['target'], deepLink: '', scheduledAt: '', enabled: true });
   const [page, setPage] = useState(1);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [sendResult, setSendResult] = useState('');
   const [saving, setSaving] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [deletingId, setDeletingId] = useState('');
+  const [sendingId, setSendingId] = useState('');
+  function formatDateTime(value: string) {
+    const dt = new Date(value);
+    if (!value || Number.isNaN(dt.getTime())) return '-';
+    return dt.toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'Asia/Kolkata',
+    });
+  }
   async function load() {
     try {
       setError('');
+      setSuccess('');
       const res = await apiClient.get('/admin/settings');
       const s = res.data?.settings?.pushNotificationSettings || {};
       const itemsRaw = Array.isArray(s.items) ? s.items : s.title || s.message ? [s] : [];
@@ -286,20 +304,64 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       setPage(1);
     } catch (err: any) { setError(err?.response?.data?.error || 'Failed to load push notification settings'); }
   }
-  async function save() {
+  async function save(nextSettings?: PushSettings, successText?: string) {
     try {
       setError('');
+      setSuccess('');
       setSaving(true);
-      await apiClient.patch('/admin/settings', { pushNotificationSettings: settings });
+      const payload = nextSettings || settings;
+      await apiClient.patch('/admin/settings', { pushNotificationSettings: payload });
+      setSettings(payload);
+      setSuccess(successText || 'Push notification settings saved successfully.');
+      return true;
     } catch (err: any) { setError(err?.response?.data?.error || 'Failed to save push notification settings'); } finally { setSaving(false); }
+    return false;
   }
-  function addPush() {
-    if (!newItem.title.trim() && !newItem.message.trim()) return;
-    setSettings((p) => ({ ...p, items: [...p.items, { id: `push-${Date.now()}`, title: newItem.title.trim(), message: newItem.message.trim(), target: newItem.target, deepLink: newItem.deepLink.trim(), scheduledAt: newItem.scheduledAt.trim(), enabled: newItem.enabled, status: 'draft', resendCount: 0, lastSentAt: '', createdAt: new Date().toISOString() }] }));
-    setNewItem({ title: '', message: '', target: 'all', deepLink: '', scheduledAt: '', enabled: true });
+  async function addPush() {
+    const title = newItem.title.trim();
+    const message = newItem.message.trim();
+    if (!title || !message) {
+      setError('Title and message are required.');
+      return;
+    }
+    try {
+      setAdding(true);
+      const next = {
+        ...settings,
+        items: [
+          ...settings.items,
+          {
+            id: `push-${Date.now()}`,
+            title,
+            message,
+            target: newItem.target,
+            deepLink: newItem.deepLink.trim(),
+            scheduledAt: newItem.scheduledAt.trim(),
+            enabled: newItem.enabled,
+            status: 'draft' as const,
+            resendCount: 0,
+            lastSentAt: '',
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      };
+      const ok = await save(next, 'Push item added and saved.');
+      if (ok) {
+        setNewItem({ title: '', message: '', target: 'all', deepLink: '', scheduledAt: '', enabled: true });
+      }
+    } finally {
+      setAdding(false);
+    }
   }
-  function resend(item: PushItem) {
-    setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, status: 'sent', resendCount: (x.resendCount || 0) + 1, lastSentAt: new Date().toISOString() } : x)) }));
+  async function removePush(itemId: string) {
+    if (!window.confirm('Delete this push item permanently?')) return;
+    try {
+      setDeletingId(itemId);
+      const next = { ...settings, items: settings.items.filter((x) => x.id !== itemId) };
+      await save(next, 'Push item deleted and saved.');
+    } finally {
+      setDeletingId('');
+    }
   }
   async function sendNow(item: PushItem) {
     if (!item.title.trim() || !item.message.trim()) {
@@ -308,7 +370,9 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
     }
     try {
       setError('');
+      setSuccess('');
       setSendResult('');
+      setSendingId(item.id);
       const res = await apiClient.post('/admin/notifications/send', {
         title: item.title.trim(),
         message: item.message.trim(),
@@ -319,9 +383,19 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       const failed = Number(res.data?.failed || 0);
       const total = Number(res.data?.total || sent + failed);
       setSendResult(`Push delivered: ${sent}/${total}, failed: ${failed} (matched tokens: ${total})`);
-      resend(item);
+      setSuccess('Push sent successfully.');
+      setSettings((p) => ({
+        ...p,
+        items: p.items.map((x) =>
+          x.id === item.id
+            ? { ...x, status: 'sent', resendCount: (x.resendCount || 0) + 1, lastSentAt: new Date().toISOString() }
+            : x,
+        ),
+      }));
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Failed to send push notification');
+    } finally {
+      setSendingId('');
     }
   }
   const totalPages = Math.max(1, Math.ceil(settings.items.length / PUSH_PER_PAGE));
@@ -331,20 +405,21 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
     <section className="panel-card">
       <div className="panel-head"><h3>Push Notification Settings</h3></div>
       <div className="inline-form">
-        <input value={newItem.title} onChange={(e) => setNewItem((p) => ({ ...p, title: e.target.value }))} placeholder="Notification title" />
-        <input value={newItem.message} onChange={(e) => setNewItem((p) => ({ ...p, message: e.target.value }))} placeholder="Notification message" />
-        <select value={newItem.target} onChange={(e) => setNewItem((p) => ({ ...p, target: e.target.value as PushItem['target'] }))}><option value="all">All users</option><option value="new_users">New users</option><option value="active_users">Active users</option></select>
-        <input value={newItem.deepLink} onChange={(e) => setNewItem((p) => ({ ...p, deepLink: e.target.value }))} placeholder="Deep link (optional)" />
-        <input value={newItem.scheduledAt} onChange={(e) => setNewItem((p) => ({ ...p, scheduledAt: e.target.value }))} placeholder="Schedule (ISO datetime optional)" />
-        <label className="check-wrap"><input type="checkbox" checked={newItem.enabled} onChange={(e) => setNewItem((p) => ({ ...p, enabled: e.target.checked }))} />Enabled</label>
-        <button type="button" onClick={addPush}>Add Push</button>
+        <input value={newItem.title} onChange={(e) => setNewItem((p) => ({ ...p, title: e.target.value }))} placeholder="Notification title" disabled={saving || adding} />
+        <input value={newItem.message} onChange={(e) => setNewItem((p) => ({ ...p, message: e.target.value }))} placeholder="Notification message" disabled={saving || adding} />
+        <select value={newItem.target} onChange={(e) => setNewItem((p) => ({ ...p, target: e.target.value as PushItem['target'] }))} disabled={saving || adding}><option value="all">All users</option><option value="new_users">New users</option><option value="active_users">Active users</option></select>
+        <input value={newItem.deepLink} onChange={(e) => setNewItem((p) => ({ ...p, deepLink: e.target.value }))} placeholder="Deep link (optional)" disabled={saving || adding} />
+        <input type="datetime-local" value={newItem.scheduledAt} onChange={(e) => setNewItem((p) => ({ ...p, scheduledAt: e.target.value }))} placeholder="Schedule (optional)" disabled={saving || adding} />
+        <label className="check-wrap"><input type="checkbox" checked={newItem.enabled} onChange={(e) => setNewItem((p) => ({ ...p, enabled: e.target.checked }))} disabled={saving || adding} />Enabled</label>
+        <button type="button" onClick={addPush} disabled={saving || adding}>{adding ? 'Adding...' : 'Add Push'}</button>
       </div>
       <div className="list table">
-        <div className="row row-head" style={{ gridTemplateColumns: '1fr 2fr 120px 120px 90px 90px 90px 90px 110px' }}><span>Title</span><span>Message</span><span>Target</span><span>Status</span><span>Resend</span><span>Update</span><span>Delete</span><span>Resend Count</span><span>Send Now</span></div>
-        {visibleItems.map((item) => <div key={item.id} className="row" style={{ gridTemplateColumns: '1fr 2fr 120px 120px 90px 90px 90px 90px 110px' }}><input value={item.title} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, title: e.target.value } : x)) }))} /><input value={item.message} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, message: e.target.value } : x)) }))} /><select value={item.target} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, target: e.target.value as PushItem['target'] } : x)) }))}><option value="all">All users</option><option value="new_users">New users</option><option value="active_users">Active users</option></select><span>{item.status}</span><button type="button" className="ghost" onClick={() => resend(item)}>Resend</button><button type="button" onClick={save}>Save</button><button type="button" className="danger" onClick={() => setSettings((p) => ({ ...p, items: p.items.filter((x) => x.id !== item.id) }))}>Delete</button><span>{item.resendCount || 0}</span><button type="button" onClick={() => sendNow(item)}>Send</button></div>)}
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr 2fr 120px 120px 140px 90px 90px 90px 90px 110px' }}><span>Title</span><span>Message</span><span>Target</span><span>Status</span><span>Last Sent (IST)</span><span>Resend</span><span>Update</span><span>Delete</span><span>Resend Count</span><span>Send Now</span></div>
+        {visibleItems.map((item) => <div key={item.id} className="row" style={{ gridTemplateColumns: '1fr 2fr 120px 120px 140px 90px 90px 90px 90px 110px' }}><input value={item.title} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, title: e.target.value } : x)) }))} disabled={saving || !!sendingId || !!deletingId} /><input value={item.message} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, message: e.target.value } : x)) }))} disabled={saving || !!sendingId || !!deletingId} /><select value={item.target} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, target: e.target.value as PushItem['target'] } : x)) }))} disabled={saving || !!sendingId || !!deletingId}><option value="all">All users</option><option value="new_users">New users</option><option value="active_users">Active users</option></select><span>{item.status}</span><span>{formatDateTime(item.lastSentAt)}</span><button type="button" className="ghost" onClick={() => sendNow(item)} disabled={saving || !!deletingId || !!sendingId}>{sendingId === item.id ? 'Sending...' : 'Resend'}</button><button type="button" onClick={() => { void save(); }} disabled={saving || !!sendingId || !!deletingId}>{saving ? 'Saving...' : 'Save'}</button><button type="button" className="danger" onClick={() => removePush(item.id)} disabled={saving || !!sendingId || !!deletingId}>{deletingId === item.id ? 'Deleting...' : 'Delete'}</button><span>{item.resendCount || 0}</span><button type="button" onClick={() => sendNow(item)} disabled={saving || !!deletingId || !!sendingId}>{sendingId === item.id ? 'Sending...' : 'Send'}</button></div>)}
       </div>
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
-      <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button><button type="button" onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save Push Settings'}</button></div>
+      <div className="inline-form"><button type="button" className="ghost" onClick={load} disabled={saving || adding || !!sendingId || !!deletingId}>Load</button><button type="button" onClick={() => { void save(); }} disabled={saving || adding || !!sendingId || !!deletingId}>{saving ? 'Saving...' : 'Save Push Settings'}</button></div>
+      {success && <p className="success-msg">{success}</p>}
       {sendResult && <p className="success">{sendResult}</p>}
       {error && <p className="error">{error}</p>}
     </section>

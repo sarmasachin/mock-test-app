@@ -299,6 +299,7 @@ async function sendSupportJourneyEmail(opts) {
   const rawSubject = String(opts?.subject || 'Request update').trim();
   const subject = `Support Update: ${rawSubject}`;
   const statusMessage = String(opts?.message || 'We have received your request.').trim();
+  const journeyStatus = String(opts?.status || 'received').trim().toLowerCase();
   const userMessage = String(opts?.userMessage || '').trim();
   const displayName = String(opts?.displayName || 'User').trim();
   const normalizedSubject = rawSubject.toLowerCase();
@@ -315,6 +316,7 @@ async function sendSupportJourneyEmail(opts) {
     displayName,
     subject: rawSubject,
     statusMessage,
+    journeyStatus,
     userMessage,
     supportEmail,
     brandName,
