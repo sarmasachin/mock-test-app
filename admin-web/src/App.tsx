@@ -461,6 +461,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'info' | 'error' | 'success'>('info');
   const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotIdentifier, setForgotIdentifier] = useState('');
   const [forgotOtp, setForgotOtp] = useState('');
   const [forgotNewPassword, setForgotNewPassword] = useState('');
   const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
@@ -632,7 +633,7 @@ function App() {
 
   async function handleAdminForgotPasswordRequest(e: FormEvent) {
     e.preventDefault();
-    const nextIdentifier = String(identifier || '').trim();
+    const nextIdentifier = String(forgotIdentifier || '').trim();
     if (!nextIdentifier) {
       setForgotMessageType('error');
       setForgotMessage('Email ya mobile required hai.');
@@ -662,7 +663,7 @@ function App() {
 
   async function handleAdminForgotPasswordComplete(e: FormEvent) {
     e.preventDefault();
-    const nextIdentifier = String(identifier || '').trim();
+    const nextIdentifier = String(forgotIdentifier || '').trim();
     if (!nextIdentifier) {
       setForgotMessageType('error');
       setForgotMessage('Email ya mobile required hai.');
@@ -760,74 +761,98 @@ function App() {
                 setForgotOpen((p) => !p);
                 setForgotMessage('');
                 setForgotMessageType('info');
+                setForgotIdentifier(String(identifier || '').trim());
               }}
             >
               {forgotOpen ? 'Close Forgot Password' : 'Forgot Password?'}
             </button>
-            {forgotOpen && (
-              <div className="forgot-wrap">
-                <p className="sub">OTP आपके admin email पर आएगा.</p>
-                <form onSubmit={handleAdminForgotPasswordRequest} className="auth-form">
-                  <button type="submit" className="login-btn" disabled={forgotSending}>
-                    {forgotSending ? 'OTP भेज रहा है...' : 'Send OTP'}
-                  </button>
-                </form>
-                <form onSubmit={handleAdminForgotPasswordComplete} className="auth-form">
-                  <div className="input-group">
-                    <label>OTP</label>
-                    <div className="input-box">
-                      <i aria-hidden="true">#</i>
-                      <input
-                        value={forgotOtp}
-                        onChange={(e) => setForgotOtp(e.target.value)}
-                        placeholder="6-digit OTP"
-                        inputMode="numeric"
-                        required
-                      />
-                    </div>
-                  </div>
-                  <div className="input-group">
-                    <label>New Password</label>
-                    <div className="input-box">
-                      <i aria-hidden="true">🔒</i>
-                      <input
-                        value={forgotNewPassword}
-                        onChange={(e) => setForgotNewPassword(e.target.value)}
-                        placeholder="Naya password"
-                        type="password"
-                        autoComplete="new-password"
-                        required
-                      />
-                    </div>
-                  </div>
-                  <div className="input-group">
-                    <label>Confirm Password</label>
-                    <div className="input-box">
-                      <i aria-hidden="true">🔒</i>
-                      <input
-                        value={forgotConfirmPassword}
-                        onChange={(e) => setForgotConfirmPassword(e.target.value)}
-                        placeholder="Confirm password"
-                        type="password"
-                        autoComplete="new-password"
-                        required
-                      />
-                    </div>
-                  </div>
-                  <button type="submit" className="login-btn" disabled={forgotResetting}>
-                    {forgotResetting ? 'Reset ho raha hai...' : 'Verify OTP & Reset Password'}
-                  </button>
-                </form>
-                {forgotMessage && (
-                  <p className={`auth-message ${forgotMessageType} ${forgotMessageType === 'error' ? 'error-p' : ''}`}>
-                    {forgotMessage}
-                  </p>
-                )}
-              </div>
-            )}
             {message && <p className={`auth-message ${messageType} ${messageType === 'error' ? 'error-p' : ''}`}>{message}</p>}
           </div>
         </div>
+        {forgotOpen && (
+          <div className="forgot-modal-overlay" onClick={() => setForgotOpen(false)}>
+            <div className="auth-card login-card forgot-modal-card" onClick={(e) => e.stopPropagation()}>
+              <h2>Forgot Password</h2>
+              <p className="sub">Admin reset OTP आपके registered email पर आएगा.</p>
+              <form onSubmit={handleAdminForgotPasswordRequest} className="auth-form">
+                <div className="input-group">
+                  <label>ईमेल / मोबाइल</label>
+                  <div className="input-box">
+                    <i aria-hidden="true">✉</i>
+                    <input
+                      value={forgotIdentifier}
+                      onChange={(e) => setForgotIdentifier(e.target.value)}
+                      placeholder="ईमेल/मोबाइल दर्ज करें"
+                      autoComplete="username"
+                      required
+                    />
+                  </div>
+                </div>
+                <button type="submit" className="login-btn" disabled={forgotSending}>
+                  {forgotSending ? 'OTP भेज रहा है...' : 'Send OTP'}
+                </button>
+              </form>
+              <form onSubmit={handleAdminForgotPasswordComplete} className="auth-form">
+                <div className="input-group">
+                  <label>OTP</label>
+                  <div className="input-box">
+                    <i aria-hidden="true">#</i>
+                    <input
+                      value={forgotOtp}
+                      onChange={(e) => setForgotOtp(e.target.value)}
+                      placeholder="6-digit OTP"
+                      inputMode="numeric"
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="input-group">
+                  <label>New Password</label>
+                  <div className="input-box">
+                    <i aria-hidden="true">🔒</i>
+                    <input
+                      value={forgotNewPassword}
+                      onChange={(e) => setForgotNewPassword(e.target.value)}
+                      placeholder="Naya password"
+                      type="password"
+                      autoComplete="new-password"
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="input-group">
+                  <label>Confirm Password</label>
+                  <div className="input-box">
+                    <i aria-hidden="true">🔒</i>
+                    <input
+                      value={forgotConfirmPassword}
+                      onChange={(e) => setForgotConfirmPassword(e.target.value)}
+                      placeholder="Confirm password"
+                      type="password"
+                      autoComplete="new-password"
+                      required
+                    />
+                  </div>
+                </div>
+                <button type="submit" className="login-btn" disabled={forgotResetting}>
+                  {forgotResetting ? 'Reset ho raha hai...' : 'Verify OTP & Reset Password'}
+                </button>
+              </form>
+              {forgotMessage && (
+                <p className={`auth-message ${forgotMessageType} ${forgotMessageType === 'error' ? 'error-p' : ''}`}>
+                  {forgotMessage}
+                </p>
+              )}
+              <button
+                type="button"
+                className="link-like-btn"
+                onClick={() => setForgotOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1706,7 +1731,9 @@ function TestsTab({
       setError('Please select a valid correct answer');
       return;
     }
+    const safePosition = Number.isInteger(position) && position > 0 ? position : 1;
     const payload = {
+      position: safePosition,
       stem,
       choiceA,
       choiceB,
@@ -1715,7 +1742,6 @@ function TestsTab({
       correctIndex,
       explanation,
       isPublished: questionForm.isPublished,
-      ...(editingQuestionId ? { position } : {}),
     };
     try {
       setError('');
