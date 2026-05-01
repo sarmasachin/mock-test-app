@@ -72,4 +72,10 @@ async function sendAdminForgotPasswordOtpEmail(opts) {
   });
 }
 
-module.exports = { sendAdminForgotPasswordOtpEmail };
+/** E2E / ops: confirm SMTP can connect and authenticate (does not send email). */
+async function verifyAdminForgotPasswordSmtp() {
+  const transporter = createAdminForgotPasswordTransport();
+  await transporter.verify();
+}
+
+module.exports = { sendAdminForgotPasswordOtpEmail, verifyAdminForgotPasswordSmtp };

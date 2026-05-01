@@ -673,16 +673,27 @@ function App() {
       const res = await api.post('/auth/admin/password-reset/request', {
         identifier: nextIdentifier,
       });
-      if (res.data?.ok === false) {
+      const data = res.data as { ok?: boolean; error?: string; message?: string } | undefined;
+      if (data?.ok !== true) {
         setForgotMessageType('error');
-        setForgotMessage(String(res.data?.error || 'Admin account was not found.'));
+        setForgotMessage(
+          String(data?.error || 'Request did not complete. Check API URL and try again.'),
+        );
         return;
       }
       setForgotMessageType('success');
-      setForgotMessage(String(res.data?.message || 'OTP sent successfully.'));
+      setForgotMessage(String(data?.message || 'OTP sent successfully.'));
     } catch (err: any) {
       setForgotMessageType('error');
-      setForgotMessage(err?.response?.data?.error || 'Could not send OTP right now.');
+      const fromApi =
+        err?.response?.data?.error ||
+        (typeof err?.response?.data === 'string' ? err.response.data : null);
+      setForgotMessage(
+        fromApi ||
+          (err?.code === 'ECONNABORTED' ? 'Request timed out. Try again or check the server.' : null) ||
+          err?.message ||
+          'Could not send OTP. Check network, API base URL (VITE_API_BASE_URL), and server email (SMTP) settings.',
+      );
     } finally {
       setForgotSending(false);
     }
@@ -775,34 +786,35 @@ function App() {
             </div>
             {authView === 'login' ? (
               <>
-                <h2>Admin Login</h2>
-                <p className="sub">Enter your credentials to continue.</p>
-                <form onSubmit={handleLogin} className="auth-form">
+                <h2 className="auth-section-heading">Admin Login</h2>
+                <form onSubmit={handleLogin} className="auth-form auth-float-form">
                   <div className="input-group">
-                    <label>Email / Mobile</label>
-                    <div className="input-box">
+                    <div className="input-box input-box-float">
                       <i aria-hidden="true">✉</i>
                       <input
+                        id="admin-login-identifier"
                         value={identifier}
                         onChange={(e) => setIdentifier(e.target.value)}
-                        placeholder="Enter email or mobile"
+                        placeholder=" "
                         autoComplete="username"
                         required
                       />
+                      <label htmlFor="admin-login-identifier">Email / Mobile</label>
                     </div>
                   </div>
                   <div className="input-group">
-                    <label>Password</label>
-                    <div className="input-box">
+                    <div className="input-box input-box-float">
                       <i aria-hidden="true">🔒</i>
                       <input
+                        id="admin-login-password"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
-                        placeholder="Enter password"
+                        placeholder=" "
                         type="password"
                         autoComplete="current-password"
                         required
                       />
+                      <label htmlFor="admin-login-password">Password</label>
                     </div>
                   </div>
                   <button type="submit" className="login-btn" disabled={loading}>
@@ -813,77 +825,84 @@ function App() {
               </>
             ) : (
               <>
-                <h2>Forgot Password</h2>
-                <p className="sub">Use your admin email or mobile to request an OTP.</p>
-                <form onSubmit={handleAdminForgotPasswordRequest} className="auth-form">
+                <h2 className="auth-section-heading">Forgot Password</h2>
+                {forgotMessage && (
+                  <p
+                    className={`auth-message ${forgotMessageType} ${forgotMessageType === 'error' ? 'error-p' : ''}`}
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {forgotMessage}
+                  </p>
+                )}
+                <form onSubmit={handleAdminForgotPasswordRequest} className="auth-form auth-float-form">
                   <div className="input-group">
-                    <label>Email / Mobile</label>
-                    <div className="input-box">
+                    <div className="input-box input-box-float">
                       <i aria-hidden="true">✉</i>
                       <input
+                        id="admin-forgot-identifier"
                         value={forgotIdentifier}
                         onChange={(e) => setForgotIdentifier(e.target.value)}
-                        placeholder="Enter email or mobile"
+                        placeholder=" "
                         autoComplete="username"
                         required
                       />
+                      <label htmlFor="admin-forgot-identifier">Email / Mobile</label>
                     </div>
                   </div>
                   <button type="submit" className="login-btn" disabled={forgotSending}>
                     {forgotSending ? 'Sending OTP...' : 'Send OTP'}
                   </button>
                 </form>
-                <form onSubmit={handleAdminForgotPasswordComplete} className="auth-form">
+                <form onSubmit={handleAdminForgotPasswordComplete} className="auth-form auth-float-form">
                   <div className="input-group">
-                    <label>OTP</label>
-                    <div className="input-box">
+                    <div className="input-box input-box-float">
                       <i aria-hidden="true">#</i>
                       <input
+                        id="admin-forgot-otp"
                         value={forgotOtp}
                         onChange={(e) => setForgotOtp(e.target.value)}
-                        placeholder="6-digit OTP"
+                        placeholder=" "
                         inputMode="numeric"
                         required
                       />
+                      <label htmlFor="admin-forgot-otp">6-digit OTP</label>
                     </div>
                   </div>
                   <div className="input-group">
-                    <label>New Password</label>
-                    <div className="input-box">
+                    <div className="input-box input-box-float">
                       <i aria-hidden="true">🔒</i>
                       <input
+                        id="admin-forgot-new-password"
                         value={forgotNewPassword}
                         onChange={(e) => setForgotNewPassword(e.target.value)}
-                        placeholder="Enter new password"
+                        placeholder=" "
                         type="password"
                         autoComplete="new-password"
                         required
                       />
+                      <label htmlFor="admin-forgot-new-password">New Password</label>
                     </div>
                   </div>
                   <div className="input-group">
-                    <label>Confirm Password</label>
-                    <div className="input-box">
+                    <div className="input-box input-box-float">
                       <i aria-hidden="true">🔒</i>
                       <input
+                        id="admin-forgot-confirm-password"
                         value={forgotConfirmPassword}
                         onChange={(e) => setForgotConfirmPassword(e.target.value)}
-                        placeholder="Re-enter new password"
+                        placeholder=" "
                         type="password"
                         autoComplete="new-password"
                         required
                       />
+                      <label htmlFor="admin-forgot-confirm-password">Confirm Password</label>
                     </div>
                   </div>
                   <button type="submit" className="login-btn" disabled={forgotResetting}>
                     {forgotResetting ? 'Resetting password...' : 'Verify OTP & Reset Password'}
                   </button>
                 </form>
-                {forgotMessage && (
-                  <p className={`auth-message ${forgotMessageType} ${forgotMessageType === 'error' ? 'error-p' : ''}`}>
-                    {forgotMessage}
-                  </p>
-                )}
               </>
             )}
           </div>

@@ -572,7 +572,19 @@ router.post('/admin/password-reset/request', async (req, res) => {
     });
   } catch (e) {
     console.error(e);
-    return res.status(500).json({ error: 'Could not send admin reset OTP' });
+    const raw = e && e.message ? String(e.message) : '';
+    let detail = 'Could not send admin reset OTP.';
+    if (raw.includes('SMTP') || raw.includes('not configured')) {
+      detail =
+        'Email could not be sent: SMTP is not configured on this server. Set SMTP_ADMIN_FP_USER and SMTP_ADMIN_FP_PASS (or SMTP_USER / SMTP_PASS) in server .env and restart the API.';
+    } else if (raw.includes('Invalid login') || raw.includes('authentication failed')) {
+      detail =
+        'Email could not be sent: SMTP rejected the login. Check app password / SMTP credentials in .env.';
+    } else if (raw.includes('ECONNECTION') || raw.includes('ETIMEDOUT') || raw.includes('ENOTFOUND')) {
+      detail =
+        'Email could not be sent: could not reach the mail server. Check SMTP_ADMIN_FP_HOST / PORT and firewall.';
+    }
+    return res.status(500).json({ error: detail });
   }
 });
 
