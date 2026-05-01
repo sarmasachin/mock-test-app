@@ -733,6 +733,7 @@ fun MainBottomNavHost(
             composable(RoutesNew.MENU_QUIZ) {
                 DailyDigestScreenNew(
                     onBack = { mainNavController.popBackOrHome() },
+                    onOpenLeaderboard = { mainNavController.navigate(RoutesNew.LEADERBOARD) },
                 )
             }
 

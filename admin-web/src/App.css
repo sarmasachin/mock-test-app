@@ -1415,6 +1415,39 @@ button:active {
   text-align: center;
 }
 
+.auth-page .auth-switch-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.auth-page .auth-switch-tab {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  background: transparent;
+  color: #cbd5e1;
+  box-shadow: none;
+  margin: 0;
+}
+
+.auth-page .auth-switch-tab.active {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.9), rgba(5, 150, 105, 0.95));
+  color: #ffffff;
+}
+
+.auth-page .auth-switch-tab:hover {
+  filter: none;
+  transform: none;
+}
+
 .auth-page .login-card h1,
 .auth-page .login-card h2 {
   font-size: 38px;

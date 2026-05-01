@@ -745,6 +745,34 @@ function App() {
         </div>
         <div className="auth-shell">
           <div className="auth-card login-card">
+            <div className="auth-switch-tabs" role="tablist" aria-label="Auth tabs">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={authView === 'login'}
+                className={`auth-switch-tab ${authView === 'login' ? 'active' : ''}`}
+                onClick={() => {
+                  setAuthView('login');
+                  setMessage('');
+                }}
+              >
+                Login
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={authView === 'forgot'}
+                className={`auth-switch-tab ${authView === 'forgot' ? 'active' : ''}`}
+                onClick={() => {
+                  setAuthView('forgot');
+                  setForgotMessage('');
+                  setForgotMessageType('info');
+                  setForgotIdentifier(String(identifier || '').trim());
+                }}
+              >
+                Forgot Password
+              </button>
+            </div>
             {authView === 'login' ? (
               <>
                 <h2>एडमिन लॉगिन</h2>
@@ -781,18 +809,6 @@ function App() {
                     {loading ? 'लॉगिन हो रहा है...' : 'लॉगिन करें  >'}
                   </button>
                 </form>
-                <button
-                  type="button"
-                  className="link-like-btn"
-                  onClick={() => {
-                    setAuthView('forgot');
-                    setForgotMessage('');
-                    setForgotMessageType('info');
-                    setForgotIdentifier(String(identifier || '').trim());
-                  }}
-                >
-                  Forgot Password?
-                </button>
                 {message && <p className={`auth-message ${messageType} ${messageType === 'error' ? 'error-p' : ''}`}>{message}</p>}
               </>
             ) : (
@@ -868,13 +884,6 @@ function App() {
                     {forgotMessage}
                   </p>
                 )}
-                <button
-                  type="button"
-                  className="link-like-btn"
-                  onClick={() => setAuthView('login')}
-                >
-                  Back to Login
-                </button>
               </>
             )}
           </div>

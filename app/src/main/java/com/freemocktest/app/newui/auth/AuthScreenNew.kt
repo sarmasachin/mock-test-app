@@ -961,79 +961,73 @@ private fun SignupForm(
             passwordError = null
             termsError = null
 
-            val newUsernameError = when {
-                username.isBlank() -> "Username required"
-                else -> null
-            }
-            val newEmailError = when {
-                email.isBlank() -> "Email required"
-                !isValidEmail(email) -> "Enter a valid email"
-                else -> null
-            }
-            val newMobileError = when {
-                mobile.length != 10 -> "Enter valid mobile number"
-                !isValidMobile(mobile) -> "Enter valid mobile number"
-                else -> null
-            }
-            val newStateError = when {
-                state.isBlank() -> "State required"
-                !SignupRegionData.indianStates.any { it.equals(state, ignoreCase = true) } ->
-                    "Select state from the list"
-                else -> null
-            }
-            val newDistrictError = when {
-                !SignupRegionData.indianStates.any { it.equals(state, ignoreCase = true) } -> null
-                district.isBlank() -> "District required"
-                !SignupRegionData.districtsForState(state).any { it.equals(district, ignoreCase = true) } ->
-                    "Select district from the list"
-                else -> null
-            }
-            val newPasswordError = when {
-                password.length < 4 -> "Password too short"
-                else -> null
-            }
-            val newTermsError = when {
-                !agreedToTerms -> "Please accept Terms & Condition"
-                else -> null
+            if (username.isBlank()) {
+                usernameError = "Username required"
+                return@NeonButton
             }
 
-            if (
-                newUsernameError != null ||
-                newEmailError != null ||
-                newMobileError != null ||
-                newStateError != null ||
-                newDistrictError != null ||
-                newPasswordError != null ||
-                newTermsError != null
-            ) {
-                usernameError = newUsernameError
-                emailError = newEmailError
-                mobileError = newMobileError
-                stateError = newStateError
-                districtError = newDistrictError
-                passwordError = newPasswordError
-                termsError = newTermsError
-            } else {
-                busy = true
-                scope.launch {
-                    AuthRepository.register(
-                        displayName = username,
-                        email = email,
-                        phone = mobile,
-                        password = password,
-                        state = state,
-                        district = district,
-                    )
-                        .onSuccess {
-                            busy = false
-                            Toast.makeText(context, "Signup successful", Toast.LENGTH_SHORT).show()
-                            onSuccess()
-                        }
-                        .onFailure { e ->
-                            busy = false
-                            onError(networkAwareError(e, "Registration failed"))
-                        }
-                }
+            if (email.isBlank()) {
+                emailError = "Email required"
+                return@NeonButton
+            }
+            if (!isValidEmail(email)) {
+                emailError = "Enter a valid email"
+                return@NeonButton
+            }
+
+            if (mobile.length != 10 || !isValidMobile(mobile)) {
+                mobileError = "Enter valid mobile number"
+                return@NeonButton
+            }
+
+            val isStateFromList = SignupRegionData.indianStates.any { it.equals(state, ignoreCase = true) }
+            if (state.isBlank()) {
+                stateError = "State required"
+                return@NeonButton
+            }
+            if (!isStateFromList) {
+                stateError = "Select state from the list"
+                return@NeonButton
+            }
+
+            if (district.isBlank()) {
+                districtError = "District required"
+                return@NeonButton
+            }
+            if (!SignupRegionData.districtsForState(state).any { it.equals(district, ignoreCase = true) }) {
+                districtError = "Select district from the list"
+                return@NeonButton
+            }
+
+            if (password.length < 4) {
+                passwordError = "Password too short"
+                return@NeonButton
+            }
+
+            if (!agreedToTerms) {
+                termsError = "Please accept Terms & Condition"
+                return@NeonButton
+            }
+
+            busy = true
+            scope.launch {
+                AuthRepository.register(
+                    displayName = username,
+                    email = email,
+                    phone = mobile,
+                    password = password,
+                    state = state,
+                    district = district,
+                )
+                    .onSuccess {
+                        busy = false
+                        Toast.makeText(context, "Signup successful", Toast.LENGTH_SHORT).show()
+                        onSuccess()
+                    }
+                    .onFailure { e ->
+                        busy = false
+                        onError(networkAwareError(e, "Registration failed"))
+                    }
             }
         },
     )
