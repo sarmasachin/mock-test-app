@@ -348,6 +348,8 @@ const TAB_ICONS: Record<Tab, string> = {
 const apiBase =
   import.meta.env.VITE_API_BASE_URL || 'https://mock-test-app-1-d1gf.onrender.com/v1';
 
+const ADMIN_AUTH_STORAGE_KEY = 'mocktest_admin_auth_v1';
+
 const api = axios.create({
   baseURL: apiBase,
   timeout: 15000,
@@ -445,6 +447,7 @@ function App() {
   const [token, setToken] = useState<string>('');
   const [isAdmin, setIsAdmin] = useState(false);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [authBooting, setAuthBooting] = useState(true);
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -462,6 +465,75 @@ function App() {
     });
     return instance;
   }, [token]);
+
+  function clearStoredAuth() {
+    if (typeof window === 'undefined') return;
+    window.localStorage.removeItem(ADMIN_AUTH_STORAGE_KEY);
+  }
+
+  function saveStoredAuth(nextToken: string, nextIsSuperAdmin: boolean, nextIdentifier: string) {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(
+      ADMIN_AUTH_STORAGE_KEY,
+      JSON.stringify({
+        token: nextToken,
+        isSuperAdmin: nextIsSuperAdmin,
+        identifier: nextIdentifier,
+      }),
+    );
+  }
+
+  useEffect(() => {
+    let isActive = true;
+    async function restoreSession() {
+      if (typeof window === 'undefined') {
+        if (isActive) setAuthBooting(false);
+        return;
+      }
+      const raw = window.localStorage.getItem(ADMIN_AUTH_STORAGE_KEY);
+      if (!raw) {
+        if (isActive) setAuthBooting(false);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw) as { token?: string; isSuperAdmin?: boolean; identifier?: string };
+        const persistedToken = String(parsed?.token || '');
+        if (!persistedToken) {
+          clearStoredAuth();
+          if (isActive) setAuthBooting(false);
+          return;
+        }
+        const meRes = await api.get('/me', {
+          headers: { Authorization: `Bearer ${persistedToken}` },
+        });
+        if (!isActive) return;
+        if (!meRes.data?.user?.isAdmin) {
+          clearStoredAuth();
+          setToken('');
+          setIsAdmin(false);
+          setIsSuperAdmin(false);
+          setAuthBooting(false);
+          return;
+        }
+        setToken(persistedToken);
+        setIsAdmin(true);
+        setIsSuperAdmin(Boolean(meRes.data?.user?.isSuperAdmin));
+        if (parsed?.identifier) setIdentifier(String(parsed.identifier));
+      } catch (_err) {
+        clearStoredAuth();
+        if (!isActive) return;
+        setToken('');
+        setIsAdmin(false);
+        setIsSuperAdmin(false);
+      } finally {
+        if (isActive) setAuthBooting(false);
+      }
+    }
+    restoreSession();
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined' || window.innerWidth > 900) return;
@@ -496,6 +568,7 @@ function App() {
         setMessage('This account is not allowed for admin panel.');
         return;
       }
+      saveStoredAuth(accessToken, Boolean(meRes.data?.user?.isSuperAdmin), identifier);
       setIsAdmin(true);
       setIsSuperAdmin(Boolean(meRes.data?.user?.isSuperAdmin));
       setToken(accessToken);
@@ -507,6 +580,19 @@ function App() {
     } finally {
       setLoading(false);
     }
+  }
+
+  if (authBooting) {
+    return (
+      <div className="page auth-page">
+        <div className="auth-shell">
+          <div className="auth-card login-card">
+            <h2>Checking session...</h2>
+            <p className="sub">Please wait</p>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (!isAdmin) {
@@ -587,6 +673,7 @@ function App() {
             </div>
             <button
               onClick={() => {
+                clearStoredAuth();
                 setIsAdmin(false);
                 setIsSuperAdmin(false);
                 setToken('');
