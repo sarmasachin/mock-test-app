@@ -49,6 +49,7 @@ const SETTINGS_KEYS = [
   'examCategoryIconOptions',
   'notificationScheduling',
   'publishScheduling',
+  'helpSupportInbox',
   'feedbackInbox',
   'reportIssueInbox',
   'helpSupportContent',
@@ -957,6 +958,14 @@ async function getSettingsMap() {
         return { items: [] };
       }
     })(),
+    helpSupportInbox: (() => {
+      try {
+        const parsed = JSON.parse(String(map.helpSupportInbox || '{}'));
+        return parsed && typeof parsed === 'object' ? parsed : { items: [] };
+      } catch (_e) {
+        return { items: [] };
+      }
+    })(),
     reportIssueInbox: (() => {
       try {
         const parsed = JSON.parse(String(map.reportIssueInbox || '{}'));
@@ -1397,6 +1406,8 @@ router.patch('/settings', async (req, res) => {
     body.emailEventToggles === undefined ? null : normalizeEmailEventToggles(body.emailEventToggles);
   const normalizedFeedbackInbox =
     body.feedbackInbox === undefined ? null : normalizeSupportInbox(body.feedbackInbox);
+  const normalizedHelpSupportInbox =
+    body.helpSupportInbox === undefined ? null : normalizeSupportInbox(body.helpSupportInbox);
   const normalizedReportIssueInbox =
     body.reportIssueInbox === undefined ? null : normalizeSupportInbox(body.reportIssueInbox);
   const normalizedHelpSupportContent =
@@ -1424,6 +1435,7 @@ router.patch('/settings', async (req, res) => {
     normalizedResultUnlockEmailSettings === null &&
     normalizedEmailEventToggles === null &&
     normalizedFeedbackInbox === null &&
+    normalizedHelpSupportInbox === null &&
     normalizedReportIssueInbox === null &&
     normalizedHelpSupportContent === null &&
     normalizedAchievementContent === null &&
@@ -1435,6 +1447,9 @@ router.patch('/settings', async (req, res) => {
   try {
     const previousFeedbackInbox = normalizedFeedbackInbox !== null
       ? await getJsonSetting('feedbackInbox', { items: [] })
+      : null;
+    const previousHelpSupportInbox = normalizedHelpSupportInbox !== null
+      ? await getJsonSetting('helpSupportInbox', { items: [] })
       : null;
     const previousReportIssueInbox = normalizedReportIssueInbox !== null
       ? await getJsonSetting('reportIssueInbox', { items: [] })
@@ -1586,6 +1601,15 @@ router.patch('/settings', async (req, res) => {
           [JSON.stringify(normalizedFeedbackInbox.value), req.userId],
         );
       }
+      if (normalizedHelpSupportInbox !== null) {
+        await client.query(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+           VALUES ('helpSupportInbox', $1, $2::uuid)
+           ON CONFLICT (setting_key)
+           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [JSON.stringify(normalizedHelpSupportInbox.value), req.userId],
+        );
+      }
       if (normalizedReportIssueInbox !== null) {
         await client.query(
           `INSERT INTO app_settings (setting_key, setting_value, updated_by)
@@ -1656,6 +1680,7 @@ router.patch('/settings', async (req, res) => {
       resultUnlockEmailSettingsUpdated: normalizedResultUnlockEmailSettings !== null,
       emailEventTogglesUpdated: normalizedEmailEventToggles !== null,
       feedbackInboxUpdated: normalizedFeedbackInbox !== null,
+      helpSupportInboxUpdated: normalizedHelpSupportInbox !== null,
       reportIssueInboxUpdated: normalizedReportIssueInbox !== null,
       helpSupportContentUpdated: normalizedHelpSupportContent !== null,
       achievementContentUpdated: normalizedAchievementContent !== null,
@@ -1687,6 +1712,9 @@ router.patch('/settings', async (req, res) => {
       };
       if (normalizedFeedbackInbox !== null) {
         await notifyResolved(previousFeedbackInbox, normalizedFeedbackInbox.value);
+      }
+      if (normalizedHelpSupportInbox !== null) {
+        await notifyResolved(previousHelpSupportInbox, normalizedHelpSupportInbox.value);
       }
       if (normalizedReportIssueInbox !== null) {
         await notifyResolved(previousReportIssueInbox, normalizedReportIssueInbox.value);

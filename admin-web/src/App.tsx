@@ -924,7 +924,7 @@ function App() {
           )}
           {tab === 'profile' && <ProfileTab apiClient={authedApi} />}
           {tab === 'feedback' && <SupportInboxSettingsTab apiClient={authedApi} title="Feedback" settingsKey="feedbackInbox" />}
-          {tab === 'helpSupport' && <SimpleContentSettingsTab apiClient={authedApi} title="Help and Support" settingsKey="helpSupportContent" />}
+          {tab === 'helpSupport' && <SupportInboxSettingsTab apiClient={authedApi} title="Help and Support" settingsKey="helpSupportInbox" />}
           {tab === 'reportIssue' && <SupportInboxSettingsTab apiClient={authedApi} title="Report Issue" settingsKey="reportIssueInbox" />}
           {tab === 'achievement' && <SimpleContentSettingsTab apiClient={authedApi} title="Achievement" settingsKey="achievementContent" />}
           {tab === 'privacyPolicy' && <SimpleContentSettingsTab apiClient={authedApi} title="Privacy Policy" settingsKey="privacyPolicyContent" />}
@@ -3822,7 +3822,7 @@ function SupportInboxSettingsTab({
 }: {
   apiClient: typeof api;
   title: string;
-  settingsKey: 'feedbackInbox' | 'reportIssueInbox';
+  settingsKey: 'feedbackInbox' | 'helpSupportInbox' | 'reportIssueInbox';
 }) {
   const ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<SupportInboxItem[]>([]);

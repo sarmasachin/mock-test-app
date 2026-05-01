@@ -391,7 +391,7 @@ router.post('/support', async (req, res) => {
     );
     const user = userQ.rows[0];
     if (!user) return res.status(404).json({ error: 'User not found' });
-    await appendInboxItem('feedbackInbox', {
+    await appendInboxItem('helpSupportInbox', {
       id: `support-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
       userId: String(req.userId || ''),
       userEmail: String(user.email || ''),
