@@ -362,6 +362,39 @@ const api = axios.create({
   timeout: 15000,
 });
 
+/** Avoid showing raw nginx HTML pages in the UI; map common proxy mistakes to a short hint. */
+function formatAxiosErr(err: unknown, fallback: string): string {
+  const e = err as {
+    response?: { status?: number; data?: unknown };
+    code?: string;
+    message?: string;
+  };
+  const status = e?.response?.status;
+  const data = e?.response?.data;
+  if (data && typeof data === 'object' && data !== null && 'error' in data) {
+    const er = (data as { error?: unknown }).error;
+    if (typeof er === 'string' && er.trim()) return er.trim();
+  }
+  if (typeof data === 'string') {
+    const s = data.trim();
+    if (/^<!DOCTYPE|<html[\s>]/i.test(s)) {
+      if (status === 405) {
+        return 'HTTP 405 (nginx): POST to /v1 is not allowed — add a proxy for the API. Example: location /v1/ { proxy_pass http://127.0.0.1:3000/v1/; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme; } then: sudo nginx -t && sudo systemctl reload nginx';
+      }
+      if (status === 404) {
+        return 'HTTP 404: /v1 not proxied to Node. Fix nginx (location /v1/) and VITE_API_BASE_URL.';
+      }
+      return `Server returned HTML (HTTP ${status ?? '?'}). Nginx must proxy /v1 to the Node process (e.g. PM2 on port 3000).`;
+    }
+    return s.length > 280 ? `${s.slice(0, 280)}…` : s;
+  }
+  if (e?.code === 'ECONNABORTED') return 'Request timed out (15s).';
+  if (!e?.response && (e?.code === 'ERR_NETWORK' || e?.message === 'Network Error')) {
+    return `Cannot reach API at ${apiBase}. Set admin-web/.env.production VITE_API_BASE_URL and rebuild; ensure PM2 and nginx are correct.`;
+  }
+  return fallback;
+}
+
 function getInitialAdminAuthState() {
   if (typeof window === 'undefined') {
     return { token: '', isAdmin: false, isSuperAdmin: false, identifier: '' };
@@ -650,9 +683,9 @@ function App() {
       setToken(accessToken);
       setMessageType('success');
       setMessage('Login successful.');
-    } catch (err: any) {
+    } catch (err: unknown) {
       setMessageType('error');
-      setMessage(err?.response?.data?.error || 'Login failed. Check ID and password.');
+      setMessage(formatAxiosErr(err, 'Login failed. Check ID and password.'));
     } finally {
       setLoading(false);
     }
@@ -664,6 +697,12 @@ function App() {
     if (!nextIdentifier) {
       setForgotMessageType('error');
       setForgotMessage('Email or mobile is required.');
+      return;
+    }
+    // Common typo: # instead of @ — server would return ok:false, but catch confusion early
+    if (nextIdentifier.includes('#')) {
+      setForgotMessageType('error');
+      setForgotMessage('Email looks invalid: use @ not # (example: name@gmail.com).');
       return;
     }
     setForgotSending(true);
@@ -683,16 +722,10 @@ function App() {
       }
       setForgotMessageType('success');
       setForgotMessage(String(data?.message || 'OTP sent successfully.'));
-    } catch (err: any) {
+    } catch (err: unknown) {
       setForgotMessageType('error');
-      const fromApi =
-        err?.response?.data?.error ||
-        (typeof err?.response?.data === 'string' ? err.response.data : null);
       setForgotMessage(
-        fromApi ||
-          (err?.code === 'ECONNABORTED' ? 'Request timed out. Try again or check the server.' : null) ||
-          err?.message ||
-          'Could not send OTP. Check network, API base URL (VITE_API_BASE_URL), and server email (SMTP) settings.',
+        formatAxiosErr(err, 'Could not send OTP. If the API is reachable, check SMTP in server .env.'),
       );
     } finally {
       setForgotSending(false);
@@ -738,9 +771,9 @@ function App() {
       setForgotConfirmPassword('');
       setAuthView('login');
       setPassword('');
-    } catch (err: any) {
+    } catch (err: unknown) {
       setForgotMessageType('error');
-      setForgotMessage(err?.response?.data?.error || 'Password reset failed.');
+      setForgotMessage(formatAxiosErr(err, 'Password reset failed.'));
     } finally {
       setForgotResetting(false);
     }
