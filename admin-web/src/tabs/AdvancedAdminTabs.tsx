@@ -1,4 +1,33 @@
 import { FormEvent, useMemo, useState } from 'react';
+import { AdminAnalyticsDashboard } from '../components/AdminAnalyticsDashboard';
+import { useAdminDialog } from '../adminDialog';
+import { useAdminToast } from '../adminToast';
+
+/** Display stored ISO (or parseable) times in India timezone for admin lists. */
+function formatScheduleAtDisplay(iso: string): string {
+  const raw = String(iso || '').trim();
+  if (!raw) return '—';
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) return raw;
+  return dt.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kolkata',
+  });
+}
+
+/** `<input type="datetime-local">` value → UTC ISO for API / DB (server compares with Date.now()). */
+function datetimeLocalToIsoUtc(localValue: string): string | null {
+  const v = String(localValue || '').trim();
+  if (!v) return null;
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
 
 type TestItemLite = { id: string; title: string };
 type ArticleItemLite = { id: string; headline: string };
@@ -6,13 +35,13 @@ type UserReportItem = {
   id: string;
   email: string;
   display_name: string;
+  /** Same value users often see on Profile (public numeric id). */
+  six_digit_public_id: string | number | null;
   attempts_count: number;
   is_banned: boolean;
   ban_reason: string;
   last_attempt_at: string | null;
 };
-type InsightTopTest = { test_name: string; attempts_count: number };
-type InsightGrowth = { month_key: string; users_count: number };
 type NotificationScheduleItem = {
   id: string;
   title: string;
@@ -129,41 +158,11 @@ type ApiClient = {
 };
 
 export function AnalyticsInsightsTabImpl({ apiClient }: { apiClient: ApiClient }) {
-  const [topTests, setTopTests] = useState<InsightTopTest[]>([]);
-  const [growth, setGrowth] = useState<InsightGrowth[]>([]);
-  const [months, setMonths] = useState('12');
-  const [error, setError] = useState('');
-  async function load() {
-    try {
-      setError('');
-      const res = await apiClient.get('/admin/insights', { params: { months: Number(months || '12') } });
-      setTopTests(res.data?.mostAttemptedTests || []);
-      setGrowth(res.data?.userGrowth || []);
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load insights');
-    }
-  }
-  return (
-    <section className="panel-card">
-      <div className="panel-head"><h3>Analytics & Insights</h3></div>
-      <div className="inline-form">
-        <input value={months} onChange={(e) => setMonths(e.target.value)} type="number" min={3} max={24} placeholder="Months" />
-        <button type="button" onClick={load}>Load Insights</button>
-      </div>
-      {error && <p className="error">{error}</p>}
-      <div className="list table">
-        <div className="row row-head" style={{ gridTemplateColumns: '2fr 1fr' }}><span>Most Attempted Test</span><span>Attempts</span></div>
-        {topTests.map((x) => <div key={x.test_name} className="row" style={{ gridTemplateColumns: '2fr 1fr' }}><span>{x.test_name}</span><span>{x.attempts_count}</span></div>)}
-      </div>
-      <div className="list table">
-        <div className="row row-head" style={{ gridTemplateColumns: '1fr 1fr' }}><span>User Growth Month</span><span>New Users</span></div>
-        {growth.map((x) => <div key={x.month_key} className="row" style={{ gridTemplateColumns: '1fr 1fr' }}><span>{x.month_key}</span><span>{x.users_count}</span></div>)}
-      </div>
-    </section>
-  );
+  return <AdminAnalyticsDashboard apiClient={apiClient} />;
 }
 
 export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }) {
+  const { pushToast } = useAdminToast();
   const ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<NotificationScheduleItem[]>([]);
   const [title, setTitle] = useState('');
@@ -177,11 +176,9 @@ export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiCli
   const [repeatUntil, setRepeatUntil] = useState('');
   const [page, setPage] = useState(1);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
 
   async function load() {
     try {
-      setError('');
       const res = await apiClient.get('/admin/settings');
       const s = res.data?.settings?.notificationScheduling;
       const mapped = Array.isArray(s?.items) ? s.items.map((x: any, idx: number) => ({
@@ -202,18 +199,17 @@ export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiCli
       setItems(mapped);
       setPage(1);
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load notification scheduling');
+      pushToast('error', err?.response?.data?.error || 'Failed to load notification scheduling');
     }
   }
 
   async function saveAll(nextItems: NotificationScheduleItem[]) {
     try {
-      setError('');
       setSaving(true);
       const res = await apiClient.patch('/admin/settings', { notificationScheduling: { items: nextItems } });
       setItems(res.data?.settings?.notificationScheduling?.items || nextItems);
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to save notification scheduling');
+      pushToast('error', err?.response?.data?.error || 'Failed to save notification scheduling');
     } finally {
       setSaving(false);
     }
@@ -223,10 +219,19 @@ export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiCli
     e.preventDefault();
     const cleanTitle = title.trim();
     const cleanMessage = message.trim();
-    const cleanScheduleAt = scheduleAt.trim();
-    if (!cleanTitle || !cleanMessage || !cleanScheduleAt) {
-      setError('Title, message and schedule time are required');
+    const scheduleIso = datetimeLocalToIsoUtc(scheduleAt);
+    if (!cleanTitle || !cleanMessage || !scheduleIso) {
+      pushToast('error', 'Title, message and a valid schedule date/time are required');
       return;
+    }
+    let repeatUntilOut = '';
+    if (repeatType !== 'none' && repeatUntil.trim()) {
+      const untilIso = datetimeLocalToIsoUtc(repeatUntil);
+      if (!untilIso) {
+        pushToast('error', 'Repeat until: pick a valid date/time or leave it empty');
+        return;
+      }
+      repeatUntilOut = untilIso;
     }
     const next: NotificationScheduleItem[] = [{
       id: `schedule-${Date.now()}`,
@@ -234,11 +239,11 @@ export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiCli
       message: cleanMessage,
       target,
       segmentKey: segmentKey.trim(),
-      scheduleAt: cleanScheduleAt,
+      scheduleAt: scheduleIso,
       repeatType,
       dayOfWeek: Number(dayOfWeek || '1'),
       dayOfMonth: Number(dayOfMonth || '1'),
-      repeatUntil: repeatUntil.trim(),
+      repeatUntil: repeatUntilOut,
       status: 'scheduled',
       createdAt: new Date().toISOString(),
       sentAt: '',
@@ -267,18 +272,63 @@ export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiCli
         <input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Alert message" />
         <select value={target} onChange={(e) => setTarget(e.target.value as NotificationScheduleItem['target'])}><option value="all">All users</option><option value="new_users">New users</option><option value="active_users">Active users</option></select>
         <input value={segmentKey} onChange={(e) => setSegmentKey(e.target.value)} placeholder="Segment key (e.g. Patwari)" />
-        <input value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} placeholder="Schedule datetime (ISO)" />
+        <input
+          type="datetime-local"
+          step={60}
+          value={scheduleAt}
+          onChange={(e) => setScheduleAt(e.target.value)}
+          title="Your device local time; saved as UTC for the server"
+          style={{ minWidth: 220 }}
+        />
         <select value={repeatType} onChange={(e) => setRepeatType(e.target.value as NotificationScheduleItem['repeatType'])}><option value="none">No Repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>
         {repeatType === 'weekly' && <input value={dayOfWeek} onChange={(e) => setDayOfWeek(e.target.value)} type="number" min={0} max={6} placeholder="Day of week (0-6)" />}
         {repeatType === 'monthly' && <input value={dayOfMonth} onChange={(e) => setDayOfMonth(e.target.value)} type="number" min={1} max={31} placeholder="Day of month (1-31)" />}
-        {repeatType !== 'none' && <input value={repeatUntil} onChange={(e) => setRepeatUntil(e.target.value)} placeholder="Repeat until (ISO optional)" />}
+        {repeatType !== 'none' && (
+          <input
+            type="datetime-local"
+            step={60}
+            value={repeatUntil}
+            onChange={(e) => setRepeatUntil(e.target.value)}
+            placeholder="Repeat until (optional)"
+            title="Optional end date for repeats; leave empty for no end"
+            style={{ minWidth: 220 }}
+          />
+        )}
         <button type="submit">Schedule Alert</button>
       </form>
+      <p style={{ margin: '0 0 10px', fontSize: '0.82rem', color: 'var(--text-muted, #5f6b7a)' }}>
+        Schedule uses your computer&apos;s date and time (picker). It is stored in UTC so publish/notification jobs can compare with the server clock.
+      </p>
       <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button><button type="button" onClick={() => saveAll(items)} disabled={saving}>{saving ? 'Saving...' : 'Save Queue'}</button></div>
-      {error && <p className="error">{error}</p>}
       <div className="list table">
         <div className="row row-head" style={{ gridTemplateColumns: '1fr 1.1fr 120px 130px 120px 120px 90px 90px 90px' }}><span>Title</span><span>Message</span><span>Target</span><span>Schedule</span><span>Repeat</span><span>Status</span><span>Send</span><span>Retry</span><span>Cancel</span></div>
-        {pagedItems.map((item) => <div key={item.id} className="row" style={{ gridTemplateColumns: '1fr 1.1fr 120px 130px 120px 120px 90px 90px 90px' }}><span>{item.title}</span><span>{item.message}</span><span>{item.segmentKey ? `${item.target} • ${item.segmentKey}` : item.target}</span><span>{item.scheduleAt}</span><span>{item.repeatType === 'none' ? 'No' : item.repeatType === 'weekly' ? `Weekly (${item.dayOfWeek})` : item.repeatType === 'monthly' ? `Monthly (${item.dayOfMonth})` : 'Daily'}</span><span>{item.status}</span><button type="button" className="ghost" onClick={() => markStatus(item, 'sent')}>Send</button><button type="button" className="ghost" onClick={() => markStatus(item, 'scheduled')}>Retry</button><button type="button" className="danger" onClick={() => markStatus(item, 'cancelled')}>Cancel</button></div>)}
+        {pagedItems.map((item) => (
+          <div key={item.id} className="row" style={{ gridTemplateColumns: '1fr 1.1fr 120px 130px 120px 120px 90px 90px 90px' }}>
+            <span>{item.title}</span>
+            <span>{item.message}</span>
+            <span>{item.segmentKey ? `${item.target} • ${item.segmentKey}` : item.target}</span>
+            <span title={item.scheduleAt}>{formatScheduleAtDisplay(item.scheduleAt)}</span>
+            <span>
+              {item.repeatType === 'none'
+                ? 'No'
+                : item.repeatType === 'weekly'
+                  ? `Weekly (${item.dayOfWeek})`
+                  : item.repeatType === 'monthly'
+                    ? `Monthly (${item.dayOfMonth})`
+                    : 'Daily'}
+            </span>
+            <span>{item.status}</span>
+            <button type="button" className="ghost" onClick={() => markStatus(item, 'sent')}>
+              Send
+            </button>
+            <button type="button" className="ghost" onClick={() => markStatus(item, 'scheduled')}>
+              Retry
+            </button>
+            <button type="button" className="danger" onClick={() => markStatus(item, 'cancelled')}>
+              Cancel
+            </button>
+          </div>
+        ))}
       </div>
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
     </section>
@@ -286,6 +336,7 @@ export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiCli
 }
 
 export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }) {
+  const { pushToast } = useAdminToast();
   const ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<PublishScheduleItem[]>([]);
   const [tests, setTests] = useState<TestItemLite[]>([]);
@@ -295,43 +346,42 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
   const [scheduleAt, setScheduleAt] = useState('');
   const [notifyOnPublish, setNotifyOnPublish] = useState(true);
   const [page, setPage] = useState(1);
-  const [error, setError] = useState('');
   async function load() {
     try {
-      setError('');
       const [schRes, testRes, articleRes] = await Promise.all([apiClient.get('/admin/publish-scheduling'), apiClient.get('/admin/tests'), apiClient.get('/admin/articles')]);
       setItems(schRes.data?.items || []);
       setTests(testRes.data?.items || []);
       setArticles(articleRes.data?.items || []);
       setPage(1);
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load publish scheduling');
+      pushToast('error', err?.response?.data?.error || 'Failed to load publish scheduling');
     }
   }
   async function addSchedule(e: FormEvent) {
     e.preventDefault();
-    if (!entityId || !scheduleAt.trim()) {
-      setError('Select item and schedule time');
+    const scheduleIso = datetimeLocalToIsoUtc(scheduleAt);
+    if (!entityId || !scheduleIso) {
+      pushToast('error', 'Select item and a valid schedule date/time');
       return;
     }
     try {
-      setError('');
-      await apiClient.post('/admin/publish-scheduling', { entityType, entityId, scheduleAt: scheduleAt.trim(), notifyOnPublish });
+      await apiClient.post('/admin/publish-scheduling', { entityType, entityId, scheduleAt: scheduleIso, notifyOnPublish });
       setEntityId('');
       setScheduleAt('');
       setNotifyOnPublish(true);
       await load();
+      pushToast('success', 'Publish scheduled.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to schedule publish');
+      pushToast('error', err?.response?.data?.error || 'Failed to schedule publish');
     }
   }
   async function changeStatus(id: string, status: 'scheduled' | 'cancelled') {
     try {
-      setError('');
       await apiClient.patch(`/admin/publish-scheduling/${id}`, { status });
       await load();
+      pushToast('success', status === 'cancelled' ? 'Schedule cancelled.' : 'Schedule updated.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to update schedule status');
+      pushToast('error', err?.response?.data?.error || 'Failed to update schedule status');
     }
   }
   const sourceList = entityType === 'test' ? tests : articles;
@@ -357,15 +407,41 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
                 </option>
               ))}
         </select>
-        <input value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} placeholder="Schedule datetime (ISO)" />
+        <input
+          type="datetime-local"
+          step={60}
+          value={scheduleAt}
+          onChange={(e) => setScheduleAt(e.target.value)}
+          title="Your device local time; stored as UTC for the server"
+          style={{ minWidth: 220 }}
+        />
         <label className="check-wrap"><input type="checkbox" checked={notifyOnPublish} onChange={(e) => setNotifyOnPublish(e.target.checked)} />notify on publish</label>
         <button type="submit">Schedule Publish</button>
       </form>
+      <p style={{ margin: '0 0 10px', fontSize: '0.82rem', color: 'var(--text-muted, #5f6b7a)' }}>
+        Pick date &amp; time from the calendar; it is sent to the server as ISO (UTC). List shows India time (IST) for readability.
+      </p>
       <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button></div>
-      {error && <p className="error">{error}</p>}
       <div className="list table">
         <div className="row row-head" style={{ gridTemplateColumns: '120px 1fr 150px 110px 110px 100px' }}><span>Type</span><span>Entity ID</span><span>Schedule At</span><span>Status</span><span>Notify</span><span>Action</span></div>
-        {pagedItems.map((item) => <div key={item.id} className="row" style={{ gridTemplateColumns: '120px 1fr 150px 110px 110px 100px' }}><span>{item.entityType}</span><span>{item.entityId}</span><span>{item.scheduleAt}</span><span>{item.status}</span><span>{item.notifyOnPublish ? 'Yes' : 'No'}</span>{item.status === 'scheduled' ? <button type="button" className="danger" onClick={() => changeStatus(item.id, 'cancelled')}>Cancel</button> : <button type="button" className="ghost" onClick={() => changeStatus(item.id, 'scheduled')}>Re-Schedule</button>}</div>)}
+        {pagedItems.map((item) => (
+          <div key={item.id} className="row" style={{ gridTemplateColumns: '120px 1fr 150px 110px 110px 100px' }}>
+            <span>{item.entityType}</span>
+            <span>{item.entityId}</span>
+            <span title={item.scheduleAt}>{formatScheduleAtDisplay(item.scheduleAt)}</span>
+            <span>{item.status}</span>
+            <span>{item.notifyOnPublish ? 'Yes' : 'No'}</span>
+            {item.status === 'scheduled' ? (
+              <button type="button" className="danger" onClick={() => changeStatus(item.id, 'cancelled')}>
+                Cancel
+              </button>
+            ) : (
+              <button type="button" className="ghost" onClick={() => changeStatus(item.id, 'scheduled')}>
+                Re-Schedule
+              </button>
+            )}
+          </div>
+        ))}
       </div>
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
     </section>
@@ -373,6 +449,7 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
 }
 
 export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
+  const { pushToast } = useAdminToast();
   const ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<ExamCategoryItem[]>([]);
   const [iconOptions, setIconOptions] = useState<ExamCategoryIconOption[]>(DEFAULT_EXAM_CATEGORY_ICON_OPTIONS);
@@ -386,10 +463,8 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const [page, setPage] = useState(1);
   const [saving, setSaving] = useState(false);
   const [showIconManager, setShowIconManager] = useState(false);
-  const [error, setError] = useState('');
   async function load() {
     try {
-      setError('');
       const res = await apiClient.get('/admin/settings');
       const s = res.data?.settings?.examCategories;
       const iconSetting = res.data?.settings?.examCategoryIconOptions;
@@ -416,12 +491,11 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
       setItems(mapped);
       setPage(1);
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load exam categories');
+      pushToast('error', err?.response?.data?.error || 'Failed to load exam categories');
     }
   }
   async function saveAll(nextItems: ExamCategoryItem[]) {
     try {
-      setError('');
       setSaving(true);
       const payload = {
         examCategories: { items: nextItems },
@@ -430,7 +504,7 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
       const res = await apiClient.patch('/admin/settings', payload);
       setItems(res.data?.settings?.examCategories?.items || nextItems);
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to save exam categories');
+      pushToast('error', err?.response?.data?.error || 'Failed to save exam categories');
     } finally {
       setSaving(false);
     }
@@ -438,7 +512,6 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
 
   async function saveIconOptions(nextOptions: ExamCategoryIconOption[]) {
     try {
-      setError('');
       setSaving(true);
       const res = await apiClient.patch('/admin/settings', { examCategoryIconOptions: { items: nextOptions } });
       const fromServer = Array.isArray(res.data?.settings?.examCategoryIconOptions?.items)
@@ -454,7 +527,7 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
           .filter((x: ExamCategoryIconOption) => x.value || x.label),
       );
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to save icon options');
+      pushToast('error', err?.response?.data?.error || 'Failed to save icon options');
     } finally {
       setSaving(false);
     }
@@ -465,11 +538,11 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
     const value = newIconValue.trim().toLowerCase();
     const label = newIconLabel.trim();
     if (!value || !label) {
-      setError('Icon value and label are required');
+      pushToast('error', 'Icon value and label are required');
       return;
     }
     if (iconOptions.some((x) => x.value === value)) {
-      setError('This icon value already exists');
+      pushToast('error', 'This icon value already exists');
       return;
     }
     const next = [...iconOptions, { id: `exam-icon-${Date.now()}`, value, label }];
@@ -485,7 +558,7 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
     const level3 = newLevel3.trim();
     const iconKey = newIconKey.trim();
     if (!level1 || !level2 || !level3) {
-      setError('All hierarchy levels are required');
+      pushToast('error', 'All hierarchy levels are required');
       return;
     }
     const next = [{ id: `exam-cat-${Date.now()}`, level1, level2, level3, iconKey, enabled: newEnabled }, ...items];
@@ -518,7 +591,6 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
         <button type="submit">Add Hierarchy</button>
       </form>
       <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button><button type="button" onClick={() => saveAll(items)} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button></div>
-      {error && <p className="error">{error}</p>}
       <div className="list table">
         <div className="row row-head" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr 120px 90px 90px' }}><span>Level 1</span><span>Level 2</span><span>Level 3</span><span>Icon Key</span><span>Enabled</span><span>Update</span><span>Delete</span></div>
         {visibleItems.map((item) => (
@@ -593,45 +665,112 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
 }
 
 export function UserManagementAdvancedTabImpl({ apiClient, isSuperAdmin }: { apiClient: ApiClient; isSuperAdmin: boolean }) {
+  const { pushToast } = useAdminToast();
+  const { prompt: adminPrompt } = useAdminDialog();
   const ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<UserReportItem[]>([]);
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
-  const [error, setError] = useState('');
   async function load(nextPage = page) {
     try {
-      setError('');
       const offset = (Math.max(1, nextPage) - 1) * ITEMS_PER_PAGE;
       const res = await apiClient.get('/admin/users/reports', { params: { q: query, limit: ITEMS_PER_PAGE, offset } });
       setItems(res.data?.items || []);
       setPage(Math.max(1, nextPage));
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load user reports');
+      pushToast('error', err?.response?.data?.error || 'Failed to load user reports');
     }
   }
   async function toggleBan(item: UserReportItem) {
     const shouldBan = !item.is_banned;
     let reason = '';
     if (shouldBan) {
-      reason = window.prompt(`Ban reason for ${item.email}`, item.ban_reason || 'Policy violation') || '';
-      if (!reason.trim()) return;
+      const entered = await adminPrompt({
+        title: `Ban user — ${item.email}`,
+        description: 'This reason may be shown to the user or in admin logs.',
+        defaultValue: item.ban_reason || 'Policy violation',
+        placeholder: 'Ban reason',
+        confirmLabel: 'Ban user',
+        cancelLabel: 'Cancel',
+        required: true,
+        multiline: true,
+        rows: 3,
+      });
+      if (entered === null) return;
+      reason = entered;
     }
     try {
-      setError('');
       await apiClient.patch(`/admin/users/${item.id}/ban`, { isBanned: shouldBan, banReason: reason.trim() });
       await load(page);
+      pushToast('success', shouldBan ? 'User blocked.' : 'User unblocked.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to update ban status');
+      pushToast('error', err?.response?.data?.error || 'Failed to update ban status');
     }
   }
   return (
     <section className="panel-card">
       <div className="panel-head"><h3>User Management Advanced</h3></div>
-      <div className="inline-form"><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search users" /><button type="button" onClick={() => load(1)}>Load Reports</button></div>
-      {error && <p className="error">{error}</p>}
+      {!isSuperAdmin ? (
+        <p style={{ margin: '0 0 10px', fontSize: '0.86rem', color: 'var(--text-muted, #5f6b7a)' }}>
+          Block / unblock from this report list requires a <strong>super admin</strong> login. Grant admin roles on the
+          Users tab (also super admin only).
+        </p>
+      ) : null}
+      <div className="inline-form">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by name, email, phone, or public id"
+        />
+        <button type="button" onClick={() => load(1)}>
+          Load Reports
+        </button>
+      </div>
       <div className="list table">
-        <div className="row row-head" style={{ gridTemplateColumns: '1.3fr 1fr 120px 170px 160px' }}><span>User</span><span>Attempts</span><span>Status</span><span>Last Attempt</span><span>Action</span></div>
-        {items.map((item) => <div key={item.id} className="row" style={{ gridTemplateColumns: '1.3fr 1fr 120px 170px 160px' }}><span>{item.display_name || item.email}</span><span>{item.attempts_count}</span><span>{item.is_banned ? 'Blocked' : 'Active'}</span><span>{item.last_attempt_at ? new Date(item.last_attempt_at).toLocaleString() : '-'}</span>{isSuperAdmin ? <button type="button" className={item.is_banned ? 'ghost' : 'danger'} onClick={() => toggleBan(item)}>{item.is_banned ? 'Unblock' : 'Block'}</button> : <button disabled title="Only super admin can block/unblock users">Restricted</button>}</div>)}
+        <div
+          className="row row-head"
+          style={{
+            gridTemplateColumns: 'minmax(120px, 1.2fr) 100px 88px 92px minmax(130px, 1fr) 118px',
+          }}
+        >
+          <span>User</span>
+          <span title="Shown on user profile in the app">Public ID</span>
+          <span>Attempts</span>
+          <span>Status</span>
+          <span>Last Attempt</span>
+          <span>Action</span>
+        </div>
+        {items.map((item) => (
+          <div
+            key={item.id}
+            className="row"
+            style={{
+              gridTemplateColumns: 'minmax(120px, 1.2fr) 100px 88px 92px minmax(130px, 1fr) 118px',
+            }}
+          >
+            <span>{item.display_name || item.email}</span>
+            <span
+              title="Profile / public id (six_digit_public_id)"
+              style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}
+            >
+              {item.six_digit_public_id != null && item.six_digit_public_id !== ''
+                ? String(item.six_digit_public_id)
+                : '—'}
+            </span>
+            <span>{item.attempts_count}</span>
+            <span>{item.is_banned ? 'Blocked' : 'Active'}</span>
+            <span>{item.last_attempt_at ? new Date(item.last_attempt_at).toLocaleString() : '-'}</span>
+            {isSuperAdmin ? (
+              <button type="button" className={item.is_banned ? 'ghost' : 'danger'} onClick={() => toggleBan(item)}>
+                {item.is_banned ? 'Unblock' : 'Block'}
+              </button>
+            ) : (
+              <button disabled title="Only super admin can block/unblock users">
+                Restricted
+              </button>
+            )}
+          </div>
+        ))}
       </div>
       <div className="pagination-wrap"><span>Page {page}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => load(Math.max(1, page - 1))} disabled={page === 1}>Previous</button><button type="button" className="ghost" onClick={() => load(page + 1)} disabled={items.length < ITEMS_PER_PAGE}>Next</button></div></div>
     </section>

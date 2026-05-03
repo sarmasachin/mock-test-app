@@ -4,8 +4,17 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { pool } = require('../db');
+const { normalizeFeedKindSlug, FEED_KIND_INVALID_HINT } = require('../constants/articleFeeds');
+const { getArticleFeedKindList, setArticleFeedKindList } = require('../lib/articleFeedKindOptions');
+const { getArticleCategoryList, setArticleCategoryList } = require('../lib/articleCategoryOptions');
 const { sendPushToToken } = require('../notificationDispatch');
 const { isMailConfigured, sendAdminContentAlertEmail, sendSupportJourneyEmail } = require('../mail');
+const {
+  INPUT_MIME_TO_EXT,
+  normalizeAdminImageExportFormats,
+  processAdminImageUpload,
+} = require('../lib/adminImageUpload');
+const { clampMcqCorrectIndex } = require('../mcqShuffle');
 
 const router = express.Router();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -16,11 +25,7 @@ function isUuid(value) {
 
 const UPLOADS_DIR = path.join(__dirname, '..', '..', 'uploads');
 const BANNERS_DIR = path.join(UPLOADS_DIR, 'banners');
-const ALLOWED_BANNER_TYPES = {
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/webp': 'webp',
-};
+const ARTICLES_IMAGES_DIR = path.join(UPLOADS_DIR, 'articles');
 
 function ensureBannerDir() {
   if (!fs.existsSync(BANNERS_DIR)) {
@@ -28,10 +33,22 @@ function ensureBannerDir() {
   }
 }
 
+function ensureArticleImagesDir() {
+  if (!fs.existsSync(ARTICLES_IMAGES_DIR)) {
+    fs.mkdirSync(ARTICLES_IMAGES_DIR, { recursive: true });
+  }
+}
+
 function toPublicBannerUrl(req, fileName) {
   const explicitBase = String(process.env.PUBLIC_BASE_URL || '').trim();
   const base = explicitBase || `${req.protocol}://${req.get('host')}`;
   return `${base}/uploads/banners/${fileName}`;
+}
+
+function toPublicArticleImageUrl(req, fileName) {
+  const explicitBase = String(process.env.PUBLIC_BASE_URL || '').trim();
+  const base = explicitBase || `${req.protocol}://${req.get('host')}`;
+  return `${base}/uploads/articles/${fileName}`;
 }
 
 const SETTINGS_KEYS = [
@@ -59,6 +76,8 @@ const SETTINGS_KEYS = [
   'testAdvancedConfigs',
   'resultUnlockEmailSettings',
   'emailEventToggles',
+  'jobExamArticleAnnouncementEmail',
+  'adminImageExportFormats',
 ];
 
 const DEFAULT_EMAIL_EVENT_TOGGLES = {
@@ -512,11 +531,11 @@ function normalizeNotificationScheduling(value) {
         message: String(x.message || '').trim().slice(0, 300),
         target: allowedTargets.includes(target) ? target : 'all',
         segmentKey: String(x.segmentKey || '').trim().slice(0, 120),
-        scheduleAt: String(x.scheduleAt || '').trim().slice(0, 40),
+        scheduleAt: String(x.scheduleAt || '').trim().slice(0, 80),
         repeatType: allowedRepeat.includes(repeatType) ? repeatType : 'none',
         dayOfWeek,
         dayOfMonth,
-        repeatUntil: String(x.repeatUntil || '').trim().slice(0, 40),
+        repeatUntil: String(x.repeatUntil || '').trim().slice(0, 80),
         status: allowedStatus.includes(status) ? status : 'scheduled',
         createdAt: String(x.createdAt || new Date().toISOString()).slice(0, 40),
         sentAt: String(x.sentAt || '').trim().slice(0, 40),
@@ -539,6 +558,9 @@ function normalizeSupportInbox(value) {
         userId: String(x.userId || '').trim().slice(0, 60),
         userEmail: String(x.userEmail || '').trim().slice(0, 320).toLowerCase(),
         user: String(x.user || '').trim().slice(0, 80),
+        publicId: String(x.publicId != null && x.publicId !== '' ? x.publicId : x.sixDigitPublicId || '')
+          .trim()
+          .slice(0, 32),
         subject: String(x.subject || '').trim().slice(0, 180),
         message: String(x.message || '').trim().slice(0, 600),
         createdAt: String(x.createdAt || new Date().toISOString()).trim().slice(0, 40),
@@ -576,6 +598,11 @@ function normalizeEmailEventToggles(value) {
     out[key] = safe[key] !== false;
   }
   return { value: out };
+}
+
+function normalizeAdminImageExportFormatsPatch(body) {
+  if (body === undefined) return null;
+  return { value: normalizeAdminImageExportFormats(body) };
 }
 
 async function logAdminAction(req, actionType, targetType, targetId, details) {
@@ -751,6 +778,7 @@ function shuffleArray(arr) {
 }
 
 function shuffleQuestionOptions(row) {
+  const sourceOld = clampMcqCorrectIndex(row.correct_index);
   const options = [
     { text: row.choice_a, oldIndex: 0 },
     { text: row.choice_b, oldIndex: 1 },
@@ -758,14 +786,25 @@ function shuffleQuestionOptions(row) {
     { text: row.choice_d, oldIndex: 3 },
   ];
   const shuffled = shuffleArray(options);
-  const newCorrectIndex = shuffled.findIndex((x) => x.oldIndex === Number(row.correct_index));
+  const newCorrectIndex = shuffled.findIndex((x) => x.oldIndex === sourceOld);
+  if (newCorrectIndex < 0) {
+    return {
+      stem: row.stem,
+      choice_a: row.choice_a,
+      choice_b: row.choice_b,
+      choice_c: row.choice_c,
+      choice_d: row.choice_d,
+      correct_index: sourceOld,
+      explanation: row.explanation || '',
+    };
+  }
   return {
     stem: row.stem,
     choice_a: shuffled[0]?.text || '',
     choice_b: shuffled[1]?.text || '',
     choice_c: shuffled[2]?.text || '',
     choice_d: shuffled[3]?.text || '',
-    correct_index: Math.max(0, newCorrectIndex),
+    correct_index: newCorrectIndex,
     explanation: row.explanation || '',
   };
 }
@@ -986,6 +1025,15 @@ async function getSettingsMap() {
         return normalized.value;
       } catch (_e) {
         return { ...DEFAULT_EMAIL_EVENT_TOGGLES };
+      }
+    })(),
+    jobExamArticleAnnouncementEmail: String(map.jobExamArticleAnnouncementEmail ?? 'true') === 'true',
+    adminImageExportFormats: (() => {
+      try {
+        const parsed = JSON.parse(String(map.adminImageExportFormats || '{}'));
+        return normalizeAdminImageExportFormats(parsed);
+      } catch (_e) {
+        return normalizeAdminImageExportFormats({});
       }
     })(),
     feedbackInbox: (() => {
@@ -1329,20 +1377,256 @@ function normalizeTestPayload(body) {
   };
 }
 
-router.get('/summary', async (_req, res) => {
+function parseSummaryRangeDays(req) {
+  const raw = String(req.query?.range || '7d')
+    .trim()
+    .toLowerCase();
+  if (raw === '30d') return 30;
+  if (raw === '90d') return 90;
+  return 7;
+}
+
+router.get('/summary', async (req, res) => {
   try {
-    const [users, attempts, tests, articles] = await Promise.all([
+    const rangeDays = parseSummaryRangeDays(req);
+    await pool
+      .query(
+        `CREATE TABLE IF NOT EXISTS user_device_tokens (
+           id BIGSERIAL PRIMARY KEY,
+           user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+           device_token TEXT NOT NULL,
+           platform VARCHAR(20) NOT NULL DEFAULT 'android',
+           app_version VARCHAR(40) NOT NULL DEFAULT '',
+           device_model VARCHAR(120) NOT NULL DEFAULT '',
+           is_active BOOLEAN NOT NULL DEFAULT true,
+           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+           updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+           last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+           UNIQUE (device_token)
+         )`,
+      )
+      .catch(() => {});
+    const [
+      users,
+      attempts,
+      tests,
+      articles,
+      attemptsToday,
+      activeRecent,
+      userGrowthRows,
+      attemptsByDayRows,
+      hourlyRows,
+      trendingRows,
+      funnelAgg,
+      feedRows,
+      auditAgg,
+      topTestsRows,
+    ] = await Promise.all([
       pool.query(`SELECT COUNT(*)::int AS value FROM users`),
       pool.query(`SELECT COUNT(*)::int AS value FROM test_attempts`),
       pool.query(`SELECT COUNT(*)::int AS value FROM tests WHERE is_published = true`),
       pool.query(`SELECT COUNT(*)::int AS value FROM news_articles WHERE is_published = true`),
+      pool.query(
+        `SELECT COUNT(*)::int AS value FROM test_attempts
+         WHERE (completed_at AT TIME ZONE 'UTC')::date = (timezone('UTC', now()))::date`,
+      ),
+      pool.query(
+        `SELECT COUNT(DISTINCT user_id)::int AS value FROM test_attempts
+         WHERE completed_at > now() - interval '45 minutes'`,
+      ),
+      pool.query(
+        `SELECT (created_at AT TIME ZONE 'UTC')::date AS d, COUNT(*)::int AS c
+         FROM users
+         WHERE (created_at AT TIME ZONE 'UTC')::date >= (timezone('UTC', now())::date - ($1::int - 1))
+         GROUP BY 1 ORDER BY 1`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT (completed_at AT TIME ZONE 'UTC')::date AS d, COUNT(*)::int AS c
+         FROM test_attempts
+         WHERE (completed_at AT TIME ZONE 'UTC')::date >= (timezone('UTC', now())::date - ($1::int - 1))
+         GROUP BY 1 ORDER BY 1`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT (EXTRACT(HOUR FROM completed_at AT TIME ZONE 'UTC'))::int AS h, COUNT(*)::int AS c
+         FROM test_attempts
+         WHERE (completed_at AT TIME ZONE 'UTC')::date >= (timezone('UTC', now())::date - ($1::int - 1))
+         GROUP BY 1 ORDER BY 1`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT COALESCE(NULLIF(trim(test_name), ''), 'Unknown') AS topic, COUNT(*)::int AS c
+         FROM test_attempts
+         WHERE (completed_at AT TIME ZONE 'UTC')::date >= (timezone('UTC', now())::date - ($1::int - 1))
+         GROUP BY 1
+         ORDER BY c DESC
+         LIMIT 8`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*)::int AS opened,
+           COUNT(DISTINCT user_id)::int AS started,
+           COUNT(*) FILTER (
+             WHERE total > 0 AND (correct::numeric / NULLIF(total, 0)) >= 0.5
+           )::int AS completed
+         FROM test_attempts
+         WHERE (completed_at AT TIME ZONE 'UTC')::date >= (timezone('UTC', now())::date - ($1::int - 1))`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT
+           COALESCE(NULLIF(trim(u.display_name), ''), LEFT(trim(u.email), 40), 'User') AS student,
+           COALESCE(NULLIF(trim(ta.test_name), ''), 'Test') AS topic,
+           CASE
+             WHEN ta.total > 0 THEN ROUND(100.0 * ta.correct / NULLIF(ta.total, 0))::int
+             ELSE 0
+           END AS accuracy_pct,
+           ta.completed_at,
+           EXISTS (SELECT 1 FROM user_device_tokens udt WHERE udt.user_id = ta.user_id) AS has_app_token
+         FROM test_attempts ta
+         INNER JOIN users u ON u.id = ta.user_id
+         WHERE (ta.completed_at AT TIME ZONE 'UTC')::date >= (timezone('UTC', now())::date - ($1::int - 1))
+         ORDER BY ta.completed_at DESC
+         LIMIT 12`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT
+           COALESCE(SUM(CASE WHEN user_agent ~* '(iphone|ipad|ipod|android.*mobile|mobile)' THEN 1 ELSE 0 END), 0)::int AS mobile,
+           COALESCE(SUM(CASE
+             WHEN user_agent IS NULL THEN 0
+             WHEN user_agent ~* '(iphone|ipad|ipod|android.*mobile|mobile)' THEN 0
+             ELSE 1
+           END), 0)::int AS desktop,
+           COUNT(*)::int AS total
+         FROM admin_audit_logs
+         WHERE (created_at AT TIME ZONE 'UTC')::date >= (timezone('UTC', now())::date - ($1::int - 1))`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT
+           COALESCE(NULLIF(trim(test_name), ''), 'Unknown') AS title,
+           COUNT(*)::int AS attempts_count,
+           ROUND(COALESCE(AVG(CASE WHEN total > 0 THEN 100.0 * correct / total END), 0)::numeric, 1)::float AS avg_accuracy,
+           MAX(completed_at) AS last_attempt_at
+         FROM test_attempts
+         WHERE (completed_at AT TIME ZONE 'UTC')::date >= (timezone('UTC', now())::date - ($1::int - 1))
+         GROUP BY 1
+         ORDER BY attempts_count DESC
+         LIMIT 10`,
+        [rangeDays],
+      ),
     ]);
+
+    const dayKey = (row) => {
+      if (row.d instanceof Date) return row.d.toISOString().slice(0, 10);
+      return String(row.d).replace(/T.*/, '').slice(0, 10);
+    };
+    const byDayUsers = new Map();
+    for (const row of userGrowthRows.rows || []) {
+      byDayUsers.set(dayKey(row), Number(row.c || 0));
+    }
+    const byDayAttempts = new Map();
+    for (const row of attemptsByDayRows.rows || []) {
+      byDayAttempts.set(dayKey(row), Number(row.c || 0));
+    }
+
+    const growthLabels = [];
+    const growthValues = [];
+    const attemptsPerDay = [];
+    for (let i = rangeDays - 1; i >= 0; i -= 1) {
+      const d = new Date();
+      d.setUTCHours(0, 0, 0, 0);
+      d.setUTCDate(d.getUTCDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      if (rangeDays <= 14) {
+        growthLabels.push(d.toLocaleDateString('en-IN', { weekday: 'short', timeZone: 'UTC' }));
+      } else {
+        growthLabels.push(
+          d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }),
+        );
+      }
+      growthValues.push(byDayUsers.get(key) || 0);
+      attemptsPerDay.push(byDayAttempts.get(key) || 0);
+    }
+
+    const hourly = Array(24).fill(0);
+    for (const row of hourlyRows.rows || []) {
+      const h = Number(row.h);
+      if (Number.isFinite(h) && h >= 0 && h <= 23) hourly[h] = Number(row.c || 0);
+    }
+    const hMax = Math.max(1, ...hourly);
+    const heatmapCells = hourly.map((c) => {
+      if (c <= 0) return { count: c, tier: 'low' };
+      if (c >= hMax * 0.65) return { count: c, tier: 'peak' };
+      if (c >= hMax * 0.25) return { count: c, tier: 'mid' };
+      return { count: c, tier: 'low' };
+    });
+
+    const fr = funnelAgg.rows[0] || {};
+    const opened = Math.max(0, Number(fr.opened || 0));
+    const started = Math.max(0, Number(fr.started || 0));
+    const completed = Math.max(0, Number(fr.completed || 0));
+    const funnelMax = Math.max(opened, started, completed, 1);
+    const funnelPercents = {
+      opened: Math.round((100 * opened) / funnelMax),
+      started: Math.round((100 * started) / funnelMax),
+      completed: Math.round((100 * completed) / funnelMax),
+    };
+    const dropoffPct = opened > 0 ? Math.max(0, Math.min(100, Math.round(100 - (100 * completed) / opened))) : 0;
+
+    const ar = auditAgg.rows[0] || {};
+    let mobile = Number(ar.mobile || 0);
+    let desktop = Number(ar.desktop || 0);
+    const auditTotal = Number(ar.total || 0);
+    if (auditTotal === 0) {
+      mobile = 0;
+      desktop = 0;
+    }
+    const otherDevices = Math.max(0, auditTotal - mobile - desktop);
+    const deviceSplit = { mobile, desktop, other: otherDevices, source: auditTotal > 0 ? 'audit' : 'empty' };
+
+    const topTests = (topTestsRows.rows || []).map((r) => ({
+      title: String(r.title || '').trim().slice(0, 120),
+      attemptsCount: Number(r.attempts_count || 0),
+      avgAccuracy: r.avg_accuracy == null ? null : Number(r.avg_accuracy),
+      lastAttemptAt: r.last_attempt_at ? new Date(r.last_attempt_at).toISOString() : null,
+    }));
 
     return res.json({
       users: users.rows[0].value,
       attempts: attempts.rows[0].value,
       tests: tests.rows[0].value,
       articles: articles.rows[0].value,
+      attemptsToday: attemptsToday.rows[0].value,
+      activeRecent: activeRecent.rows[0].value,
+      platformHealthPct: 100,
+      rangeDays,
+      userGrowth7d: { labels: growthLabels, values: growthValues },
+      attemptsPerDay,
+      deviceSplit,
+      hourlyHeatmap: heatmapCells,
+      funnel: {
+        opened,
+        started,
+        completed,
+        percents: funnelPercents,
+        dropoffPct,
+      },
+      activityFeed: (feedRows.rows || []).map((r) => ({
+        student: String(r.student || ''),
+        topic: String(r.topic || ''),
+        accuracyPct: Number(r.accuracy_pct || 0),
+        completedAt: r.completed_at ? new Date(r.completed_at).toISOString() : new Date(0).toISOString(),
+        device: r.has_app_token ? 'Mobile' : 'Web',
+      })),
+      trendingTopics: (trendingRows.rows || [])
+        .map((r) => String(r.topic || '').trim().slice(0, 48))
+        .filter((t) => t && t.toLowerCase() !== 'unknown')
+        .slice(0, 6),
+      topTests,
     });
   } catch (e) {
     console.error(e);
@@ -1372,9 +1656,11 @@ router.post('/uploads/banner', async (req, res) => {
     if (!fileNameRaw || !contentType || !dataBase64) {
       return res.status(400).json({ error: 'fileName, contentType and dataBase64 are required' });
     }
-    const ext = ALLOWED_BANNER_TYPES[contentType];
-    if (!ext) {
-      return res.status(400).json({ error: 'Only jpg, png or webp images are allowed' });
+    if (!INPUT_MIME_TO_EXT[contentType]) {
+      return res.status(400).json({
+        error:
+          'Unsupported image type. Allowed: JPEG, PNG, WebP, GIF, AVIF, SVG.',
+      });
     }
     const fileBuffer = Buffer.from(dataBase64, 'base64');
     if (!fileBuffer.length) {
@@ -1389,14 +1675,75 @@ router.post('/uploads/banner', async (req, res) => {
       .toLowerCase()
       .replace(/[^a-z0-9-_]+/g, '-')
       .slice(0, 40) || 'banner';
-    const fileName = `${Date.now()}-${safeBase}.${ext}`;
+    const stamp = Date.now();
     ensureBannerDir();
-    fs.writeFileSync(path.join(BANNERS_DIR, fileName), fileBuffer);
-    const imageUrl = toPublicBannerUrl(req, fileName);
-    return res.status(201).json({ imageUrl });
+    const settings = await getSettingsMap();
+    const { imageUrl, variants } = await processAdminImageUpload({
+      fileBuffer,
+      contentType,
+      stamp,
+      safeBase,
+      destDir: BANNERS_DIR,
+      toPublicUrl: (fn) => toPublicBannerUrl(req, fn),
+      exportFormats: settings.adminImageExportFormats,
+    });
+    return res.status(201).json({ imageUrl, variants });
   } catch (e) {
     console.error(e);
+    if (e && e.code === 'UNSUPPORTED_TYPE') {
+      return res.status(400).json({ error: 'Unsupported image type' });
+    }
     return res.status(500).json({ error: 'Failed to upload banner image' });
+  }
+});
+
+router.post('/uploads/article-image', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const fileNameRaw = String(body.fileName || '').trim();
+    const contentType = String(body.contentType || '').trim().toLowerCase();
+    const dataBase64 = String(body.dataBase64 || '').trim();
+    if (!fileNameRaw || !contentType || !dataBase64) {
+      return res.status(400).json({ error: 'fileName, contentType and dataBase64 are required' });
+    }
+    if (!INPUT_MIME_TO_EXT[contentType]) {
+      return res.status(400).json({
+        error:
+          'Unsupported image type. Allowed: JPEG, PNG, WebP, GIF, AVIF, SVG.',
+      });
+    }
+    const fileBuffer = Buffer.from(dataBase64, 'base64');
+    if (!fileBuffer.length) {
+      return res.status(400).json({ error: 'Invalid image data' });
+    }
+    if (fileBuffer.length > 5 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Image size must be <= 5MB' });
+    }
+    const safeBase = path
+      .basename(fileNameRaw)
+      .replace(/\.[^/.]+$/, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9-_]+/g, '-')
+      .slice(0, 40) || 'article';
+    const stamp = Date.now();
+    ensureArticleImagesDir();
+    const settings = await getSettingsMap();
+    const { imageUrl, variants } = await processAdminImageUpload({
+      fileBuffer,
+      contentType,
+      stamp,
+      safeBase,
+      destDir: ARTICLES_IMAGES_DIR,
+      toPublicUrl: (fn) => toPublicArticleImageUrl(req, fn),
+      exportFormats: settings.adminImageExportFormats,
+    });
+    return res.status(201).json({ imageUrl, variants });
+  } catch (e) {
+    console.error(e);
+    if (e && e.code === 'UNSUPPORTED_TYPE') {
+      return res.status(400).json({ error: 'Unsupported image type' });
+    }
+    return res.status(500).json({ error: 'Failed to upload article image' });
   }
 });
 
@@ -1409,6 +1756,8 @@ router.patch('/settings', async (req, res) => {
   const maintenanceMessage =
     body.maintenanceMessage === undefined ? null : String(body.maintenanceMessage || '').trim().slice(0, 240);
   const registrationOpen = body.registrationOpen === undefined ? null : Boolean(body.registrationOpen);
+  const jobExamArticleAnnouncementEmail =
+    body.jobExamArticleAnnouncementEmail === undefined ? null : Boolean(body.jobExamArticleAnnouncementEmail);
   const normalizedProfileItems =
     body.profileMenuItems === undefined ? null : normalizeProfileMenuItems(body.profileMenuItems);
   if (normalizedProfileItems && normalizedProfileItems.error) {
@@ -1442,6 +1791,8 @@ router.patch('/settings', async (req, res) => {
   }
   const normalizedEmailEventToggles =
     body.emailEventToggles === undefined ? null : normalizeEmailEventToggles(body.emailEventToggles);
+  const normalizedAdminImageExportFormats =
+    body.adminImageExportFormats === undefined ? null : normalizeAdminImageExportFormatsPatch(body.adminImageExportFormats);
   const normalizedFeedbackInbox =
     body.feedbackInbox === undefined ? null : normalizeSupportInbox(body.feedbackInbox);
   const normalizedHelpSupportInbox =
@@ -1460,6 +1811,7 @@ router.patch('/settings', async (req, res) => {
     maintenanceMode === null &&
     maintenanceMessage === null &&
     registrationOpen === null &&
+    jobExamArticleAnnouncementEmail === null &&
     normalizedProfileItems === null &&
     normalizedHomeContent === null &&
     normalizedPollSettings === null &&
@@ -1472,6 +1824,7 @@ router.patch('/settings', async (req, res) => {
     normalizedNotificationScheduling === null &&
     normalizedResultUnlockEmailSettings === null &&
     normalizedEmailEventToggles === null &&
+    normalizedAdminImageExportFormats === null &&
     normalizedFeedbackInbox === null &&
     normalizedHelpSupportInbox === null &&
     normalizedReportIssueInbox === null &&
@@ -1520,6 +1873,15 @@ router.patch('/settings', async (req, res) => {
            ON CONFLICT (setting_key)
            DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
           [String(registrationOpen), req.userId],
+        );
+      }
+      if (jobExamArticleAnnouncementEmail !== null) {
+        await client.query(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+           VALUES ('jobExamArticleAnnouncementEmail', $1, $2::uuid)
+           ON CONFLICT (setting_key)
+           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [String(jobExamArticleAnnouncementEmail), req.userId],
         );
       }
       if (normalizedProfileItems !== null) {
@@ -1630,6 +1992,15 @@ router.patch('/settings', async (req, res) => {
           [JSON.stringify(normalizedEmailEventToggles.value), req.userId],
         );
       }
+      if (normalizedAdminImageExportFormats !== null) {
+        await client.query(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+           VALUES ('adminImageExportFormats', $1, $2::uuid)
+           ON CONFLICT (setting_key)
+           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [JSON.stringify(normalizedAdminImageExportFormats.value), req.userId],
+        );
+      }
       if (normalizedFeedbackInbox !== null) {
         await client.query(
           `INSERT INTO app_settings (setting_key, setting_value, updated_by)
@@ -1705,6 +2076,7 @@ router.patch('/settings', async (req, res) => {
       maintenanceMode,
       hasMaintenanceMessage: maintenanceMessage !== null,
       registrationOpen,
+      jobExamArticleAnnouncementEmailUpdated: jobExamArticleAnnouncementEmail !== null,
       profileMenuItemsUpdated: normalizedProfileItems !== null,
       homeContentUpdated: normalizedHomeContent !== null,
       pollSettingsUpdated: normalizedPollSettings !== null,
@@ -1717,6 +2089,7 @@ router.patch('/settings', async (req, res) => {
       notificationSchedulingUpdated: normalizedNotificationScheduling !== null,
       resultUnlockEmailSettingsUpdated: normalizedResultUnlockEmailSettings !== null,
       emailEventTogglesUpdated: normalizedEmailEventToggles !== null,
+      adminImageExportFormatsUpdated: normalizedAdminImageExportFormats !== null,
       feedbackInboxUpdated: normalizedFeedbackInbox !== null,
       helpSupportInboxUpdated: normalizedHelpSupportInbox !== null,
       reportIssueInboxUpdated: normalizedReportIssueInbox !== null,
@@ -1812,18 +2185,23 @@ router.patch('/settings', async (req, res) => {
 });
 
 router.get('/audit-logs', async (req, res) => {
-  const limit = Math.min(300, Math.max(20, Number(req.query.limit || 120)));
+  const limitRaw = Number(req.query.limit);
+  const limit = Math.min(100, Math.max(10, Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : 50));
+  const offsetRaw = Number(req.query.offset);
+  const offset = Math.max(0, Number.isFinite(offsetRaw) && offsetRaw >= 0 ? Math.floor(offsetRaw) : 0);
   try {
+    const countRes = await pool.query(`SELECT COUNT(*)::int AS c FROM admin_audit_logs`);
+    const total = Number(countRes.rows[0]?.c || 0);
     const { rows } = await pool.query(
       `SELECT l.id, l.action_type, l.target_type, l.target_id, l.details_json, l.request_ip, l.user_agent, l.created_at,
               u.email AS actor_email, u.display_name AS actor_name
        FROM admin_audit_logs l
        LEFT JOIN users u ON u.id = l.actor_user_id
        ORDER BY l.created_at DESC
-       LIMIT $1`,
-      [limit],
+       LIMIT $1 OFFSET $2`,
+      [limit, offset],
     );
-    return res.json({ items: rows });
+    return res.json({ items: rows, total });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to load audit logs' });
@@ -2489,22 +2867,80 @@ router.delete('/daily-quiz/:id', async (req, res) => {
   }
 });
 
+router.get('/articles/feed-kinds', async (_req, res) => {
+  try {
+    const kinds = await getArticleFeedKindList();
+    return res.json({ kinds });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load content types' });
+  }
+});
+
+router.put('/articles/feed-kinds', async (req, res) => {
+  const body = req.body || {};
+  if (!Array.isArray(body.kinds)) {
+    return res.status(400).json({ error: 'kinds must be an array of strings' });
+  }
+  try {
+    const result = await setArticleFeedKindList(body.kinds, req.userId);
+    if (result.error) return res.status(400).json({ error: result.error });
+    return res.json({ kinds: result.kinds });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to save content types' });
+  }
+});
+
+router.get('/articles/categories', async (_req, res) => {
+  try {
+    const categories = await getArticleCategoryList();
+    return res.json({ categories });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load article categories' });
+  }
+});
+
+router.put('/articles/categories', async (req, res) => {
+  const body = req.body || {};
+  if (!Array.isArray(body.categories)) {
+    return res.status(400).json({ error: 'categories must be an array of strings' });
+  }
+  try {
+    const result = await setArticleCategoryList(body.categories, req.userId);
+    if (result.error) return res.status(400).json({ error: result.error });
+    return res.json({ categories: result.categories });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to save article categories' });
+  }
+});
+
 router.get('/articles', async (req, res) => {
-  const kind = String(req.query.feedKind || '').trim().toLowerCase();
+  const kindRaw = String(req.query.feedKind || '').trim().toLowerCase();
+  const kind = kindRaw ? normalizeFeedKindSlug(kindRaw) : null;
+  if (kindRaw && !kind) {
+    return res.status(400).json({ error: FEED_KIND_INVALID_HINT });
+  }
+  const limitRaw = parseInt(String(req.query.limit || ''), 10);
+  const limit = Number.isFinite(limitRaw) ? Math.min(5000, Math.max(1, limitRaw)) : 1000;
   const filters = [];
   const params = [];
   if (kind) {
-    filters.push(`feed_kind = $1`);
+    filters.push(`feed_kind = $${params.length + 1}`);
     params.push(kind);
   }
+  params.push(limit);
+  const limitPlaceholder = `$${params.length}`;
   const whereSql = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
   try {
     const { rows } = await pool.query(
-      `SELECT id, feed_kind, headline, summary, category, body, link_url, published_at, is_published
+      `SELECT id, feed_kind, headline, summary, category, body, link_url, feature_image_url, published_at, is_published
        FROM news_articles
        ${whereSql}
        ORDER BY published_at DESC
-       LIMIT 300`,
+       LIMIT ${limitPlaceholder}`,
       params,
     );
     return res.json({ items: rows });
@@ -2516,17 +2952,20 @@ router.get('/articles', async (req, res) => {
 
 router.post('/articles', async (req, res) => {
   const body = req.body || {};
-  const feedKind = String(body.feedKind || '').trim().toLowerCase();
+  const feedKind = normalizeFeedKindSlug(body.feedKind);
   const headline = String(body.headline || '').trim();
-  if (!['news', 'job', 'exam'].includes(feedKind) || !headline) {
-    return res.status(400).json({ error: 'feedKind and headline are required' });
+  if (!feedKind || !headline) {
+    return res.status(400).json({
+      error: `feedKind is invalid or headline is missing. ${FEED_KIND_INVALID_HINT}`,
+    });
   }
+  const featureImageUrl = String(body.featureImageUrl || '').trim() || null;
   try {
     const { rows } = await pool.query(
       `INSERT INTO news_articles (
-         feed_kind, headline, summary, category, body, link_url, published_at, is_published
-       ) VALUES ($1, $2, $3, $4, $5, $6, now(), $7)
-       RETURNING id, feed_kind, headline, summary, category, body, link_url, published_at, is_published`,
+         feed_kind, headline, summary, category, body, link_url, feature_image_url, published_at, is_published
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8)
+       RETURNING id, feed_kind, headline, summary, category, body, link_url, feature_image_url, published_at, is_published`,
       [
         feedKind,
         headline,
@@ -2534,17 +2973,19 @@ router.post('/articles', async (req, res) => {
         String(body.category || ''),
         String(body.body || ''),
         String(body.linkUrl || ''),
+        featureImageUrl,
         body.isPublished !== false,
       ],
     );
     if (body.isPublished !== false) {
+      const announcementOn = (await getSettingsMap()).jobExamArticleAnnouncementEmail === true;
       await enqueueNotification(req.userId, {
         title: 'New Update',
         message: `${headline} has been published.`,
         target: 'all',
         scheduleAt: new Date().toISOString(),
       });
-      if (body.sendEmail === true) {
+      if (announcementOn) {
         const kind = feedKind === 'job' ? 'job' : feedKind === 'exam' ? 'exam' : null;
         if (kind) {
           await sendContentAnnouncementEmails({
@@ -2568,33 +3009,57 @@ router.patch('/articles/:id', async (req, res) => {
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid article id' });
   const body = req.body || {};
-  const feedKind = String(body.feedKind || '').trim().toLowerCase();
+  const feedKind = normalizeFeedKindSlug(body.feedKind);
   const headline = String(body.headline || '').trim();
-  if (!['news', 'job', 'exam'].includes(feedKind) || !headline) {
-    return res.status(400).json({ error: 'feedKind and headline are required' });
+  if (!feedKind || !headline) {
+    return res.status(400).json({
+      error: `feedKind is invalid or headline is missing. ${FEED_KIND_INVALID_HINT}`,
+    });
   }
+  const hasFeatureImage = Object.prototype.hasOwnProperty.call(body, 'featureImageUrl');
+  const featureImageUrl = hasFeatureImage ? String(body.featureImageUrl || '').trim() || null : undefined;
   try {
     const before = await pool.query(`SELECT id, headline, is_published FROM news_articles WHERE id = $1::uuid LIMIT 1`, [id]);
     const beforeRow = before.rows[0];
     if (!beforeRow) return res.status(404).json({ error: 'Article not found' });
-    const { rows } = await pool.query(
-      `UPDATE news_articles
-       SET feed_kind = $1, headline = $2, summary = $3, category = $4, body = $5, link_url = $6, is_published = $7
-       WHERE id = $8::uuid
-       RETURNING id, feed_kind, headline, summary, category, body, link_url, published_at, is_published`,
-      [
-        feedKind,
-        headline,
-        String(body.summary || ''),
-        String(body.category || ''),
-        String(body.body || ''),
-        String(body.linkUrl || ''),
-        body.isPublished !== false,
-        id,
-      ],
-    );
+    const { rows } = hasFeatureImage
+      ? await pool.query(
+          `UPDATE news_articles
+           SET feed_kind = $1, headline = $2, summary = $3, category = $4, body = $5, link_url = $6,
+               feature_image_url = $7, is_published = $8
+           WHERE id = $9::uuid
+           RETURNING id, feed_kind, headline, summary, category, body, link_url, feature_image_url, published_at, is_published`,
+          [
+            feedKind,
+            headline,
+            String(body.summary || ''),
+            String(body.category || ''),
+            String(body.body || ''),
+            String(body.linkUrl || ''),
+            featureImageUrl,
+            body.isPublished !== false,
+            id,
+          ],
+        )
+      : await pool.query(
+          `UPDATE news_articles
+           SET feed_kind = $1, headline = $2, summary = $3, category = $4, body = $5, link_url = $6, is_published = $7
+           WHERE id = $8::uuid
+           RETURNING id, feed_kind, headline, summary, category, body, link_url, feature_image_url, published_at, is_published`,
+          [
+            feedKind,
+            headline,
+            String(body.summary || ''),
+            String(body.category || ''),
+            String(body.body || ''),
+            String(body.linkUrl || ''),
+            body.isPublished !== false,
+            id,
+          ],
+        );
     if (!rows[0]) return res.status(404).json({ error: 'Article not found' });
     if (!beforeRow.is_published && rows[0].is_published) {
+      const announcementOn = (await getSettingsMap()).jobExamArticleAnnouncementEmail === true;
       await enqueueNotification(req.userId, {
         title: 'News Published',
         message: `${rows[0].headline} is now available.`,
@@ -2602,7 +3067,7 @@ router.patch('/articles/:id', async (req, res) => {
         deepLink: 'main/news',
         scheduleAt: new Date().toISOString(),
       });
-      if (body.sendEmail === true) {
+      if (announcementOn) {
         const kind = feedKind === 'job' ? 'job' : feedKind === 'exam' ? 'exam' : null;
         if (kind) {
           await sendContentAnnouncementEmails({
@@ -2637,22 +3102,30 @@ router.delete('/articles/:id', async (req, res) => {
 
 router.get('/users', async (req, res) => {
   const q = String(req.query.q || '').trim();
+  const limitRaw = Number(req.query.limit);
+  const limit = Math.min(100, Math.max(5, Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : 30));
+  const offsetRaw = Number(req.query.offset);
+  const offset = Math.max(0, Number.isFinite(offsetRaw) && offsetRaw >= 0 ? Math.floor(offsetRaw) : 0);
   const params = [];
   let whereSql = '';
   if (q) {
-    whereSql = `WHERE email ILIKE $1 OR display_name ILIKE $1 OR phone ILIKE $1`;
+    whereSql = `WHERE email ILIKE $1 OR display_name ILIKE $1 OR phone ILIKE $1 OR id::text ILIKE $1`;
     params.push(`%${q}%`);
   }
+  const limitIdx = params.length + 1;
+  const offsetIdx = params.length + 2;
   try {
+    const countRes = await pool.query(`SELECT COUNT(*)::int AS c FROM users ${whereSql}`, params);
+    const total = Number(countRes.rows[0]?.c || 0);
     const { rows } = await pool.query(
       `SELECT id, email, display_name, phone, is_admin, is_super_admin, is_banned, ban_reason, banned_at, created_at
        FROM users
        ${whereSql}
        ORDER BY created_at DESC
-       LIMIT 200`,
-      params,
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      [...params, limit, offset],
     );
-    return res.json({ items: rows });
+    return res.json({ items: rows, total });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to list users' });
@@ -2666,20 +3139,21 @@ router.get('/users/reports', async (req, res) => {
   const params = [];
   let whereSql = '';
   if (q) {
-    whereSql = `WHERE (u.email ILIKE $1 OR u.display_name ILIKE $1 OR u.phone ILIKE $1)`;
+    whereSql = `WHERE (u.email ILIKE $1 OR u.display_name ILIKE $1 OR u.phone ILIKE $1 OR u.id::text ILIKE $1
+                OR CAST(u.six_digit_public_id AS TEXT) ILIKE $1)`;
     params.push(`%${q}%`);
   }
   const limitIdx = params.length + 1;
   const offsetIdx = params.length + 2;
   try {
     const { rows } = await pool.query(
-      `SELECT u.id, u.email, u.display_name, u.phone, u.is_banned, u.ban_reason, u.created_at,
+      `SELECT u.id, u.email, u.display_name, u.phone, u.six_digit_public_id, u.is_banned, u.ban_reason, u.created_at,
               COUNT(ta.id)::int AS attempts_count,
               MAX(ta.completed_at) AS last_attempt_at
        FROM users u
        LEFT JOIN test_attempts ta ON ta.user_id = u.id
        ${whereSql}
-       GROUP BY u.id, u.email, u.display_name, u.phone, u.is_banned, u.ban_reason, u.created_at
+       GROUP BY u.id, u.email, u.display_name, u.phone, u.six_digit_public_id, u.is_banned, u.ban_reason, u.created_at
        ORDER BY attempts_count DESC, u.created_at DESC
        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       [...params, limit, offset],
@@ -2721,6 +3195,173 @@ router.get('/insights', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to load insights' });
+  }
+});
+
+/** UTC calendar-day window (same semantics as /admin/summary `range`). */
+router.get('/analytics', async (req, res) => {
+  try {
+    const rangeDays = parseSummaryRangeDays(req);
+    const attemptDay = `(completed_at AT TIME ZONE 'UTC')::date`;
+    const userCreatedDay = `(created_at AT TIME ZONE 'UTC')::date`;
+    const windowStart = `(timezone('UTC', now())::date - ($1::int - 1))`;
+
+    const [
+      kpiAttempts,
+      kpiUniqueUsers,
+      kpiAvgAcc,
+      kpiSignups,
+      attemptsByDayRows,
+      uniqueUsersByDayRows,
+      signupsByDayRows,
+      topTestsRows,
+      bucketRow,
+    ] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*)::int AS c FROM test_attempts WHERE ${attemptDay} >= ${windowStart}`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT COUNT(DISTINCT user_id)::int AS c FROM test_attempts WHERE ${attemptDay} >= ${windowStart}`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT ROUND(AVG(100.0 * correct / NULLIF(total, 0)))::int AS a
+         FROM test_attempts WHERE total > 0 AND ${attemptDay} >= ${windowStart}`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS c FROM users WHERE ${userCreatedDay} >= ${windowStart}`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT ${attemptDay} AS d, COUNT(*)::int AS c
+         FROM test_attempts WHERE ${attemptDay} >= ${windowStart}
+         GROUP BY 1 ORDER BY 1`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT ${attemptDay} AS d, COUNT(DISTINCT user_id)::int AS c
+         FROM test_attempts WHERE ${attemptDay} >= ${windowStart}
+         GROUP BY 1 ORDER BY 1`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT ${userCreatedDay} AS d, COUNT(*)::int AS c
+         FROM users WHERE ${userCreatedDay} >= ${windowStart}
+         GROUP BY 1 ORDER BY 1`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT COALESCE(NULLIF(trim(COALESCE(t.title, ta.test_name)), ''), 'Unknown') AS title,
+                COUNT(*)::int AS attempts_count,
+                ROUND(AVG(CASE WHEN ta.total > 0 THEN 100.0 * ta.correct / ta.total END), 1)::float AS avg_accuracy
+         FROM test_attempts ta
+         LEFT JOIN tests t ON t.id = ta.test_catalog_id
+         WHERE ${attemptDay} >= ${windowStart}
+         GROUP BY 1
+         ORDER BY attempts_count DESC
+         LIMIT 8`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT
+           SUM(CASE
+             WHEN total > 0 AND (100.0 * correct / NULLIF(total, 0)) <= 20 THEN 1 ELSE 0
+           END)::int AS b1,
+           SUM(CASE
+             WHEN total > 0 AND (100.0 * correct / NULLIF(total, 0)) > 20
+               AND (100.0 * correct / NULLIF(total, 0)) <= 40 THEN 1 ELSE 0
+           END)::int AS b2,
+           SUM(CASE
+             WHEN total > 0 AND (100.0 * correct / NULLIF(total, 0)) > 40
+               AND (100.0 * correct / NULLIF(total, 0)) <= 60 THEN 1 ELSE 0
+           END)::int AS b3,
+           SUM(CASE
+             WHEN total > 0 AND (100.0 * correct / NULLIF(total, 0)) > 60
+               AND (100.0 * correct / NULLIF(total, 0)) <= 80 THEN 1 ELSE 0
+           END)::int AS b4,
+           SUM(CASE
+             WHEN total > 0 AND (100.0 * correct / NULLIF(total, 0)) > 80 THEN 1 ELSE 0
+           END)::int AS b5
+         FROM test_attempts
+         WHERE ${attemptDay} >= ${windowStart}`,
+        [rangeDays],
+      ),
+    ]);
+
+    const dayKey = (row) => {
+      if (row.d instanceof Date) return row.d.toISOString().slice(0, 10);
+      return String(row.d).replace(/T.*/, '').slice(0, 10);
+    };
+    const byDayAttempts = new Map();
+    for (const row of attemptsByDayRows.rows || []) {
+      byDayAttempts.set(dayKey(row), Number(row.c || 0));
+    }
+    const byDayUnique = new Map();
+    for (const row of uniqueUsersByDayRows.rows || []) {
+      byDayUnique.set(dayKey(row), Number(row.c || 0));
+    }
+    const byDaySignups = new Map();
+    for (const row of signupsByDayRows.rows || []) {
+      byDaySignups.set(dayKey(row), Number(row.c || 0));
+    }
+
+    const labels = [];
+    const attemptsPerDay = [];
+    const uniqueUsersPerDay = [];
+    const signupsPerDay = [];
+    for (let i = rangeDays - 1; i >= 0; i -= 1) {
+      const d = new Date();
+      d.setUTCHours(0, 0, 0, 0);
+      d.setUTCDate(d.getUTCDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      if (rangeDays <= 14) {
+        labels.push(d.toLocaleDateString('en-IN', { weekday: 'short', timeZone: 'UTC' }));
+      } else {
+        labels.push(d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }));
+      }
+      attemptsPerDay.push(byDayAttempts.get(key) || 0);
+      uniqueUsersPerDay.push(byDayUnique.get(key) || 0);
+      signupsPerDay.push(byDaySignups.get(key) || 0);
+    }
+
+    const br = bucketRow.rows[0] || {};
+    const scoreBuckets = [
+      { label: '0–20%', count: Number(br.b1 || 0) },
+      { label: '21–40%', count: Number(br.b2 || 0) },
+      { label: '41–60%', count: Number(br.b3 || 0) },
+      { label: '61–80%', count: Number(br.b4 || 0) },
+      { label: '81–100%', count: Number(br.b5 || 0) },
+    ];
+
+    const topTests = (topTestsRows.rows || []).map((r) => ({
+      title: String(r.title || '').trim().slice(0, 120),
+      attemptsCount: Number(r.attempts_count || 0),
+      avgAccuracy: r.avg_accuracy == null ? null : Number(r.avg_accuracy),
+    }));
+
+    const avgA = kpiAvgAcc.rows[0]?.a;
+    const avgAccuracyPct = avgA == null || Number.isNaN(Number(avgA)) ? null : Number(avgA);
+
+    return res.json({
+      rangeDays,
+      kpis: {
+        attemptsInRange: Number(kpiAttempts.rows[0]?.c || 0),
+        uniqueUsersInRange: Number(kpiUniqueUsers.rows[0]?.c || 0),
+        avgAccuracyPct,
+        signupsInRange: Number(kpiSignups.rows[0]?.c || 0),
+      },
+      labels,
+      attemptsPerDay,
+      uniqueUsersPerDay,
+      signupsPerDay,
+      topTests,
+      scoreBuckets,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load analytics' });
   }
 });
 
@@ -2867,6 +3508,10 @@ router.post('/publish-scheduling', async (req, res) => {
   const notifyOnPublish = body.notifyOnPublish !== false;
   if (!['test', 'article'].includes(entityType) || !isUuid(entityId) || !scheduleAt) {
     return res.status(400).json({ error: 'entityType, entityId and scheduleAt are required' });
+  }
+  const scheduleMs = Date.parse(scheduleAt);
+  if (!Number.isFinite(scheduleMs)) {
+    return res.status(400).json({ error: 'scheduleAt must be a valid date/time (e.g. ISO 8601 from the date picker)' });
   }
   try {
     const data = await getJsonSetting('publishScheduling', { items: [] });

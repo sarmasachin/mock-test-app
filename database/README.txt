@@ -14,7 +14,7 @@ What postgres/*.sql creates (run in order: 001 → 002 → 003 → 004 → 005 �
   - set_updated_at(): shared trigger helper.
 
 002_feeds_tests_quizzes.sql
-  - news_articles: feed_kind news|job|exam (matches FeedKind + ManualNewsItem).
+  - news_articles: feed_kind uses lowercase slug validation on API; optional feature_image_url; startup adds column and drops legacy CHECK if present. Admin dropdown labels stored in app_settings key articleFeedKindOptions (defaults seeded from constants/articleFeeds.js).
   - user_news_bookmarks.
   - tests + questions (mock|quiz catalog, MCQs).
   - test_attempts.test_catalog_id → tests (optional).

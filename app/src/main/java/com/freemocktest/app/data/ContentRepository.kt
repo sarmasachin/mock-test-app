@@ -788,6 +788,7 @@ object ContentRepository {
             category = category.ifBlank { "News" },
             dateLabel = formatPublishedLabel(publishedAt),
             body = bodyText,
+            featureImageUrl = featureImageUrl?.trim()?.takeIf { it.isNotEmpty() },
         )
     }
 

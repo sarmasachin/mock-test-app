@@ -2,6 +2,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
+const { normalizeFeedKindSlug, FEED_KIND_INVALID_HINT } = require('../constants/articleFeeds');
 
 const router = express.Router();
 
@@ -15,20 +16,21 @@ function mapArticle(row) {
     category: row.category,
     body: row.body,
     linkUrl: row.link_url,
+    featureImageUrl: row.feature_image_url || null,
     publishedAt: row.published_at,
   };
 }
 
 router.get('/', async (req, res) => {
-  const kind = String(req.query.feedKind || 'news').toLowerCase();
-  if (!['news', 'job', 'exam'].includes(kind)) {
-    return res.status(400).json({ error: 'feedKind must be news, job, or exam' });
+  const kind = normalizeFeedKindSlug(req.query.feedKind || 'news');
+  if (!kind) {
+    return res.status(400).json({ error: FEED_KIND_INVALID_HINT });
   }
   const limit = Math.min(Math.max(parseInt(String(req.query.limit || '30'), 10) || 30, 1), 100);
   const offset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
   try {
     const { rows } = await pool.query(
-      `SELECT id, feed_kind, external_id, headline, summary, category, body, link_url, published_at
+      `SELECT id, feed_kind, external_id, headline, summary, category, body, link_url, feature_image_url, published_at
        FROM news_articles
        WHERE is_published = true AND feed_kind = $1
        ORDER BY published_at DESC
@@ -46,7 +48,7 @@ router.get('/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const { rows } = await pool.query(
-      `SELECT id, feed_kind, external_id, headline, summary, category, body, link_url, published_at
+      `SELECT id, feed_kind, external_id, headline, summary, category, body, link_url, feature_image_url, published_at
        FROM news_articles
        WHERE id = $1::uuid AND is_published = true
        LIMIT 1`,

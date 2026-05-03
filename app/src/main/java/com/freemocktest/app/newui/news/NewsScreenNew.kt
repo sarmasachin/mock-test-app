@@ -33,11 +33,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.TextView
+import android.text.method.LinkMovementMethod
+import androidx.core.text.HtmlCompat
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.freemocktest.app.newui.theme.palette.gradientColors
@@ -165,12 +170,27 @@ fun NewsArticleDetailScreen(
                     .aspectRatio(16f / 9f),
             )
 
-            Text(
-                text = item.body,
-                color = p.textPrimary,
-                fontSize = 16.sp,
-                lineHeight = 25.sp,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp),
+            AndroidView(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 20.dp),
+                factory = { ctx ->
+                    TextView(ctx).apply {
+                        movementMethod = LinkMovementMethod.getInstance()
+                        textSize = 16f
+                        setTextColor(p.textPrimary.toArgb())
+                        setLinkTextColor(p.accent.toArgb())
+                        setLineSpacing(6f * ctx.resources.displayMetrics.density, 1f)
+                    }
+                },
+                update = { tv ->
+                    tv.text = HtmlCompat.fromHtml(
+                        item.body.ifBlank { " " },
+                        HtmlCompat.FROM_HTML_MODE_COMPACT,
+                    )
+                    tv.setTextColor(p.textPrimary.toArgb())
+                    tv.setLinkTextColor(p.accent.toArgb())
+                },
             )
             Spacer(Modifier.height(32.dp))
         }

@@ -1,5 +1,7 @@
 import axios from 'axios';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { AdminDialogProvider, useAdminDialog } from './adminDialog';
+import { AdminToastProvider, useAdminToast } from './adminToast';
 import './App.css';
 import {
   AnalyticsInsightsTabImpl,
@@ -14,6 +16,28 @@ import {
   PushNotificationSettingsTabImpl,
   SubmitApplicationContentTabImpl,
 } from './tabs/EngagementContentTabs';
+import { ArticleBodyEditor } from './components/ArticleBodyEditor';
+import {
+  DashboardAnalytics,
+  normalizeDashboardSummary,
+  type AdminDashboardSummary,
+  type DashboardRange,
+} from './components/DashboardAnalytics';
+
+const ADMIN_IMAGE_UPLOAD_MIME_TYPES = [
+  'image/jpeg',
+  'image/jpg',
+  'image/pjpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/avif',
+  'image/svg+xml',
+] as const;
+
+function isAdminUploadImageMime(mime: string): boolean {
+  return (ADMIN_IMAGE_UPLOAD_MIME_TYPES as readonly string[]).includes(mime);
+}
 
 type Tab =
   | 'dashboard'
@@ -40,7 +64,6 @@ type Tab =
   | 'examCategories'
   | 'analyticsInsights'
   | 'userManagementAdvanced'
-  | 'emailDeliveryControls'
   | 'settings'
   | 'auditLogs'
   | 'users';
@@ -132,25 +155,107 @@ type DailyQuizItem = {
 };
 
 
+/** Until `/admin/articles/feed-kinds` loads; server seeds the same defaults. */
+const FALLBACK_ARTICLE_FEED_KINDS = ['news', 'job', 'exam', 'notice', 'tips', 'blog', 'update'];
+
+/** Until `/admin/articles/categories` loads; keep in sync with server `DEFAULT_ARTICLE_CATEGORIES`. */
+const FALLBACK_ARTICLE_CATEGORIES = [
+  'Medical',
+  'Education',
+  'Government Jobs',
+  'Exam',
+  'Admit Card',
+  'Results',
+  'General',
+];
+
+function normalizeClientFeedKindInput(raw: string): string | null {
+  const k = raw
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9_-]/g, '');
+  if (!k || !/^[a-z][a-z0-9_-]{0,62}$/.test(k)) return null;
+  return k;
+}
+
+function normalizeClientCategoryLabel(raw: string): string | null {
+  let s = raw.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!s) return null;
+  if (s.length > 120) s = s.slice(0, 120).trim();
+  return s || null;
+}
+
 type ArticleItem = {
   id: string;
-  feed_kind: 'news' | 'job' | 'exam';
+  feed_kind: string;
   headline: string;
   summary: string;
   category: string;
   body: string;
   link_url: string;
+  feature_image_url?: string | null;
   is_published: boolean;
 };
+
+function fileToBase64Data(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const marker = 'base64,';
+      const idx = result.indexOf(marker);
+      if (idx === -1) {
+        reject(new Error('Failed to process selected image'));
+        return;
+      }
+      resolve(result.slice(idx + marker.length));
+    };
+    reader.onerror = () => reject(new Error('Failed to read image file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+type AdminImageExportFormats = {
+  webp: boolean;
+  avif: boolean;
+  svg: boolean;
+  png: boolean;
+  jpg: boolean;
+  jpeg: boolean;
+};
+
+const DEFAULT_ADMIN_IMAGE_EXPORT_FORMATS: AdminImageExportFormats = {
+  webp: false,
+  avif: false,
+  svg: false,
+  png: false,
+  jpg: false,
+  jpeg: false,
+};
+
+const ADMIN_IMAGE_EXPORT_CHECKBOXES: Array<{ key: keyof AdminImageExportFormats; label: string }> = [
+  { key: 'webp', label: 'WebP' },
+  { key: 'avif', label: 'AVIF' },
+  { key: 'svg', label: 'SVG (only when the uploaded file is SVG)' },
+  { key: 'png', label: 'PNG' },
+  { key: 'jpg', label: 'JPG' },
+  { key: 'jpeg', label: 'JPEG (.jpeg)' },
+];
+
 type AppSettings = {
   maintenanceMode: boolean;
   maintenanceMessage: string;
   registrationOpen: boolean;
+  /** When true, publishing Job or Exam articles sends announcement emails (create-as-published or first publish). */
+  jobExamArticleAnnouncementEmail?: boolean;
   emailEventToggles?: Record<string, boolean>;
   resultUnlockEmailSettings?: {
     enabled: boolean;
     delayHours: number;
   };
+  /** When any format is checked, banner and article image uploads also save that format (via server). */
+  adminImageExportFormats?: AdminImageExportFormats;
 };
 const EMAIL_EVENT_TOGGLE_FIELDS: Array<{ key: string; label: string }> = [
   { key: 'welcome', label: 'Welcome Email' },
@@ -185,6 +290,10 @@ type ProfileMenuItem = {
 type SupportInboxItem = {
   id: string;
   user: string;
+  /** App profile public id (users.six_digit_public_id). */
+  publicId?: string;
+  userId?: string;
+  userEmail?: string;
   subject: string;
   message: string;
   createdAt: string;
@@ -316,7 +425,6 @@ const TAB_LABELS: Record<Tab, string> = {
   examCategories: 'Exam Categories',
   analyticsInsights: 'Analytics & Insights',
   userManagementAdvanced: 'User Management Advanced',
-  emailDeliveryControls: 'Email Delivery Controls',
   settings: 'Settings',
   auditLogs: 'Audit Logs',
   users: 'Users',
@@ -346,14 +454,24 @@ const TAB_ICONS: Record<Tab, string> = {
   examCategories: 'EX',
   analyticsInsights: 'AN',
   userManagementAdvanced: 'UM',
-  emailDeliveryControls: 'EM',
   settings: 'ST',
   auditLogs: 'LG',
   users: 'US',
 };
 
-const apiBase =
-  import.meta.env.VITE_API_BASE_URL || 'https://mock-test-app-1-d1gf.onrender.com/v1';
+/** Strip trailing slashes so axios joins paths like `/auth/login` correctly. */
+function normalizeApiBaseUrl(raw: string): string {
+  return raw.trim().replace(/\/+$/, '');
+}
+
+const envApiBase = import.meta.env.VITE_API_BASE_URL?.trim();
+const apiBase = normalizeApiBaseUrl(
+  envApiBase && envApiBase.length > 0
+    ? envApiBase
+    : import.meta.env.DEV
+      ? 'http://127.0.0.1:3000/v1'
+      : 'https://mock-test-app-1-d1gf.onrender.com/v1',
+);
 
 const ADMIN_AUTH_STORAGE_KEY = 'mocktest_admin_auth_v1';
 
@@ -361,6 +479,22 @@ const api = axios.create({
   baseURL: apiBase,
   timeout: 15000,
 });
+
+const googleWebClientId = String(import.meta.env.VITE_GOOGLE_WEB_CLIENT_ID || '').trim();
+
+function loadGoogleIdentityScript(): Promise<void> {
+  if (typeof window === 'undefined') return Promise.resolve();
+  if (window.google?.accounts?.id) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true;
+    s.defer = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Failed to load Google Sign-In'));
+    document.head.appendChild(s);
+  });
+}
 
 /** Avoid showing raw nginx HTML pages in the UI; map common proxy mistakes to a short hint. */
 function formatAxiosErr(err: unknown, fallback: string): string {
@@ -529,9 +663,23 @@ function App() {
   const [forgotResetting, setForgotResetting] = useState(false);
   const [forgotMessage, setForgotMessage] = useState('');
   const [forgotMessageType, setForgotMessageType] = useState<'info' | 'error' | 'success'>('info');
+  /** After successful “Send OTP”, show OTP + new password fields. */
+  const [forgotOtpSent, setForgotOtpSent] = useState(false);
   const [tab, setTab] = useState<Tab>('dashboard');
   const [selectedQuestionTestId, setSelectedQuestionTestId] = useState<string>('');
   const sideNavRef = useRef<HTMLElement | null>(null);
+  const googleBtnMountRef = useRef<HTMLDivElement | null>(null);
+  const googleCallbackRef = useRef<(credential: string) => void>(() => {});
+  const handleAuthExpiredRef = useRef<() => void>(() => {});
+
+  handleAuthExpiredRef.current = () => {
+    clearStoredAuth();
+    setToken('');
+    setIsAdmin(false);
+    setIsSuperAdmin(false);
+    setMessage('Session expired or revoked. Please sign in again.');
+    setMessageType('error');
+  };
 
   const authedApi = useMemo(() => {
     const instance = axios.create({ baseURL: apiBase, timeout: 15000 });
@@ -539,6 +687,14 @@ function App() {
       if (token) config.headers.Authorization = `Bearer ${token}`;
       return config;
     });
+    instance.interceptors.response.use(
+      (res) => res,
+      (err) => {
+        const status = Number(err?.response?.status || 0);
+        if (status === 401) handleAuthExpiredRef.current();
+        return Promise.reject(err);
+      },
+    );
     return instance;
   }, [token]);
 
@@ -650,6 +806,108 @@ function App() {
     }
   }, [tab, selectedQuestionTestId]);
 
+  useEffect(() => {
+    if (isAdmin || authView !== 'login' || !googleWebClientId) return undefined;
+    const mount = googleBtnMountRef.current;
+    if (!mount) return undefined;
+    let cancelled = false;
+    void (async () => {
+      try {
+        await loadGoogleIdentityScript();
+        if (cancelled || !googleBtnMountRef.current) return;
+        const node = googleBtnMountRef.current;
+        node.innerHTML = '';
+        const id = window.google?.accounts?.id;
+        if (!id) {
+          throw new Error('Google Sign-In unavailable');
+        }
+        id.initialize({
+          client_id: googleWebClientId,
+          callback: (r: { credential?: string }) => {
+            void googleCallbackRef.current(String(r?.credential || ''));
+          },
+          auto_select: false,
+        });
+        id.renderButton(node, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'rectangular',
+          logo_alignment: 'left',
+          width: 320,
+        });
+      } catch (e) {
+        if (!cancelled) {
+          setMessageType('error');
+          setMessage(e instanceof Error ? e.message : 'Could not load Google Sign-In.');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      window.google?.accounts?.id?.cancel?.();
+      if (googleBtnMountRef.current) {
+        googleBtnMountRef.current.innerHTML = '';
+      }
+    };
+  }, [isAdmin, authView, googleWebClientId]);
+
+  type LoginUserPayload = { isAdmin?: boolean; isSuperAdmin?: boolean; email?: string } | null;
+
+  async function bootstrapAdminSession(
+    accessToken: string,
+    identifierLabel: string,
+    loginUser: LoginUserPayload,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    let resolvedIsAdmin = Boolean(loginUser?.isAdmin);
+    let resolvedIsSuperAdmin = Boolean(loginUser?.isSuperAdmin);
+    if (!loginUser || loginUser.isAdmin === undefined) {
+      const meRes = await api.get('/me', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      resolvedIsAdmin = Boolean(meRes.data?.user?.isAdmin);
+      resolvedIsSuperAdmin = Boolean(meRes.data?.user?.isSuperAdmin);
+    }
+    if (!resolvedIsAdmin) {
+      return { ok: false, message: 'This account is not allowed for admin panel.' };
+    }
+    saveStoredAuth(accessToken, resolvedIsSuperAdmin, identifierLabel, resolvedIsAdmin);
+    setIsAdmin(true);
+    setIsSuperAdmin(resolvedIsSuperAdmin);
+    setToken(accessToken);
+    return { ok: true };
+  }
+
+  googleCallbackRef.current = async (credential: string) => {
+    const idToken = String(credential || '').trim();
+    if (!idToken) return;
+    setLoading(true);
+    setMessage('');
+    setMessageType('info');
+    try {
+      const loginRes = await api.post('/auth/google', { idToken });
+      const accessToken = String(loginRes.data?.accessToken || '');
+      if (!accessToken) throw new Error('Token missing in login response');
+      const loginUser = (loginRes.data?.user || null) as LoginUserPayload;
+      const idLabel = String(loginUser?.email || '').trim() || identifier;
+      const result = await bootstrapAdminSession(accessToken, idLabel, loginUser);
+      if (!result.ok) {
+        setMessageType('error');
+        setMessage(result.message);
+        return;
+      }
+      setIdentifier(idLabel);
+      setMessageType('success');
+      setMessage('Login successful.');
+    } catch (err: unknown) {
+      setMessageType('error');
+      setMessage(formatAxiosErr(err, 'Google sign-in failed.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -662,25 +920,13 @@ function App() {
       });
       const accessToken = String(loginRes.data?.accessToken || '');
       if (!accessToken) throw new Error('Token missing in login response');
-      const loginUser = loginRes.data?.user || null;
-      let resolvedIsAdmin = Boolean(loginUser?.isAdmin);
-      let resolvedIsSuperAdmin = Boolean(loginUser?.isSuperAdmin);
-      if (!loginUser || loginUser?.isAdmin === undefined) {
-        const meRes = await api.get('/me', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        resolvedIsAdmin = Boolean(meRes.data?.user?.isAdmin);
-        resolvedIsSuperAdmin = Boolean(meRes.data?.user?.isSuperAdmin);
-      }
-      if (!resolvedIsAdmin) {
+      const loginUser = (loginRes.data?.user || null) as LoginUserPayload;
+      const result = await bootstrapAdminSession(accessToken, identifier, loginUser);
+      if (!result.ok) {
         setMessageType('error');
-        setMessage('This account is not allowed for admin panel.');
+        setMessage(result.message);
         return;
       }
-      saveStoredAuth(accessToken, resolvedIsSuperAdmin, identifier, resolvedIsAdmin);
-      setIsAdmin(true);
-      setIsSuperAdmin(resolvedIsSuperAdmin);
-      setToken(accessToken);
       setMessageType('success');
       setMessage('Login successful.');
     } catch (err: unknown) {
@@ -722,10 +968,11 @@ function App() {
       }
       setForgotMessageType('success');
       setForgotMessage(String(data?.message || 'OTP sent successfully.'));
+      setForgotOtpSent(true);
     } catch (err: unknown) {
       setForgotMessageType('error');
       setForgotMessage(
-        formatAxiosErr(err, 'Could not send OTP. If the API is reachable, check SMTP in server .env.'),
+        formatAxiosErr(err, 'Could not send OTP. Check that the API is reachable and try again.'),
       );
     } finally {
       setForgotSending(false);
@@ -769,6 +1016,7 @@ function App() {
       setForgotOtp('');
       setForgotNewPassword('');
       setForgotConfirmPassword('');
+      setForgotOtpSent(false);
       setAuthView('login');
       setPassword('');
     } catch (err: unknown) {
@@ -789,37 +1037,9 @@ function App() {
         </div>
         <div className="auth-shell">
           <div className="auth-card login-card">
-            <div className="auth-switch-tabs" role="tablist" aria-label="Auth tabs">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={authView === 'login'}
-                className={`auth-switch-tab ${authView === 'login' ? 'active' : ''}`}
-                onClick={() => {
-                  setAuthView('login');
-                  setMessage('');
-                }}
-              >
-                Login
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={authView === 'forgot'}
-                className={`auth-switch-tab ${authView === 'forgot' ? 'active' : ''}`}
-                onClick={() => {
-                  setAuthView('forgot');
-                  setForgotMessage('');
-                  setForgotMessageType('info');
-                  setForgotIdentifier(String(identifier || '').trim());
-                }}
-              >
-                Forgot Password
-              </button>
-            </div>
             {authView === 'login' ? (
               <>
-                <h2 className="auth-section-heading">Admin Login</h2>
+                <p className="auth-login-title">Admin login</p>
                 <form onSubmit={handleLogin} className="auth-form auth-float-form">
                   <div className="input-group">
                     <div className="input-box input-box-float">
@@ -850,15 +1070,59 @@ function App() {
                       <label htmlFor="admin-login-password">Password</label>
                     </div>
                   </div>
+                  <div className="auth-forgot-row">
+                    <button
+                      type="button"
+                      className="auth-forgot-link"
+                      onClick={() => {
+                        setAuthView('forgot');
+                        setForgotMessage('');
+                        setForgotMessageType('info');
+                        setForgotOtpSent(false);
+                        setForgotIdentifier(String(identifier || '').trim());
+                      }}
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
                   <button type="submit" className="login-btn" disabled={loading}>
                     {loading ? 'Logging in...' : 'Login'}
                   </button>
                 </form>
+                {googleWebClientId ? (
+                  <>
+                    <div className="auth-google-divider" role="separator" aria-label="or">
+                      <span>or</span>
+                    </div>
+                    <div className={`auth-google-row${loading ? ' auth-google-row--busy' : ''}`}>
+                      <div ref={googleBtnMountRef} className="google-signin-mount" />
+                    </div>
+                  </>
+                ) : (
+                  <p className="auth-google-config-hint">
+                    Optional: set <code>VITE_GOOGLE_WEB_CLIENT_ID</code> (same Web client ID as server{' '}
+                    <code>GOOGLE_WEB_CLIENT_ID</code>) to show Continue with Google.
+                  </p>
+                )}
                 {message && <p className={`auth-message ${messageType} ${messageType === 'error' ? 'error-p' : ''}`}>{message}</p>}
               </>
             ) : (
               <>
-                <h2 className="auth-section-heading">Forgot Password</h2>
+                <div className="auth-forgot-back">
+                  <button
+                    type="button"
+                    className="auth-back-link"
+                    onClick={() => {
+                      setAuthView('login');
+                      setForgotMessage('');
+                      setMessage('');
+                      setForgotOtpSent(false);
+                    }}
+                  >
+                    ← Back to login
+                  </button>
+                </div>
+                <p className="auth-section-heading">Reset password</p>
                 {forgotMessage && (
                   <p
                     className={`auth-message ${forgotMessageType} ${forgotMessageType === 'error' ? 'error-p' : ''}`}
@@ -875,7 +1139,10 @@ function App() {
                       <input
                         id="admin-forgot-identifier"
                         value={forgotIdentifier}
-                        onChange={(e) => setForgotIdentifier(e.target.value)}
+                        onChange={(e) => {
+                          setForgotIdentifier(e.target.value);
+                          setForgotOtpSent(false);
+                        }}
                         placeholder=" "
                         autoComplete="username"
                         required
@@ -887,55 +1154,57 @@ function App() {
                     {forgotSending ? 'Sending OTP...' : 'Send OTP'}
                   </button>
                 </form>
-                <form onSubmit={handleAdminForgotPasswordComplete} className="auth-form auth-float-form">
-                  <div className="input-group">
-                    <div className="input-box input-box-float">
-                      <i aria-hidden="true">#</i>
-                      <input
-                        id="admin-forgot-otp"
-                        value={forgotOtp}
-                        onChange={(e) => setForgotOtp(e.target.value)}
-                        placeholder=" "
-                        inputMode="numeric"
-                        required
-                      />
-                      <label htmlFor="admin-forgot-otp">6-digit OTP</label>
+                {forgotOtpSent ? (
+                  <form onSubmit={handleAdminForgotPasswordComplete} className="auth-form auth-float-form">
+                    <div className="input-group">
+                      <div className="input-box input-box-float">
+                        <i aria-hidden="true">#</i>
+                        <input
+                          id="admin-forgot-otp"
+                          value={forgotOtp}
+                          onChange={(e) => setForgotOtp(e.target.value)}
+                          placeholder=" "
+                          inputMode="numeric"
+                          required
+                        />
+                        <label htmlFor="admin-forgot-otp">6-digit OTP</label>
+                      </div>
                     </div>
-                  </div>
-                  <div className="input-group">
-                    <div className="input-box input-box-float">
-                      <i aria-hidden="true">🔒</i>
-                      <input
-                        id="admin-forgot-new-password"
-                        value={forgotNewPassword}
-                        onChange={(e) => setForgotNewPassword(e.target.value)}
-                        placeholder=" "
-                        type="password"
-                        autoComplete="new-password"
-                        required
-                      />
-                      <label htmlFor="admin-forgot-new-password">New Password</label>
+                    <div className="input-group">
+                      <div className="input-box input-box-float">
+                        <i aria-hidden="true">🔒</i>
+                        <input
+                          id="admin-forgot-new-password"
+                          value={forgotNewPassword}
+                          onChange={(e) => setForgotNewPassword(e.target.value)}
+                          placeholder=" "
+                          type="password"
+                          autoComplete="new-password"
+                          required
+                        />
+                        <label htmlFor="admin-forgot-new-password">New Password</label>
+                      </div>
                     </div>
-                  </div>
-                  <div className="input-group">
-                    <div className="input-box input-box-float">
-                      <i aria-hidden="true">🔒</i>
-                      <input
-                        id="admin-forgot-confirm-password"
-                        value={forgotConfirmPassword}
-                        onChange={(e) => setForgotConfirmPassword(e.target.value)}
-                        placeholder=" "
-                        type="password"
-                        autoComplete="new-password"
-                        required
-                      />
-                      <label htmlFor="admin-forgot-confirm-password">Confirm Password</label>
+                    <div className="input-group">
+                      <div className="input-box input-box-float">
+                        <i aria-hidden="true">🔒</i>
+                        <input
+                          id="admin-forgot-confirm-password"
+                          value={forgotConfirmPassword}
+                          onChange={(e) => setForgotConfirmPassword(e.target.value)}
+                          placeholder=" "
+                          type="password"
+                          autoComplete="new-password"
+                          required
+                        />
+                        <label htmlFor="admin-forgot-confirm-password">Confirm Password</label>
+                      </div>
                     </div>
-                  </div>
-                  <button type="submit" className="login-btn" disabled={forgotResetting}>
-                    {forgotResetting ? 'Resetting password...' : 'Verify OTP & Reset Password'}
-                  </button>
-                </form>
+                    <button type="submit" className="login-btn" disabled={forgotResetting}>
+                      {forgotResetting ? 'Resetting password...' : 'Verify OTP & Reset Password'}
+                    </button>
+                  </form>
+                ) : null}
               </>
             )}
           </div>
@@ -945,15 +1214,45 @@ function App() {
   }
 
   return (
-    <div className="page">
-      <div className="admin-shell">
+    <AdminToastProvider>
+      <AdminDialogProvider>
+      <div className="page">
+        <div className="admin-shell">
         <aside className="sidebar">
           <div>
             <p className="brand-tag">MockTest</p>
             <h2 className="brand-title">Admin Panel</h2>
           </div>
           <nav ref={sideNavRef} className="side-nav">
-            {(['dashboard', 'analyticsInsights', 'allTests', 'questionBuilder', 'pollSettings', 'pushNotificationSettings', 'leaderboard', 'profile', 'feedback', 'helpSupport', 'reportIssue', 'achievement', 'privacyPolicy', 'termsOfUse', 'dailyDigest', 'dailyQuiz', 'articles', 'homeContent', 'notificationScheduling', 'publishScheduling', 'submitApplicationContent', 'instructionContent', 'examCategories', 'emailDeliveryControls', 'settings', 'auditLogs', 'users', 'userManagementAdvanced'] as Tab[]).map(
+            {([
+              'dashboard',
+              'users',
+              'userManagementAdvanced',
+              'analyticsInsights',
+              'allTests',
+              'questionBuilder',
+              'pollSettings',
+              'pushNotificationSettings',
+              'leaderboard',
+              'profile',
+              'feedback',
+              'helpSupport',
+              'reportIssue',
+              'achievement',
+              'privacyPolicy',
+              'termsOfUse',
+              'dailyDigest',
+              'dailyQuiz',
+              'articles',
+              'homeContent',
+              'notificationScheduling',
+              'publishScheduling',
+              'submitApplicationContent',
+              'instructionContent',
+              'examCategories',
+              'settings',
+              'auditLogs',
+            ] as Tab[]).map(
               (name) => (
               <button key={name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>
                 <span>{TAB_ICONS[name]}</span>
@@ -1013,7 +1312,14 @@ function App() {
           {tab === 'feedback' && <SupportInboxSettingsTab apiClient={authedApi} title="Feedback" settingsKey="feedbackInbox" />}
           {tab === 'helpSupport' && <SupportInboxSettingsTab apiClient={authedApi} title="Help and Support" settingsKey="helpSupportInbox" />}
           {tab === 'reportIssue' && <SupportInboxSettingsTab apiClient={authedApi} title="Report Issue" settingsKey="reportIssueInbox" />}
-          {tab === 'achievement' && <SimpleContentSettingsTab apiClient={authedApi} title="Achievement" settingsKey="achievementContent" />}
+          {tab === 'achievement' && (
+            <SimpleContentSettingsTab
+              apiClient={authedApi}
+              title="Achievement"
+              settingsKey="achievementContent"
+              showTitleField
+            />
+          )}
           {tab === 'privacyPolicy' && <SimpleContentSettingsTab apiClient={authedApi} title="Privacy Policy" settingsKey="privacyPolicyContent" />}
           {tab === 'termsOfUse' && <SimpleContentSettingsTab apiClient={authedApi} title="Terms of Use" settingsKey="termsOfUseContent" />}
           {tab === 'dailyDigest' && <DailyDigestTab apiClient={authedApi} />}
@@ -1027,77 +1333,50 @@ function App() {
           {tab === 'submitApplicationContent' && <SubmitApplicationContentTab apiClient={authedApi} />}
           {tab === 'instructionContent' && <InstructionContentTab apiClient={authedApi} />}
           {tab === 'examCategories' && <ExamCategoriesTab apiClient={authedApi} />}
-          {tab === 'emailDeliveryControls' && <SettingsTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
           {tab === 'settings' && <SettingsTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
           {tab === 'auditLogs' && <AuditLogsTab apiClient={authedApi} />}
           {tab === 'users' && <UsersTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
           {tab === 'userManagementAdvanced' && <UserManagementAdvancedTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
         </main>
       </div>
-    </div>
+      </div>
+      </AdminDialogProvider>
+    </AdminToastProvider>
   );
 }
 
 function DashboardTab({ apiClient }: { apiClient: typeof api }) {
-  const [data, setData] = useState<any>(null);
-  const [error, setError] = useState('');
-  const values = data ? [data.users, data.attempts, data.tests, data.articles] : [0, 0, 0, 0];
-  const max = Math.max(...values, 1);
+  const { pushToast } = useAdminToast();
+  const [data, setData] = useState<AdminDashboardSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [range, setRange] = useState<DashboardRange>('7d');
+
   async function load() {
+    setLoading(true);
     try {
-      setError('');
-      const res = await apiClient.get('/admin/summary');
-      setData(res.data);
+      const res = await apiClient.get('/admin/summary', { params: { range } });
+      setData(normalizeDashboardSummary(res.data));
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load dashboard');
+      setData(null);
+      pushToast('error', err?.response?.data?.error || 'Failed to load dashboard');
+    } finally {
+      setLoading(false);
     }
   }
-  return (
-    <section className="panel-card">
-      <div className="panel-head">
-        <h3>Overview</h3>
-        <button onClick={load}>Refresh</button>
-      </div>
-      {error && <p className="error">{error}</p>}
-      {data && (
-        <>
-          <div className="grid">
-            <Stat title="Users" value={data.users} />
-            <Stat title="Attempts" value={data.attempts} />
-            <Stat title="Tests" value={data.tests} />
-            <Stat title="Articles" value={data.articles} />
-          </div>
-          <div className="chart">
-            <ChartBar label="Users" value={data.users} max={max} />
-            <ChartBar label="Attempts" value={data.attempts} max={max} />
-            <ChartBar label="Tests" value={data.tests} max={max} />
-            <ChartBar label="Articles" value={data.articles} max={max} />
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
 
-function ChartBar({ label, value, max }: { label: string; value: number; max: number }) {
-  const percent = Math.max(4, Math.round((value / max) * 100));
-  return (
-    <div className="chart-row">
-      <span>{label}</span>
-      <div className="chart-track">
-        <div className="chart-fill" style={{ width: `${percent}%` }} />
-      </div>
-      <strong>{value}</strong>
-    </div>
-  );
-}
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range]);
 
-function Stat({ title, value }: { title: string; value: number }) {
   return (
-    <div className="stat">
-      <div>{title}</div>
-      <strong>{value}</strong>
-    </div>
+    <DashboardAnalytics
+      data={data}
+      loading={loading}
+      range={range}
+      onRangeChange={setRange}
+      onRefresh={() => void load()}
+    />
   );
 }
 
@@ -1106,19 +1385,18 @@ function AnalyticsInsightsTab({ apiClient }: { apiClient: typeof api }) {
 }
 
 function LeaderboardTab() {
+  const { pushToast } = useAdminToast();
   const [items, setItems] = useState<any[]>([]);
-  const [error, setError] = useState('');
   const [range, setRange] = useState<RangeKind>('weekly');
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [query, setQuery] = useState('');
   async function load() {
     try {
-      setError('');
       const res = await api.get('/leaderboard', { params: { range, city, state, limit: 80 } });
       setItems(res.data?.items || []);
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load leaderboard');
+      pushToast('error', err?.response?.data?.error || 'Failed to load leaderboard');
     }
   }
   const filtered = items.filter((item) => {
@@ -1146,7 +1424,6 @@ function LeaderboardTab() {
         <button onClick={load}>Load Leaderboard</button>
       </div>
       <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search in leaderboard" />
-      {error && <p className="error">{error}</p>}
       <div className="list table leaderboard-table">
         <div className="row row-head">
           <span>Rank</span>
@@ -1182,6 +1459,8 @@ function TestsTab({
   onNavigateTab?: (tab: Tab) => void;
   onSelectQuestionTest: (testId: string) => void;
 }) {
+  const { pushToast } = useAdminToast();
+  const { confirm: adminConfirm, prompt: adminPrompt } = useAdminDialog();
   const TESTS_PER_PAGE = 20;
   const QUESTIONS_PER_PAGE = 20;
   const [items, setItems] = useState<TestItem[]>([]);
@@ -1224,12 +1503,12 @@ function TestsTab({
   const [opsTestId, setOpsTestId] = useState('');
   const [search, setSearch] = useState('');
   const [questionBuilderSearch, setQuestionBuilderSearch] = useState('');
-  const [editingId, setEditingId] = useState('');
+  /** When set, top “Add / edit test” form is editing this test (inline table edit removed). */
+  const [editingTestId, setEditingTestId] = useState('');
+  const testFormRef = useRef<HTMLFormElement | null>(null);
   const [kind, setKind] = useState<TestKind>('mock');
   const [isPublished, setIsPublished] = useState(true);
   const [dynamicFluctuationOnPublish, setDynamicFluctuationOnPublish] = useState(true);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
   const [isRefreshingTests, setIsRefreshingTests] = useState(false);
   const [selectedTest, setSelectedTest] = useState<TestItem | null>(null);
   const [questions, setQuestions] = useState<QuestionItem[]>([]);
@@ -1248,10 +1527,7 @@ function TestsTab({
   const [bulkImportFormat, setBulkImportFormat] = useState<'csv' | 'excel' | 'json'>('csv');
   const [bulkImportMode, setBulkImportMode] = useState<'append' | 'replace'>('append');
   const [bulkImportText, setBulkImportText] = useState('');
-  const [bulkImportError, setBulkImportError] = useState('');
   const [isImportingQuestions, setIsImportingQuestions] = useState(false);
-  const [qbMessage, setQbMessage] = useState('');
-  const [qbMessageType, setQbMessageType] = useState<'success' | 'error'>('success');
   const [editingQuestionId, setEditingQuestionId] = useState<number | null>(null);
   const [testsPage, setTestsPage] = useState(1);
   const [questionsPage, setQuestionsPage] = useState(1);
@@ -1481,27 +1757,9 @@ function TestsTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedQuestionTestId, items.length]);
 
-  useEffect(() => {
-    if (!success && !error) return;
-    const timer = window.setTimeout(() => {
-      setSuccess('');
-      setError('');
-    }, 4000);
-    return () => window.clearTimeout(timer);
-  }, [success, error]);
-
-  useEffect(() => {
-    if (!qbMessage) return;
-    const timer = window.setTimeout(() => {
-      setQbMessage('');
-    }, 4000);
-    return () => window.clearTimeout(timer);
-  }, [qbMessage]);
-
   async function load() {
     try {
       setIsRefreshingTests(true);
-      setError('');
       const res = await apiClient.get('/admin/tests');
       const mapped = Array.isArray(res.data?.items)
         ? res.data.items.map((x: any) => ({
@@ -1550,13 +1808,101 @@ function TestsTab({
       setItems(mapped);
       setTestsPage(1);
     } catch (err: any) {
-      setSuccess('');
-      setError(err?.response?.data?.error || 'Failed to load tests');
+      pushToast('error', err?.response?.data?.error || 'Failed to load tests');
     } finally {
       setIsRefreshingTests(false);
     }
   }
-  async function createTest(e: FormEvent) {
+
+  function resetTestFormToCreate() {
+    setEditingTestId('');
+    setTitle('');
+    setSlug('');
+    setSubcategory('');
+    setDurationMinutes('');
+    setQuestionCount('');
+    setTotalMarks('');
+    setExamDate('');
+    setSlotLabel('');
+    setCapacityTotal('');
+    setEnrolledCount('0');
+    setAttemptsAllowed('');
+    setLanguageMode('');
+    setExamMode('');
+    setNegativeMarkingText('');
+    setTestTypeLabel('');
+    setBadgeEnabled(true);
+    setBadgeText('');
+    setValidUntil('');
+    setAnswerKeyReleaseAt('');
+    setResultReleaseAt('');
+    setDynamicDateEnabled(false);
+    setDateCycleDays('0');
+    setPublishAt('');
+    setUnpublishAt('');
+    setResultVisibility('immediate');
+    setReattemptCooldownMinutes('0');
+    setLateJoinMinutes('0');
+    setNotifyBeforeMinutes('0');
+    setResumeEnabled(true);
+    setShuffleQuestions(false);
+    setShuffleOptions(false);
+    setFullscreenRequired(false);
+    setCopyPasteBlocked(false);
+    setNotifyOnPublish(true);
+    setSendEmailOnPublish(false);
+    setKind('mock');
+    setIsPublished(true);
+    setDynamicFluctuationOnPublish(true);
+  }
+
+  function applyTestToForm(t: TestItem) {
+    setTitle(t.title || '');
+    setSlug(t.slug || '');
+    setSubcategory(t.subcategory || '');
+    setKind(t.test_kind || 'mock');
+    setDurationMinutes(String(t.duration_minutes ?? ''));
+    setQuestionCount(String(t.question_count ?? ''));
+    setTotalMarks(String(t.total_marks ?? ''));
+    setExamDate(t.exam_date || '');
+    setValidUntil(t.valid_until || '');
+    setSlotLabel(t.slot_label || '');
+    setCapacityTotal(String(t.capacity_total ?? ''));
+    setEnrolledCount(String(t.enrolled_count ?? '0'));
+    setAttemptsAllowed(String(t.attempts_allowed ?? ''));
+    setLanguageMode(t.language_mode || '');
+    setExamMode(t.exam_mode || '');
+    setNegativeMarkingText(t.negative_marking_text || '');
+    setTestTypeLabel(t.test_type_label || '');
+    setBadgeEnabled(normalizeBoolean(t.badge_enabled, false));
+    setBadgeText(t.badge_text || '');
+    setAnswerKeyReleaseAt(toDateTimeLocal(t.answer_key_release_at));
+    setResultReleaseAt(toDateTimeLocal(t.result_release_at));
+    setDynamicDateEnabled(normalizeBoolean(t.dynamic_date_enabled, false));
+    setDateCycleDays(String(t.date_cycle_days ?? '0'));
+    setIsPublished(t.is_published !== false);
+    setDynamicFluctuationOnPublish(normalizeBoolean(t.dynamic_fluctuation_on_publish, true));
+    const ac = t.advanced_config;
+    setPublishAt(ac?.publishAt ? toDateTimeLocal(String(ac.publishAt)) : '');
+    setUnpublishAt(ac?.unpublishAt ? toDateTimeLocal(String(ac.unpublishAt)) : '');
+    setResultVisibility(ac?.resultVisibility === 'after_result_time' ? 'after_result_time' : 'immediate');
+    setReattemptCooldownMinutes(String(ac?.reattemptCooldownMinutes ?? '0'));
+    setLateJoinMinutes(String(ac?.lateJoinMinutes ?? '0'));
+    setNotifyBeforeMinutes(String(ac?.notifyBeforeMinutes ?? '0'));
+    setResumeEnabled(normalizeBoolean(ac?.resumeEnabled, true));
+    setShuffleQuestions(normalizeBoolean(ac?.shuffleQuestions, false));
+    setShuffleOptions(normalizeBoolean(ac?.shuffleOptions, false));
+    setFullscreenRequired(normalizeBoolean(ac?.fullscreenRequired, false));
+    setCopyPasteBlocked(normalizeBoolean(ac?.copyPasteBlocked, false));
+    setNotifyOnPublish(normalizeBoolean(ac?.notifyOnPublish, true));
+    setSendEmailOnPublish(normalizeBoolean(ac?.sendEmailOnPublish, false));
+  }
+
+  function cancelEditTest() {
+    resetTestFormToCreate();
+  }
+
+  async function handleTestFormSubmit(e: FormEvent) {
     e.preventDefault();
     const parsed = normalizeAndValidateTestPayload({
       title,
@@ -1599,151 +1945,61 @@ function TestsTab({
       dynamicFluctuationOnPublish,
     });
     if (parsed.error) {
-      setSuccess('');
-      setError(parsed.error);
+      pushToast('error', parsed.error);
       return;
     }
     if (!parsed.value) {
-      setSuccess('');
-      setError('Failed to prepare test payload');
+      pushToast('error', 'Failed to prepare test payload');
       return;
     }
     const data = parsed.value;
     try {
-      setError('');
-      await apiClient.post('/admin/tests', data);
-      setTitle('');
-      setSlug('');
-      setSubcategory('');
-      setDurationMinutes('');
-      setQuestionCount('');
-      setTotalMarks('');
-      setExamDate('');
-      setSlotLabel('');
-      setCapacityTotal('');
-      setEnrolledCount('0');
-      setAttemptsAllowed('');
-      setLanguageMode('');
-      setExamMode('');
-      setNegativeMarkingText('');
-      setTestTypeLabel('');
-      setBadgeEnabled(true);
-      setBadgeText('');
-      setValidUntil('');
-      setAnswerKeyReleaseAt('');
-      setResultReleaseAt('');
-      setDynamicDateEnabled(false);
-      setDateCycleDays('0');
-      setSuccess(`Test "${data.title}" created successfully.`);
-      setPublishAt('');
-      setUnpublishAt('');
-      setResultVisibility('immediate');
-      setReattemptCooldownMinutes('0');
-      setLateJoinMinutes('0');
-      setNotifyBeforeMinutes('0');
-      setResumeEnabled(true);
-      setShuffleQuestions(false);
-      setShuffleOptions(false);
-      setFullscreenRequired(false);
-      setCopyPasteBlocked(false);
-      setNotifyOnPublish(true);
-      setSendEmailOnPublish(false);
+      if (editingTestId) {
+        await apiClient.patch(`/admin/tests/${editingTestId}`, data);
+        pushToast('success', `Test "${data.title}" updated successfully.`);
+      } else {
+        await apiClient.post('/admin/tests', data);
+        pushToast('success', `Test "${data.title}" created successfully.`);
+      }
+      resetTestFormToCreate();
       await load();
     } catch (err: any) {
-      setSuccess('');
-      setError(err?.response?.data?.error || 'Failed to create test');
-    }
-  }
-  async function saveEdit(testId: string) {
-    try {
-      setError('');
-      const current = items.find((x) => x.id === testId);
-      if (!current) {
-        setSuccess('');
-        setError('Selected test not found');
-        return;
-      }
-      const parsed = normalizeAndValidateTestPayload({
-        title: current.title,
-        slug: current.slug,
-        subcategory: current.subcategory,
-        metaLine: current.meta_line,
-        durationMinutes: current.duration_minutes,
-        questionCount: current.question_count,
-        totalMarks: current.total_marks || 0,
-        examDate: current.exam_date || '',
-        slotLabel: current.slot_label || '',
-        capacityTotal: current.capacity_total || 0,
-        enrolledCount: current.enrolled_count || 0,
-        attemptsAllowed: current.attempts_allowed || 1,
-        languageMode: current.language_mode || 'Bilingual',
-        examMode: current.exam_mode || 'Practice',
-        negativeMarkingText: current.negative_marking_text || 'No',
-        testTypeLabel: current.test_type_label || 'Full Mock',
-        badgeEnabled: normalizeBoolean(current.badge_enabled, false),
-        badgeText: current.badge_text || 'Live',
-        validUntil: current.valid_until || '',
-        answerKeyReleaseAt: current.answer_key_release_at || '',
-        resultReleaseAt: current.result_release_at || '',
-        dynamicDateEnabled: normalizeBoolean(current.dynamic_date_enabled, false),
-        dateCycleDays: current.date_cycle_days || 0,
-        publishAt: current.advanced_config?.publishAt || '',
-        unpublishAt: current.advanced_config?.unpublishAt || '',
-        resultVisibility: current.advanced_config?.resultVisibility || 'immediate',
-        reattemptCooldownMinutes: current.advanced_config?.reattemptCooldownMinutes ?? 0,
-        lateJoinMinutes: current.advanced_config?.lateJoinMinutes ?? 0,
-        notifyBeforeMinutes: current.advanced_config?.notifyBeforeMinutes ?? 0,
-        resumeEnabled: normalizeBoolean(current.advanced_config?.resumeEnabled, true),
-        shuffleQuestions: normalizeBoolean(current.advanced_config?.shuffleQuestions, false),
-        shuffleOptions: normalizeBoolean(current.advanced_config?.shuffleOptions, false),
-        fullscreenRequired: normalizeBoolean(current.advanced_config?.fullscreenRequired, false),
-        copyPasteBlocked: normalizeBoolean(current.advanced_config?.copyPasteBlocked, false),
-        notifyOnPublish: normalizeBoolean(current.advanced_config?.notifyOnPublish, true),
-        sendEmailOnPublish: normalizeBoolean(current.advanced_config?.sendEmailOnPublish, false),
-        testKind: current.test_kind,
-        isPublished: current.is_published,
-        dynamicFluctuationOnPublish: normalizeBoolean(current.dynamic_fluctuation_on_publish, true),
-      });
-      if (parsed.error) {
-        setSuccess('');
-        setError(parsed.error);
-        return;
-      }
-      if (!parsed.value) {
-        setSuccess('');
-        setError('Failed to prepare test payload');
-        return;
-      }
-      await apiClient.patch(`/admin/tests/${current.id}`, parsed.value);
-      setEditingId('');
-      setSuccess(`Test "${parsed.value.title}" updated successfully.`);
-      await load();
-    } catch (err: any) {
-      setSuccess('');
-      setError(err?.response?.data?.error || 'Failed to update test');
+      pushToast('error', err?.response?.data?.error || (editingTestId ? 'Failed to update test' : 'Failed to create test'));
     }
   }
 
   async function deleteTest(id: string) {
-    if (!window.confirm('Delete this test?')) return;
+    const ok = await adminConfirm({
+      title: 'Delete test?',
+      message: 'This test and its configuration will be removed. You can cancel if you are unsure.',
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      variant: 'danger',
+    });
+    if (!ok) return;
     try {
-      setError('');
       const target = items.find((x) => x.id === id);
       await apiClient.delete(`/admin/tests/${id}`);
-      setSuccess(`Test "${target?.title || id}" deleted successfully.`);
+      if (editingTestId === id) resetTestFormToCreate();
+      pushToast('success', `Test "${target?.title || id}" deleted successfully.`);
       await load();
     } catch (err: any) {
-      setSuccess('');
-      setError(err?.response?.data?.error || 'Failed to delete test');
+      pushToast('error', err?.response?.data?.error || 'Failed to delete test');
     }
   }
 
   async function applyLiveBadgeToPublishedTests() {
-    const text = window.prompt('Badge text for published tests', badgeText || 'Live');
+    const text = await adminPrompt({
+      title: 'Badge text for published tests',
+      description: 'Shown on published tests when live badge is enabled.',
+      defaultValue: badgeText || 'Live',
+      placeholder: 'e.g. Live',
+      confirmLabel: 'Apply',
+      cancelLabel: 'Cancel',
+    });
     if (text === null) return;
     const finalText = text.trim() || 'Live';
     try {
-      setError('');
       const res = await apiClient.post('/admin/tests/badge/bulk-live', {
         badgeText: finalText,
         onlyPublished: true,
@@ -1752,16 +2008,14 @@ function TestsTab({
       setBadgeEnabled(true);
       setBadgeText(finalText);
       await load();
-      setSuccess(`Live badge applied to ${updatedCount} published test(s).`);
+      pushToast('success', `Live badge applied to ${updatedCount} published test(s).`);
     } catch (err: any) {
-      setSuccess('');
-      setError(err?.response?.data?.error || 'Failed to apply live badge to published tests');
+      pushToast('error', err?.response?.data?.error || 'Failed to apply live badge to published tests');
     }
   }
 
   async function loadQuestions(test: TestItem) {
     try {
-      setError('');
       setSelectedTest(test);
       if (mode === 'questionBuilder') {
         onSelectQuestionTest(test.id);
@@ -1782,16 +2036,14 @@ function TestsTab({
         isPublished: true,
       });
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load questions');
+      pushToast('error', err?.response?.data?.error || 'Failed to load questions');
     }
   }
 
   async function submitQuestion(e: FormEvent) {
     e.preventDefault();
     if (!selectedTest) {
-      setQbMessageType('error');
-      setQbMessage('Select a test first');
-      setError('Select a test first');
+      pushToast('error', 'Select a test first');
       return;
     }
     const stem = questionForm.stem.trim();
@@ -1802,21 +2054,15 @@ function TestsTab({
     const correctIndex = Number(questionForm.correctIndex);
     const explanation = questionForm.explanation.trim();
     if (!stem) {
-      setQbMessageType('error');
-      setQbMessage('Question statement is required');
-      setError('Question statement is required');
+      pushToast('error', 'Question statement is required');
       return;
     }
     if (!choiceA || !choiceB || !choiceC || !choiceD) {
-      setQbMessageType('error');
-      setQbMessage('All four options are required');
-      setError('All four options are required');
+      pushToast('error', 'All four options are required');
       return;
     }
     if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3) {
-      setQbMessageType('error');
-      setQbMessage('Please select a valid correct answer');
-      setError('Please select a valid correct answer');
+      pushToast('error', 'Please select a valid correct answer');
       return;
     }
     const createPosition = Number(nextQuestionPositionFrom(questions));
@@ -1838,20 +2084,18 @@ function TestsTab({
       isPublished: questionForm.isPublished,
     };
     try {
-      setError('');
-      setQbMessage('');
       if (editingQuestionId) {
         await apiClient.patch(`/admin/tests/${selectedTest.id}/questions/${editingQuestionId}`, payload);
       } else {
         await apiClient.post(`/admin/tests/${selectedTest.id}/questions`, payload);
       }
       await loadQuestions(selectedTest);
-      setQbMessageType('success');
-      setQbMessage(editingQuestionId ? 'Question updated successfully.' : 'Question added to bank successfully.');
+      pushToast(
+        'success',
+        editingQuestionId ? 'Question updated successfully.' : 'Question added to bank successfully.',
+      );
     } catch (err: any) {
-      setQbMessageType('error');
-      setQbMessage(err?.response?.data?.error || 'Failed to save question');
-      setError(err?.response?.data?.error || 'Failed to save question');
+      pushToast('error', err?.response?.data?.error || 'Failed to save question');
     }
   }
 
@@ -1873,31 +2117,20 @@ function TestsTab({
 
   async function importQuestionsBulk() {
     if (!selectedTest) {
-      setBulkImportError('Please select a test first.');
-      setQbMessageType('error');
-      setQbMessage('Select a test first');
-      setError('Select a test first');
+      pushToast('error', 'Please select a test first.');
       return;
     }
     if (!bulkImportText.trim()) {
       const msg = 'Please paste CSV/Excel/JSON data before importing.';
-      setBulkImportError(msg);
-      setQbMessageType('error');
-      setQbMessage(msg);
-      setError(msg);
+      pushToast('error', msg);
       return;
     }
     const parsed = parseQuestionImportText(bulkImportFormat, bulkImportText);
     if (parsed.error) {
-      setBulkImportError(parsed.error);
-      setQbMessageType('error');
-      setQbMessage(parsed.error);
-      setError(parsed.error);
+      pushToast('error', parsed.error);
       return;
     }
     try {
-      setBulkImportError('');
-      setError('');
       setIsImportingQuestions(true);
       const res = await apiClient.post(`/admin/tests/${selectedTest.id}/questions/import`, {
         mode: bulkImportMode,
@@ -1906,16 +2139,11 @@ function TestsTab({
       const inserted = Number(res.data?.inserted || 0);
       setBulkImportText('');
       setBulkImportOpen(false);
-      setSuccess(`Imported ${inserted} question(s) successfully.`);
-      setQbMessageType('success');
-      setQbMessage(`Imported ${inserted} question(s) successfully.`);
+      pushToast('success', `Imported ${inserted} question(s) successfully.`);
       await loadQuestions(selectedTest);
     } catch (err: any) {
       const msg = err?.response?.data?.error || 'Failed to import questions';
-      setBulkImportError(msg);
-      setQbMessageType('error');
-      setQbMessage(msg);
-      setError(msg);
+      pushToast('error', msg);
     } finally {
       setIsImportingQuestions(false);
     }
@@ -1924,17 +2152,20 @@ function TestsTab({
   async function deleteQuestion(questionId: number) {
     if (questionId < 0) return;
     if (!selectedTest) return;
-    if (!window.confirm('Delete this question?')) return;
+    const ok = await adminConfirm({
+      title: 'Delete this question?',
+      message: `This question will be removed from "${selectedTest.title}".`,
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      variant: 'danger',
+    });
+    if (!ok) return;
     try {
-      setError('');
       await apiClient.delete(`/admin/tests/${selectedTest.id}/questions/${questionId}`);
       await loadQuestions(selectedTest);
-      setQbMessageType('success');
-      setQbMessage('Question deleted successfully.');
+      pushToast('success', 'Question deleted successfully.');
     } catch (err: any) {
-      setQbMessageType('error');
-      setQbMessage(err?.response?.data?.error || 'Failed to delete question');
-      setError(err?.response?.data?.error || 'Failed to delete question');
+      pushToast('error', err?.response?.data?.error || 'Failed to delete question');
     }
   }
   const displayedQuestions = questions;
@@ -1991,7 +2222,16 @@ function TestsTab({
             Home category mapping tip: keep the same <b>Subcategory</b> for related exams (e.g. Patwari), and keep each
             <b> Test title</b> unique (e.g. Patwari - HP, Patwari - Punjab) so users can choose the correct exam.
           </p>
-          <form onSubmit={createTest} className="all-tests-create">
+          <form
+            ref={testFormRef}
+            onSubmit={handleTestFormSubmit}
+            className={`all-tests-create${editingTestId ? ' all-tests-create--editing' : ''}`}
+          >
+            {editingTestId && (
+              <p className="all-tests-edit-banner" role="status">
+                Editing test — use <b>Save changes</b> below, or <b>Cancel edit</b> to discard.
+              </p>
+            )}
             <div className="all-tests-section">
               <h4>Basic</h4>
               <div className="all-tests-grid">
@@ -2139,7 +2379,16 @@ function TestsTab({
                 <input type="checkbox" checked={badgeEnabled} onChange={(e) => setBadgeEnabled(e.target.checked)} />
                 show badge
               </label>
-              <button type="submit">Add Test</button>
+              {editingTestId ? (
+                <>
+                  <button type="button" className="ghost" onClick={cancelEditTest}>
+                    Cancel edit
+                  </button>
+                  <button type="submit">Save changes</button>
+                </>
+              ) : (
+                <button type="submit">Add Test</button>
+              )}
             </div>
           </form>
           <div className="inline-form all-tests-tools">
@@ -2238,8 +2487,6 @@ function TestsTab({
         </div>
       )}
 
-      {error && <p className="error">{error}</p>}
-      {success && <p className="success-msg">{success}</p>}
       {mode === 'allTests' && (
         <>
           <div className="list table tests-table">
@@ -2254,219 +2501,54 @@ function TestsTab({
             </div>
             {pagedVisibleItems.map((item) => (
               <div key={item.id} className="row">
-                {editingId === item.id ? (
-                  <>
-                    <div>
-                      <input
-                        value={item.title}
-                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, title: e.target.value } : x)))}
-                      />
-                      <input
-                        value={item.subcategory || ''}
-                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, subcategory: e.target.value } : x)))}
-                        placeholder="subcategory"
-                      />
-                      <input
-                        type="date"
-                        value={item.exam_date || ''}
-                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, exam_date: e.target.value } : x)))}
-                      />
-                      <input
-                        type="date"
-                        value={item.valid_until || ''}
-                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, valid_until: e.target.value } : x)))}
-                      />
-                      <input
-                        type="datetime-local"
-                        value={toDateTimeLocal(item.answer_key_release_at)}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, answer_key_release_at: e.target.value } : x)))
-                        }
-                      />
-                      <input
-                        type="datetime-local"
-                        value={toDateTimeLocal(item.result_release_at)}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, result_release_at: e.target.value } : x)))
-                        }
-                      />
-                    </div>
-                    <div>
-                      <input
-                        value={item.slug}
-                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, slug: e.target.value } : x)))}
-                      />
-                      <input
-                        value={item.slot_label || ''}
-                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, slot_label: e.target.value } : x)))}
-                        placeholder="slot label"
-                      />
-                      <input
-                        value={item.language_mode || ''}
-                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, language_mode: e.target.value } : x)))}
-                        placeholder="language"
-                      />
-                      <input
-                        value={item.exam_mode || ''}
-                        onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, exam_mode: e.target.value } : x)))}
-                        placeholder="mode"
-                      />
-                    </div>
-                    <div>
-                      <select
-                        value={item.test_kind}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, test_kind: e.target.value as TestKind } : x)))
-                        }
-                      >
-                        <option value="mock">mock</option>
-                        <option value="quiz">quiz</option>
-                      </select>
-                      <input
-                        type="number"
-                        value={item.duration_minutes ?? 0}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, duration_minutes: Number(e.target.value || 0) } : x)))
-                        }
-                        placeholder="duration"
-                      />
-                      <input
-                        type="number"
-                        value={item.question_count ?? 0}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, question_count: Number(e.target.value || 0) } : x)))
-                        }
-                        placeholder="questions"
-                      />
-                      <input
-                        type="number"
-                        value={item.total_marks ?? 0}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, total_marks: Number(e.target.value || 0) } : x)))
-                        }
-                        placeholder="marks"
-                      />
-                    </div>
-                    <label className="check-wrap">
-                      <input
-                        type="checkbox"
-                        checked={item.is_published}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, is_published: e.target.checked } : x)))
-                        }
-                      />
-                      published
-                    </label>
-                    <label className="check-wrap">
-                      <input
-                        type="checkbox"
-                        checked={item.dynamic_fluctuation_on_publish}
-                        onChange={(e) =>
-                          setItems((p) =>
-                            p.map((x) =>
-                              x.id === item.id ? { ...x, dynamic_fluctuation_on_publish: e.target.checked } : x,
-                            ),
-                          )
-                        }
-                      />
-                      fluctuation
-                    </label>
-                    <div>
-                      <input
-                        type="number"
-                        value={item.capacity_total ?? 0}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, capacity_total: Number(e.target.value || 0) } : x)))
-                        }
-                        placeholder="capacity"
-                      />
-                      <input
-                        type="number"
-                        value={item.enrolled_count ?? 0}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, enrolled_count: Number(e.target.value || 0) } : x)))
-                        }
-                        placeholder="enrolled"
-                      />
-                      <input
-                        type="number"
-                        value={item.attempts_allowed ?? 1}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, attempts_allowed: Number(e.target.value || 1) } : x)))
-                        }
-                        placeholder="attempts"
-                      />
-                      <input
-                        value={item.negative_marking_text || ''}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, negative_marking_text: e.target.value } : x)))
-                        }
-                        placeholder="negative marking"
-                      />
-                      <input
-                        value={item.test_type_label || ''}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, test_type_label: e.target.value } : x)))
-                        }
-                        placeholder="test type"
-                      />
-                      <label className="check-wrap">
-                        <input
-                          type="checkbox"
-                          checked={normalizeBoolean(item.badge_enabled, false)}
-                          onChange={(e) =>
-                            setItems((p) => p.map((x) => (x.id === item.id ? { ...x, badge_enabled: e.target.checked } : x)))
-                          }
-                        />
-                        show badge
-                      </label>
-                      <input
-                        value={item.badge_text || 'Live'}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, badge_text: e.target.value } : x)))
-                        }
-                        placeholder="badge text"
-                      />
-                      <label className="check-wrap">
-                        <input
-                          type="checkbox"
-                          checked={normalizeBoolean(item.dynamic_date_enabled, false)}
-                          onChange={(e) =>
-                            setItems((p) => p.map((x) => (x.id === item.id ? { ...x, dynamic_date_enabled: e.target.checked } : x)))
-                          }
-                        />
-                        dynamic date
-                      </label>
-                      <input
-                        type="number"
-                        value={item.date_cycle_days ?? 0}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, date_cycle_days: Number(e.target.value || 0) } : x)))
-                        }
-                        placeholder="cycle days"
-                      />
-                    </div>
-                    <button onClick={() => saveEdit(item.id)}>Save</button>
-                    <button className="ghost" onClick={() => setEditingId('')}>
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <span>{item.title}<br />{item.subcategory || '-'}</span>
-                    <span>{item.slug}<br />{item.exam_date || '-'}</span>
-                    <span>{item.test_kind}<br />{item.duration_minutes} min · {item.question_count} Q</span>
-                    <span>{item.is_published ? 'Published' : 'Hidden'}<br />{item.enrolled_count || 0}/{item.capacity_total || 0}</span>
-                    <span>{item.dynamic_fluctuation_on_publish ? 'Fluctuation: On' : 'Fluctuation: Off'}<br />{item.dynamic_date_enabled ? `Date: On (${item.date_cycle_days || 0}d)` : 'Date: Off'}<br />{item.badge_enabled ? `Badge: ${item.badge_text || 'Live'}` : 'Badge: Off'}</span>
-                    <button onClick={() => setEditingId(item.id)}>Edit</button>
-                    <div className="inline-form">
-                      <button onClick={() => loadQuestions(item)}>Open Builder</button>
-                      <button className="danger" onClick={() => deleteTest(item.id)}>
-                        Delete
-                      </button>
-                    </div>
-                  </>
-                )}
+                <span>
+                  {item.title}
+                  <br />
+                  {item.subcategory || '-'}
+                </span>
+                <span>
+                  {item.slug}
+                  <br />
+                  {item.exam_date || '-'}
+                </span>
+                <span>
+                  {item.test_kind}
+                  <br />
+                  {item.duration_minutes} min · {item.question_count} Q
+                </span>
+                <span>
+                  {item.is_published ? 'Published' : 'Hidden'}
+                  <br />
+                  {item.enrolled_count || 0}/{item.capacity_total || 0}
+                </span>
+                <span>
+                  {item.dynamic_fluctuation_on_publish ? 'Fluctuation: On' : 'Fluctuation: Off'}
+                  <br />
+                  {item.dynamic_date_enabled ? `Date: On (${item.date_cycle_days || 0}d)` : 'Date: Off'}
+                  <br />
+                  {item.badge_enabled ? `Badge: ${item.badge_text || 'Live'}` : 'Badge: Off'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    applyTestToForm(item);
+                    setEditingTestId(item.id);
+                    setAdvancedOpen(true);
+                    window.setTimeout(() => {
+                      testFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }, 0);
+                  }}
+                >
+                  Edit
+                </button>
+                <div className="inline-form">
+                  <button type="button" onClick={() => loadQuestions(item)}>
+                    Open Builder
+                  </button>
+                  <button type="button" className="danger" onClick={() => deleteTest(item.id)}>
+                    Delete
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -2499,11 +2581,6 @@ function TestsTab({
               <span>{selectedTest ? `Selected: ${selectedTest.title}` : ''}</span>
             </div>
           </div>
-          {qbMessage && (
-            <p className={qbMessageType === 'error' ? 'error qb-inline-msg' : 'success-msg qb-inline-msg'}>
-              {qbMessage}
-            </p>
-          )}
           <div className="qb-create-card">
             <button
               type="button"
@@ -2671,7 +2748,6 @@ function TestsTab({
                   value={bulkImportText}
                   onChange={(e) => {
                     setBulkImportText(e.target.value);
-                    if (bulkImportError) setBulkImportError('');
                   }}
                   placeholder={
                     bulkImportFormat === 'json'
@@ -2680,7 +2756,6 @@ function TestsTab({
                   }
                   className="qb-import-textarea"
                 />
-                {bulkImportError && <p className="error qb-import-error">{bulkImportError}</p>}
                 <div className="inline-form">
                   <button type="button" disabled={!selectedTest || isImportingQuestions} onClick={importQuestionsBulk}>
                     {isImportingQuestions ? 'Importing...' : 'Import Questions'}
@@ -2766,6 +2841,8 @@ function TestsTab({
 }
 
 function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
+  const { pushToast } = useAdminToast();
+  const { confirm: adminConfirm } = useAdminDialog();
   const [items, setItems] = useState<DailyDigestItem[]>([]);
   const [questionPrompt, setQuestionPrompt] = useState('');
   const [optionA, setOptionA] = useState('');
@@ -2778,14 +2855,18 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
   const [notifyUsers, setNotifyUsers] = useState(true);
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState('');
-  const [error, setError] = useState('');
   const [dailyReleaseHour, setDailyReleaseHour] = useState('10');
   const [dailyReleaseMinute, setDailyReleaseMinute] = useState('0');
   const [dailyTimezoneOffset, setDailyTimezoneOffset] = useState('330');
+  const DIGEST_LIST_PER_PAGE = 15;
+  const [digestListPage, setDigestListPage] = useState(1);
+
+  useEffect(() => {
+    setDigestListPage(1);
+  }, [search]);
 
   async function load() {
     try {
-      setError('');
       const [digestRes, settingsRes] = await Promise.all([
         apiClient.get('/admin/digest'),
         apiClient.get('/admin/settings'),
@@ -2796,12 +2877,11 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
       setDailyReleaseMinute(String(Math.max(0, Math.min(59, Number(schedule.releaseMinute ?? 0)))));
       setDailyTimezoneOffset(String(Math.max(-720, Math.min(840, Number(schedule.timezoneOffsetMinutes ?? 330)))));
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load daily digest items');
+      pushToast('error', err?.response?.data?.error || 'Failed to load daily digest items');
     }
   }
   async function saveDailySchedule() {
     try {
-      setError('');
       await apiClient.patch('/admin/settings', {
         dailyQuizSettings: {
           releaseHour: Number(dailyReleaseHour || '10'),
@@ -2810,14 +2890,14 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
         },
       });
       await load();
+      pushToast('success', 'Daily quiz schedule saved.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to save daily quiz schedule');
+      pushToast('error', err?.response?.data?.error || 'Failed to save daily quiz schedule');
     }
   }
   async function createDigestItem(e: FormEvent) {
     e.preventDefault();
     try {
-      setError('');
       await apiClient.post('/admin/digest', {
         questionPrompt,
         optionA,
@@ -2839,13 +2919,13 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
       setIsPublished(true);
       setNotifyUsers(true);
       await load();
+      pushToast('success', 'Digest item added.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to create daily digest item');
+      pushToast('error', err?.response?.data?.error || 'Failed to create daily digest item');
     }
   }
   async function saveDigestItem(item: DailyDigestItem) {
     try {
-      setError('');
       await apiClient.patch(`/admin/digest/${item.id}`, {
         questionPrompt: item.question_prompt,
         optionA: item.option_a,
@@ -2859,19 +2939,27 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
       });
       setEditingId('');
       await load();
+      pushToast('success', 'Digest item updated.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to update daily digest item');
+      pushToast('error', err?.response?.data?.error || 'Failed to update daily digest item');
     }
   }
 
   async function deleteDigestItem(id: string) {
-    if (!window.confirm('Delete this daily digest item?')) return;
+    const ok = await adminConfirm({
+      title: 'Delete daily digest item?',
+      message: 'This question + fact entry will be removed from the digest list.',
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      variant: 'danger',
+    });
+    if (!ok) return;
     try {
-      setError('');
       await apiClient.delete(`/admin/digest/${id}`);
       await load();
+      pushToast('success', 'Digest item deleted.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to delete daily digest item');
+      pushToast('error', err?.response?.data?.error || 'Failed to delete daily digest item');
     }
   }
 
@@ -2880,6 +2968,14 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
     if (!q) return true;
     return item.question_prompt.toLowerCase().includes(q) || item.fact_text.toLowerCase().includes(q);
   });
+  const totalDigestPages = Math.max(1, Math.ceil(visibleItems.length / DIGEST_LIST_PER_PAGE));
+  const safeDigestPage = Math.min(digestListPage, totalDigestPages);
+  const digestRangeStart = visibleItems.length === 0 ? 0 : (safeDigestPage - 1) * DIGEST_LIST_PER_PAGE + 1;
+  const digestRangeEnd = Math.min(safeDigestPage * DIGEST_LIST_PER_PAGE, visibleItems.length);
+  const pagedDigestItems = useMemo(() => {
+    const start = (safeDigestPage - 1) * DIGEST_LIST_PER_PAGE;
+    return visibleItems.slice(start, start + DIGEST_LIST_PER_PAGE);
+  }, [safeDigestPage, visibleItems]);
 
   return (
     <section className="panel-card">
@@ -2940,7 +3036,6 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
       </div>
       <button onClick={load}>Refresh Digest Items</button>
       <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search digest items" />
-      {error && <p className="error">{error}</p>}
       <div className="list table questions-table">
         <div className="row row-head">
           <span>Q</span>
@@ -2952,7 +3047,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
           <span>D</span>
           <span>Action</span>
         </div>
-        {visibleItems.map((item) => (
+        {pagedDigestItems.map((item) => (
           <div key={item.id} className="row">
             {editingId === item.id ? (
               <>
@@ -3027,7 +3122,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
           <span>Status</span>
           <span>Toggle</span>
         </div>
-        {visibleItems.map((item) => (
+        {pagedDigestItems.map((item) => (
           <div key={item.id} className="row">
             <span>{item.question_prompt.slice(0, 40)}</span>
             <span>{item.fact_text.slice(0, 70)}</span>
@@ -3037,7 +3132,6 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
             <button
               onClick={async () => {
                 try {
-                  setError('');
                   await apiClient.patch(`/admin/digest/${item.id}`, {
                     questionPrompt: item.question_prompt,
                     optionA: item.option_a,
@@ -3050,8 +3144,9 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
                     notifyUsers,
                   });
                   await load();
+                  pushToast('success', item.is_published ? 'Digest item unpublished.' : 'Digest item published.');
                 } catch (err: any) {
-                  setError(err?.response?.data?.error || 'Failed to update publish status');
+                  pushToast('error', err?.response?.data?.error || 'Failed to update publish status');
                 }
               }}
             >
@@ -3060,11 +3155,41 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
           </div>
         ))}
       </div>
+      {visibleItems.length > 0 ? (
+        <div className="pagination-wrap">
+          <span>
+            Page {safeDigestPage} of {totalDigestPages}
+          </span>
+          <span>
+            Showing {digestRangeStart}-{digestRangeEnd} of {visibleItems.length}
+          </span>
+          <div className="inline-form pagination-controls">
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setDigestListPage((p) => Math.max(1, p - 1))}
+              disabled={safeDigestPage <= 1}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setDigestListPage((p) => Math.min(totalDigestPages, p + 1))}
+              disabled={safeDigestPage >= totalDigestPages}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
 
 function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
+  const { pushToast } = useAdminToast();
+  const { confirm: adminConfirm } = useAdminDialog();
   const [items, setItems] = useState<DailyQuizItem[]>([]);
   const [questionPrompt, setQuestionPrompt] = useState('');
   const [optionA, setOptionA] = useState('');
@@ -3076,22 +3201,21 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
   const [isPublished, setIsPublished] = useState(true);
   const [notifyUsers, setNotifyUsers] = useState(true);
   const [editingId, setEditingId] = useState('');
-  const [error, setError] = useState('');
+  const DAILY_QUIZ_PER_PAGE = 15;
+  const [quizListPage, setQuizListPage] = useState(1);
 
   async function load() {
     try {
-      setError('');
       const res = await apiClient.get('/admin/daily-quiz');
       setItems(res.data?.items || []);
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load daily quiz items');
+      pushToast('error', err?.response?.data?.error || 'Failed to load daily quiz items');
     }
   }
 
   async function createDailyQuizItem(e: FormEvent) {
     e.preventDefault();
     try {
-      setError('');
       await apiClient.post('/admin/daily-quiz', {
         questionPrompt,
         optionA,
@@ -3113,14 +3237,14 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
       setIsPublished(true);
       setNotifyUsers(true);
       await load();
+      pushToast('success', 'Daily quiz item added.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to create daily quiz item');
+      pushToast('error', err?.response?.data?.error || 'Failed to create daily quiz item');
     }
   }
 
   async function saveDailyQuizItem(item: DailyQuizItem) {
     try {
-      setError('');
       await apiClient.patch(`/admin/daily-quiz/${item.id}`, {
         questionPrompt: item.questionPrompt,
         optionA: item.optionA,
@@ -3134,21 +3258,38 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
       });
       setEditingId('');
       await load();
+      pushToast('success', 'Daily quiz item updated.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to update daily quiz item');
+      pushToast('error', err?.response?.data?.error || 'Failed to update daily quiz item');
     }
   }
 
   async function deleteDailyQuizItem(id: string) {
-    if (!window.confirm('Delete this daily quiz item?')) return;
+    const ok = await adminConfirm({
+      title: 'Delete daily quiz item?',
+      message: 'This daily quiz entry will be removed.',
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      variant: 'danger',
+    });
+    if (!ok) return;
     try {
-      setError('');
       await apiClient.delete(`/admin/daily-quiz/${id}`);
       await load();
+      pushToast('success', 'Daily quiz item deleted.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to delete daily quiz item');
+      pushToast('error', err?.response?.data?.error || 'Failed to delete daily quiz item');
     }
   }
+
+  const totalQuizPages = Math.max(1, Math.ceil(items.length / DAILY_QUIZ_PER_PAGE));
+  const safeQuizPage = Math.min(quizListPage, totalQuizPages);
+  const quizRangeStart = items.length === 0 ? 0 : (safeQuizPage - 1) * DAILY_QUIZ_PER_PAGE + 1;
+  const quizRangeEnd = Math.min(safeQuizPage * DAILY_QUIZ_PER_PAGE, items.length);
+  const pagedQuizItems = useMemo(() => {
+    const start = (safeQuizPage - 1) * DAILY_QUIZ_PER_PAGE;
+    return items.slice(start, start + DAILY_QUIZ_PER_PAGE);
+  }, [items, safeQuizPage]);
 
   return (
     <section className="panel-card">
@@ -3183,7 +3324,6 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
       <div className="inline-form">
         <button onClick={load}>Refresh Daily Quiz Items</button>
       </div>
-      {error && <p className="error">{error}</p>}
       <div className="list table tests-table">
         <div className="row row-head">
           <span>Question</span>
@@ -3195,7 +3335,7 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
           <span>D</span>
           <span>Action</span>
         </div>
-        {items.map((item) => (
+        {pagedQuizItems.map((item) => (
           <div key={item.id} className="row">
             {editingId === item.id ? (
               <>
@@ -3254,7 +3394,7 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
           <span>Status</span>
           <span>Toggle</span>
         </div>
-        {items.map((item) => (
+        {pagedQuizItems.map((item) => (
           <div key={item.id} className="row">
             <span>{item.questionPrompt.slice(0, 60)}</span>
             <span>{item.explanation.slice(0, 80)}</span>
@@ -3262,11 +3402,11 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
             <button
               onClick={async () => {
                 try {
-                  setError('');
                   await apiClient.patch(`/admin/daily-quiz/${item.id}`, { ...item, isPublished: !item.isPublished });
                   await load();
+                  pushToast('success', item.isPublished ? 'Daily quiz item unpublished.' : 'Daily quiz item published.');
                 } catch (err: any) {
-                  setError(err?.response?.data?.error || 'Failed to update daily quiz publish status');
+                  pushToast('error', err?.response?.data?.error || 'Failed to update daily quiz publish status');
                 }
               }}
             >
@@ -3275,43 +3415,275 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
           </div>
         ))}
       </div>
+      {items.length > 0 ? (
+        <div className="pagination-wrap">
+          <span>
+            Page {safeQuizPage} of {totalQuizPages}
+          </span>
+          <span>
+            Showing {quizRangeStart}-{quizRangeEnd} of {items.length}
+          </span>
+          <div className="inline-form pagination-controls">
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setQuizListPage((p) => Math.max(1, p - 1))}
+              disabled={safeQuizPage <= 1}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setQuizListPage((p) => Math.min(totalQuizPages, p + 1))}
+              disabled={safeQuizPage >= totalQuizPages}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
 
 function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
+  const { pushToast, clearToasts } = useAdminToast();
+  const { confirm: adminConfirm } = useAdminDialog();
+  const featureImageInputIdBase = useId().replace(/:/g, '');
   const ARTICLES_PER_PAGE = 20;
   const [items, setItems] = useState<ArticleItem[]>([]);
-  const [feedKind, setFeedKind] = useState<'news' | 'job' | 'exam'>('news');
-  const [listFeedFilter, setListFeedFilter] = useState<'all' | 'news' | 'job' | 'exam'>('all');
+  const [feedKindOptions, setFeedKindOptions] = useState<string[]>(FALLBACK_ARTICLE_FEED_KINDS);
+  const [newFeedKind, setNewFeedKind] = useState('');
+  const [categoryOptions, setCategoryOptions] = useState<string[]>(FALLBACK_ARTICLE_CATEGORIES);
+  const [newCategoryInput, setNewCategoryInput] = useState('');
+  const [categorySaving, setCategorySaving] = useState(false);
+  const [feedKind, setFeedKind] = useState('news');
+  const [listFeedFilter, setListFeedFilter] = useState<'all' | string>('all');
+  const [feedKindsSaving, setFeedKindsSaving] = useState(false);
   const [headline, setHeadline] = useState('');
   const [summary, setSummary] = useState('');
   const [category, setCategory] = useState('');
   const [body, setBody] = useState('');
   const [linkUrl, setLinkUrl] = useState('');
+  const [featureImageUrl, setFeatureImageUrl] = useState('');
+  const [articleImageUploading, setArticleImageUploading] = useState(false);
   const [isPublished, setIsPublished] = useState(true);
-  const [sendEmail, setSendEmail] = useState(false);
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState('');
-  const [error, setError] = useState('');
   const [showArticleForm, setShowArticleForm] = useState(false);
   const [articlesPage, setArticlesPage] = useState(1);
 
   async function load() {
     try {
-      setError('');
-      const res = await apiClient.get('/admin/articles');
-      setItems(res.data?.items || []);
+      clearToasts();
+      const [articlesOutcome, kindsOutcome, categoriesOutcome] = await Promise.allSettled([
+        apiClient.get('/admin/articles', { params: { limit: 2000 } }),
+        apiClient.get('/admin/articles/feed-kinds'),
+        apiClient.get('/admin/articles/categories'),
+      ]);
+      let articlesErr = '';
+      let kindsErr = '';
+      let categoriesErr = '';
+      if (articlesOutcome.status === 'fulfilled') {
+        setItems(articlesOutcome.value.data?.items || []);
+      } else {
+        setItems([]);
+        articlesErr = formatAxiosErr(articlesOutcome.reason, 'Failed to load articles');
+      }
+      if (kindsOutcome.status === 'fulfilled') {
+        const kinds = kindsOutcome.value.data?.kinds;
+        if (Array.isArray(kinds) && kinds.length) {
+          setFeedKindOptions(kinds);
+          setFeedKind((prev) => (kinds.includes(prev) ? prev : kinds[0]));
+          setListFeedFilter((prev) => (prev === 'all' || kinds.includes(prev) ? prev : 'all'));
+        }
+      } else {
+        kindsErr = formatAxiosErr(kindsOutcome.reason, 'Failed to load content types');
+      }
+      if (categoriesOutcome.status === 'fulfilled') {
+        const cats = categoriesOutcome.value.data?.categories;
+        if (Array.isArray(cats) && cats.length) {
+          setCategoryOptions(cats);
+        }
+      } else {
+        categoriesErr = formatAxiosErr(categoriesOutcome.reason, 'Failed to load category list');
+      }
       setArticlesPage(1);
+      const msgs = [articlesErr, kindsErr, categoriesErr].filter(Boolean);
+      if (msgs.length >= 2) pushToast('error', msgs.join(' · '));
+      else if (articlesErr) pushToast('error', articlesErr);
+      else if (kindsErr) pushToast('warning', kindsErr);
+      else if (categoriesErr) pushToast('warning', categoriesErr);
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load articles');
+      pushToast('error',err?.response?.data?.error || 'Failed to load articles');
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function addFeedKind() {
+    const slug = normalizeClientFeedKindInput(newFeedKind);
+    if (!slug) {
+      pushToast('error','Invalid type: use lowercase letters, start with a letter, optional numbers/hyphen/underscore.');
+      return;
+    }
+    if (feedKindOptions.includes(slug)) {
+      setNewFeedKind('');
+      return;
+    }
+    try {
+      clearToasts();
+      setFeedKindsSaving(true);
+      const res = await apiClient.put('/admin/articles/feed-kinds', { kinds: [...feedKindOptions, slug] });
+      const next = res.data?.kinds as string[] | undefined;
+      if (next?.length) setFeedKindOptions(next);
+      setNewFeedKind('');
+      pushToast('success',`Content type "${slug}" saved.`);
+    } catch (err: any) {
+      pushToast('error',err?.response?.data?.error || 'Failed to add content type');
+    } finally {
+      setFeedKindsSaving(false);
+    }
+  }
+
+  async function removeFeedKind(k: string) {
+    if (feedKindOptions.length <= 1) {
+      pushToast('error','Keep at least one content type.');
+      return;
+    }
+    const previousKinds = feedKindOptions;
+    const previousFeedKind = feedKind;
+    const previousListFeedFilter = listFeedFilter;
+    const next = feedKindOptions.filter((x) => x !== k);
+    try {
+      clearToasts();
+      setFeedKindsSaving(true);
+      setFeedKindOptions(next);
+      if (feedKind === k) setFeedKind(next[0]);
+      if (listFeedFilter === k) setListFeedFilter('all');
+      const res = await apiClient.put('/admin/articles/feed-kinds', { kinds: next });
+      const saved = res.data?.kinds as string[] | undefined;
+      if (saved?.length) {
+        setFeedKindOptions(saved);
+        if (feedKind === k) setFeedKind(saved[0]);
+        if (listFeedFilter === k) setListFeedFilter('all');
+      }
+      pushToast('success',`Content type "${k}" removed.`);
+    } catch (err: any) {
+      setFeedKindOptions(previousKinds);
+      setFeedKind(previousFeedKind);
+      setListFeedFilter(previousListFeedFilter);
+      pushToast('error',err?.response?.data?.error || 'Failed to update content types');
+    } finally {
+      setFeedKindsSaving(false);
+    }
+  }
+
+  async function addArticleCategory() {
+    const label = normalizeClientCategoryLabel(newCategoryInput);
+    if (!label) {
+      pushToast('error', 'Enter a category name (letters/words, max 120 characters).');
+      return;
+    }
+    if (categoryOptions.some((c) => c.toLowerCase() === label.toLowerCase())) {
+      setNewCategoryInput('');
+      return;
+    }
+    try {
+      clearToasts();
+      setCategorySaving(true);
+      const res = await apiClient.put('/admin/articles/categories', { categories: [...categoryOptions, label] });
+      const next = res.data?.categories as string[] | undefined;
+      if (next?.length) setCategoryOptions(next);
+      setNewCategoryInput('');
+      setCategory(label);
+      pushToast('success', `Category "${label}" saved.`);
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to add category');
+    } finally {
+      setCategorySaving(false);
+    }
+  }
+
+  async function removeArticleCategory(cat: string) {
+    if (categoryOptions.length <= 1) {
+      pushToast('error', 'Keep at least one category.');
+      return;
+    }
+    const previous = categoryOptions;
+    const next = categoryOptions.filter((x) => x !== cat);
+    try {
+      clearToasts();
+      setCategorySaving(true);
+      setCategoryOptions(next);
+      if (category === cat) setCategory('');
+      const res = await apiClient.put('/admin/articles/categories', { categories: next });
+      const saved = res.data?.categories as string[] | undefined;
+      if (saved?.length) {
+        setCategoryOptions(saved);
+        if (category === cat) setCategory('');
+      }
+      pushToast('success', `Category "${cat}" removed from list.`);
+    } catch (err: any) {
+      setCategoryOptions(previous);
+      pushToast('error', err?.response?.data?.error || 'Failed to update categories');
+    } finally {
+      setCategorySaving(false);
+    }
+  }
+
+  async function postArticleImageFile(file: File): Promise<string> {
+    if (!isAdminUploadImageMime(file.type)) {
+      throw new Error('Unsupported image type (use JPEG, PNG, WebP, GIF, AVIF, or SVG).');
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      throw new Error('Image size must be 5MB or less');
+    }
+    const dataBase64 = await fileToBase64Data(file);
+    const res = await apiClient.post('/admin/uploads/article-image', {
+      fileName: file.name,
+      contentType: file.type,
+      dataBase64,
+    });
+    const url = String(res.data?.imageUrl || '').trim();
+    if (!url) throw new Error('Upload response missing image URL');
+    return url;
+  }
+
+  async function uploadArticleFeatureImage(file: File, onDone: (url: string) => void) {
+    try {
+      clearToasts();
+      setArticleImageUploading(true);
+      const url = await postArticleImageFile(file);
+      onDone(url);
+      pushToast('success','Feature image uploaded.');
+    } catch (err: any) {
+      pushToast('error',err?.response?.data?.error || err?.message || 'Failed to upload image');
+    } finally {
+      setArticleImageUploading(false);
+    }
+  }
+
+  async function uploadArticleBodyImageForEditor(file: File): Promise<string> {
+    try {
+      clearToasts();
+      const url = await postArticleImageFile(file);
+      pushToast('success','Image inserted in article body.');
+      return url;
+    } catch (err: any) {
+      pushToast('error',err?.response?.data?.error || err?.message || 'Failed to upload image');
+      throw err;
     }
   }
 
   async function createArticle(e: FormEvent) {
     e.preventDefault();
     try {
-      setError('');
+      clearToasts();
       await apiClient.post('/admin/articles', {
         feedKind,
         headline,
@@ -3319,26 +3691,27 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
         category,
         body,
         linkUrl,
+        featureImageUrl: featureImageUrl.trim() || null,
         isPublished,
-        sendEmail,
       });
       setHeadline('');
       setSummary('');
       setCategory('');
       setBody('');
       setLinkUrl('');
+      setFeatureImageUrl('');
       setIsPublished(true);
-      setSendEmail(false);
       setShowArticleForm(false);
       await load();
+      pushToast('success','Article created successfully.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to create article');
+      pushToast('error',err?.response?.data?.error || 'Failed to create article');
     }
   }
 
   async function saveArticle(item: ArticleItem) {
     try {
-      setError('');
+      clearToasts();
       await apiClient.patch(`/admin/articles/${item.id}`, {
         feedKind: item.feed_kind,
         headline: item.headline,
@@ -3346,24 +3719,33 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
         category: item.category,
         body: item.body,
         linkUrl: item.link_url,
+        featureImageUrl: item.feature_image_url != null && item.feature_image_url !== '' ? item.feature_image_url : null,
         isPublished: item.is_published,
-        sendEmail,
       });
       setEditingId('');
       await load();
+      pushToast('success','Article saved successfully.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to update article');
+      pushToast('error',err?.response?.data?.error || 'Failed to update article');
     }
   }
 
   async function deleteArticle(id: string) {
-    if (!window.confirm('Delete this article?')) return;
+    const ok = await adminConfirm({
+      title: 'Delete article?',
+      message: 'This article will be permanently removed from the feed.',
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      variant: 'danger',
+    });
+    if (!ok) return;
     try {
-      setError('');
+      clearToasts();
       await apiClient.delete(`/admin/articles/${id}`);
       await load();
+      pushToast('success','Article deleted.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to delete article');
+      pushToast('error',err?.response?.data?.error || 'Failed to delete article');
     }
   }
 
@@ -3374,7 +3756,13 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
     return (
       item.headline.toLowerCase().includes(q) ||
       item.summary.toLowerCase().includes(q) ||
-      item.category.toLowerCase().includes(q)
+      item.category.toLowerCase().includes(q) ||
+      String(item.body || '')
+        .toLowerCase()
+        .includes(q) ||
+      String(item.link_url || '')
+        .toLowerCase()
+        .includes(q)
     );
   });
   const totalArticlesPages = Math.max(1, Math.ceil(visibleItems.length / ARTICLES_PER_PAGE));
@@ -3399,47 +3787,174 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
           </span>
         </button>
         {showArticleForm && (
-          <form onSubmit={createArticle} className="article-form">
+          <>
+            <div className="article-feed-kinds-panel">
+              <h4>Content types</h4>
+              <p className="muted article-feed-kinds-hint">
+                Apni list banayein — ye labels &quot;Content Type&quot; dropdown mein dikhenge. List se hataane se purane articles delete
+                nahi hote.
+              </p>
+              <div className="inline-form article-feed-kind-add">
+                <input
+                  value={newFeedKind}
+                  onChange={(e) => setNewFeedKind(e.target.value)}
+                  placeholder="e.g. announcement"
+                  aria-label="New content type id"
+                  disabled={feedKindsSaving}
+                />
+                <button type="button" onClick={() => void addFeedKind()} disabled={feedKindsSaving}>
+                  {feedKindsSaving ? 'Saving...' : 'Add type'}
+                </button>
+              </div>
+              <div className="feed-kind-chips-wrap" aria-label="Content types list">
+                {feedKindOptions.map((k) => (
+                  <span key={k} className="feed-kind-chip">
+                    <code>{k}</code>
+                    <button
+                      type="button"
+                      className="feed-kind-chip-remove"
+                      disabled={feedKindOptions.length <= 1 || feedKindsSaving}
+                      aria-label={`Remove ${k}`}
+                      onClick={() => void removeFeedKind(k)}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="article-feed-kinds-panel">
+              <h4>Categories</h4>
+              <p className="muted article-feed-kinds-hint">
+                Ye list &quot;Category&quot; dropdown mein dikhegi — naye naam yahan add karein. List se hataane se purane articles
+                delete nahi hote; unka category purana text ban kar dropdown mein dikhega jab tak aap change na karein.
+              </p>
+              <div className="inline-form article-feed-kind-add">
+                <input
+                  value={newCategoryInput}
+                  onChange={(e) => setNewCategoryInput(e.target.value)}
+                  placeholder="e.g. Rajasthan GK"
+                  aria-label="New category name"
+                  disabled={categorySaving}
+                />
+                <button type="button" onClick={() => void addArticleCategory()} disabled={categorySaving}>
+                  {categorySaving ? 'Saving...' : 'Add category'}
+                </button>
+              </div>
+              <div className="feed-kind-chips-wrap" aria-label="Categories list">
+                {categoryOptions.map((c) => (
+                  <span key={c} className="feed-kind-chip">
+                    <span>{c}</span>
+                    <button
+                      type="button"
+                      className="feed-kind-chip-remove"
+                      disabled={categoryOptions.length <= 1 || categorySaving}
+                      aria-label={`Remove ${c}`}
+                      onClick={() => void removeArticleCategory(c)}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+            <form onSubmit={createArticle} className="article-form">
             <label>
               Content Type
-              <select value={feedKind} onChange={(e) => setFeedKind(e.target.value as 'news' | 'job' | 'exam')}>
-                <option value="news">News</option>
-                <option value="job">Job</option>
-                <option value="exam">Exam</option>
+              <select
+                value={feedKindOptions.includes(feedKind) ? feedKind : feedKindOptions[0]}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setFeedKind(v);
+                }}
+              >
+                {feedKindOptions.map((k) => (
+                  <option key={k} value={k}>
+                    {k}
+                  </option>
+                ))}
               </select>
             </label>
+            <div className="article-form-field-span article-feature-upload-block">
+              <span className="article-field-label">Feature image</span>
+              <div className="article-feature-upload-row">
+                <input
+                  id={`${featureImageInputIdBase}-create-feature-file`}
+                  type="file"
+                  accept={ADMIN_IMAGE_UPLOAD_MIME_TYPES.join(',')}
+                  disabled={articleImageUploading}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = '';
+                    if (f) void uploadArticleFeatureImage(f, setFeatureImageUrl);
+                  }}
+                />
+                {articleImageUploading ? <span className="muted">Uploading…</span> : null}
+              </div>
+              {featureImageUrl ? (
+                <div className="article-feature-preview">
+                  <img src={featureImageUrl} alt="" />
+                  <button type="button" className="ghost" onClick={() => setFeatureImageUrl('')}>
+                    Clear image
+                  </button>
+                </div>
+              ) : null}
+              <input
+                id={`${featureImageInputIdBase}-create-feature-url`}
+                type="url"
+                value={featureImageUrl}
+                onChange={(e) => setFeatureImageUrl(e.target.value)}
+                placeholder="Or paste image URL (optional)"
+                aria-label="Feature image URL (optional)"
+              />
+            </div>
             <label>
               Headline
               <input value={headline} onChange={(e) => setHeadline(e.target.value)} placeholder="Enter headline" required />
             </label>
             <label>
               Category
-              <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Medical" />
+              <select value={category} onChange={(e) => setCategory(e.target.value)}>
+                <option value="">— Select category —</option>
+                {categoryOptions.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+                {category && !categoryOptions.includes(category) ? (
+                  <option value={category}>{category} (not in list)</option>
+                ) : null}
+              </select>
             </label>
             <label>
               Link URL
               <input value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="URL here" />
             </label>
-            <label>
+            <label className="article-form-field-span">
               Summary
               <input value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="Brief summary" />
             </label>
-            <label>
-              Article Body
-              <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write main content..." />
-            </label>
-            <div className="inline-form article-form-actions">
-              <label className="check-wrap">
-                <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
-                published
-              </label>
-              <label className="check-wrap">
-                <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
-                send email
-              </label>
-              <button type="submit">Add Article</button>
+            <div className="article-form-field-span article-rich-field">
+              <span className="article-field-label">Article body (rich text)</span>
+              <ArticleBodyEditor
+                value={body}
+                onChange={setBody}
+                placeholder="Headings, lists, links — saved as HTML for the app."
+                persistenceKey="article-compose"
+                uploadBodyImage={uploadArticleBodyImageForEditor}
+              />
+            </div>
+            <div className="article-form-field-span">
+              <div className="inline-form article-form-actions">
+                <label className="check-wrap">
+                  <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
+                  published
+                </label>
+                <button type="submit">Add Article</button>
+              </div>
             </div>
           </form>
+          </>
         )}
       </div>
       <div className="inline-form articles-tools">
@@ -3449,14 +3964,16 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
         <select
           value={listFeedFilter}
           onChange={(e) => {
-            setListFeedFilter(e.target.value as 'all' | 'news' | 'job' | 'exam');
+            setListFeedFilter(e.target.value);
             setArticlesPage(1);
           }}
         >
           <option value="all">All types</option>
-          <option value="news">News only</option>
-          <option value="job">Job only</option>
-          <option value="exam">Exam only</option>
+          {feedKindOptions.map((k) => (
+            <option key={k} value={k}>
+              {k} only
+            </option>
+          ))}
         </select>
         <input
           value={search}
@@ -3467,7 +3984,6 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
           placeholder="Search articles..."
         />
       </div>
-      {error && <p className="error">{error}</p>}
       <div className="list table articles-table">
         <div className="row row-head">
           <span>Type</span>
@@ -3477,59 +3993,166 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
           <span>Actions</span>
           <span />
         </div>
-        {pagedArticles.map((item) => (
-          <div key={item.id} className="row">
-            {editingId === item.id ? (
-              <>
-                <select
-                  value={item.feed_kind}
-                  onChange={(e) =>
-                    setItems((p) => p.map((x) => (x.id === item.id ? { ...x, feed_kind: e.target.value as 'news' | 'job' | 'exam' } : x)))
-                  }
-                >
-                  <option value="news">news</option>
-                  <option value="job">job</option>
-                  <option value="exam">exam</option>
-                </select>
-                <input
-                  value={item.headline}
-                  onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, headline: e.target.value } : x)))}
-                />
-                <input
-                  value={item.category}
-                  onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, category: e.target.value } : x)))}
-                />
-                <label className="check-wrap">
-                  <input
-                    type="checkbox"
-                    checked={item.is_published}
-                    onChange={(e) =>
-                      setItems((p) => p.map((x) => (x.id === item.id ? { ...x, is_published: e.target.checked } : x)))
-                    }
-                  />
-                  published
+        {pagedArticles.map((item) =>
+          editingId === item.id ? (
+            <div key={item.id} className="articles-edit-fullwidth">
+              <div className="articles-edit-grid">
+                <label>
+                  Content Type
+                  <select
+                    value={item.feed_kind}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setItems((p) => p.map((x) => (x.id === item.id ? { ...x, feed_kind: v } : x)));
+                    }}
+                  >
+                    {feedKindOptions.map((k) => (
+                      <option key={k} value={k}>
+                        {k}
+                      </option>
+                    ))}
+                    {!feedKindOptions.includes(item.feed_kind) && item.feed_kind ? (
+                      <option value={item.feed_kind}>{item.feed_kind} (not in list)</option>
+                    ) : null}
+                  </select>
                 </label>
-                <button onClick={() => saveArticle(item)}>Save</button>
-                <button className="danger" onClick={() => deleteArticle(item.id)}>
-                  Delete
-                </button>
-              </>
-            ) : (
-              <>
-                <span>{item.feed_kind}</span>
-                <span title={item.summary || item.body}>{item.headline}</span>
-                <span>{item.category || '-'}</span>
-                <span>{item.is_published ? 'Published' : 'Hidden'}</span>
-                <button title="Edit" aria-label="Edit" onClick={() => setEditingId(item.id)}>
-                  <span aria-hidden="true">✎</span>
-                </button>
-                <button className="danger" title="Delete" aria-label="Delete" onClick={() => deleteArticle(item.id)}>
-                  <span aria-hidden="true">🗑</span>
-                </button>
-              </>
-            )}
-          </div>
-        ))}
+                <label>
+                  Headline
+                  <input
+                    value={item.headline}
+                    onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, headline: e.target.value } : x)))}
+                  />
+                </label>
+                <label>
+                  Category
+                  <select
+                    value={item.category}
+                    onChange={(e) =>
+                      setItems((p) => p.map((x) => (x.id === item.id ? { ...x, category: e.target.value } : x)))
+                    }
+                  >
+                    <option value="">— Select category —</option>
+                    {categoryOptions.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                    {item.category && !categoryOptions.includes(item.category) ? (
+                      <option value={item.category}>{item.category} (not in list)</option>
+                    ) : null}
+                  </select>
+                </label>
+                <label>
+                  Link URL
+                  <input
+                    value={item.link_url}
+                    onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, link_url: e.target.value } : x)))}
+                  />
+                </label>
+                <div className="articles-edit-span article-feature-upload-block">
+                  <span className="article-field-label">Feature image</span>
+                  <div className="article-feature-upload-row">
+                    <input
+                      id={`${featureImageInputIdBase}-edit-${item.id}-feature-file`}
+                      type="file"
+                      accept={ADMIN_IMAGE_UPLOAD_MIME_TYPES.join(',')}
+                      disabled={articleImageUploading}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = '';
+                        if (f) {
+                          void uploadArticleFeatureImage(f, (url) =>
+                            setItems((p) => p.map((x) => (x.id === item.id ? { ...x, feature_image_url: url } : x))),
+                          );
+                        }
+                      }}
+                    />
+                    {articleImageUploading ? <span className="muted">Uploading…</span> : null}
+                  </div>
+                  {item.feature_image_url ? (
+                    <div className="article-feature-preview">
+                      <img src={item.feature_image_url} alt="" />
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() =>
+                          setItems((p) => p.map((x) => (x.id === item.id ? { ...x, feature_image_url: null } : x)))
+                        }
+                      >
+                        Clear image
+                      </button>
+                    </div>
+                  ) : null}
+                  <input
+                    id={`${featureImageInputIdBase}-edit-${item.id}-feature-url`}
+                    type="url"
+                    value={item.feature_image_url ?? ''}
+                    onChange={(e) =>
+                      setItems((p) =>
+                        p.map((x) => (x.id === item.id ? { ...x, feature_image_url: e.target.value || null } : x)),
+                      )
+                    }
+                    placeholder="Or paste image URL"
+                    aria-label="Feature image URL (optional)"
+                  />
+                </div>
+                <label className="articles-edit-span">
+                  Summary
+                  <input
+                    value={item.summary}
+                    onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, summary: e.target.value } : x)))}
+                  />
+                </label>
+                <div className="articles-edit-span articles-edit-rich">
+                  <span className="article-field-label">Article body (rich text)</span>
+                  <ArticleBodyEditor
+                    key={item.id}
+                    value={item.body}
+                    onChange={(html) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, body: html } : x)))}
+                    persistenceKey={`article-edit-${item.id}`}
+                    uploadBodyImage={uploadArticleBodyImageForEditor}
+                  />
+                </div>
+                <div className="articles-edit-actions">
+                  <label className="check-wrap">
+                    <input
+                      type="checkbox"
+                      checked={item.is_published}
+                      onChange={(e) =>
+                        setItems((p) => p.map((x) => (x.id === item.id ? { ...x, is_published: e.target.checked } : x)))
+                      }
+                    />
+                    published
+                  </label>
+                  <div className="inline-form">
+                    <button type="button" onClick={() => saveArticle(item)}>
+                      Save
+                    </button>
+                    <button type="button" className="ghost" onClick={() => setEditingId('')}>
+                      Cancel
+                    </button>
+                    <button type="button" className="danger" onClick={() => deleteArticle(item.id)}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div key={item.id} className="row">
+              <span>{item.feed_kind}</span>
+              <span title={item.summary || item.body}>{item.headline}</span>
+              <span>{item.category || '-'}</span>
+              <span>{item.is_published ? 'Published' : 'Hidden'}</span>
+              <button title="Edit" aria-label="Edit" onClick={() => setEditingId(item.id)}>
+                <span aria-hidden="true">✎</span>
+              </button>
+              <button className="danger" title="Delete" aria-label="Delete" onClick={() => deleteArticle(item.id)}>
+                <span aria-hidden="true">🗑</span>
+              </button>
+            </div>
+          ),
+        )}
       </div>
       <div className="pagination-wrap">
         <span>
@@ -3582,6 +4205,8 @@ const DEFAULT_PROFILE_MENU_ITEMS: ProfileMenuItem[] = [
   { id: 'delete-account', title: 'Delete account', subtitle: 'Remove account and clear this device', path: '/delete-account', enabled: true },
 ];
 function ProfileTab({ apiClient }: { apiClient: typeof api }) {
+  const { pushToast } = useAdminToast();
+  const { confirm: adminConfirm } = useAdminDialog();
   const PROFILE_ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<ProfileMenuItem[]>(DEFAULT_PROFILE_MENU_ITEMS);
   const [selectedMenuItemId, setSelectedMenuItemId] = useState<string>(DEFAULT_PROFILE_MENU_ITEMS[0].id);
@@ -3591,7 +4216,6 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
   const [enabled, setEnabled] = useState(true);
   const [editingId, setEditingId] = useState('');
   const [page, setPage] = useState(1);
-  const [error, setError] = useState('');
 
   useEffect(() => {
     load();
@@ -3600,7 +4224,6 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
 
   async function load() {
     try {
-      setError('');
       const res = await apiClient.get('/admin/settings');
       const rawItems = res.data?.settings?.profileMenuItems;
       if (Array.isArray(rawItems) && rawItems.length) {
@@ -3623,21 +4246,22 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
       }
       setPage(1);
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load profile menu');
+      pushToast('error', err?.response?.data?.error || 'Failed to load profile menu');
     }
   }
 
-  async function saveAll(nextItems: ProfileMenuItem[]) {
+  async function saveAll(nextItems: ProfileMenuItem[]): Promise<boolean> {
     try {
-      setError('');
       const res = await apiClient.patch('/admin/settings', { profileMenuItems: nextItems });
       const savedItems = res.data?.settings?.profileMenuItems || nextItems;
       setItems(savedItems);
       if (!savedItems.some((x: ProfileMenuItem) => x.id === selectedMenuItemId) && savedItems.length) {
         setSelectedMenuItemId(savedItems[0].id);
       }
+      return true;
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to save profile menu');
+      pushToast('error', err?.response?.data?.error || 'Failed to save profile menu');
+      return false;
     }
   }
 
@@ -3646,12 +4270,14 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
     const cleanTitle = title.trim();
     const cleanPath = path.trim();
     if (!cleanTitle || !cleanPath) {
-      setError('Title and path are required');
+      pushToast('error', 'Title and path are required');
       return;
     }
     const id = cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `item-${Date.now()}`;
     const nextItems = [{ id, title: cleanTitle, subtitle: subtitle.trim(), path: cleanPath, enabled }, ...items];
-    await saveAll(nextItems);
+    const ok = await saveAll(nextItems);
+    if (!ok) return;
+    pushToast('success', 'Menu item added.');
     setTitle('');
     setSubtitle('');
     setPath('');
@@ -3661,14 +4287,23 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
 
   async function updateItem(item: ProfileMenuItem) {
     const nextItems = items.map((x) => (x.id === item.id ? item : x));
-    await saveAll(nextItems);
+    const ok = await saveAll(nextItems);
+    if (!ok) return;
     setEditingId('');
   }
 
   async function removeItem(id: string) {
-    if (!window.confirm('Delete this profile menu item?')) return;
+    const ok = await adminConfirm({
+      title: 'Delete profile menu item?',
+      message: 'This entry will be removed from the profile menu list.',
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      variant: 'danger',
+    });
+    if (!ok) return;
     const nextItems = items.filter((x) => x.id !== id);
-    await saveAll(nextItems);
+    const saved = await saveAll(nextItems);
+    if (!saved) return;
     setPage(1);
   }
 
@@ -3686,7 +4321,7 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
     const temp = nextItems[targetIndex];
     nextItems[targetIndex] = nextItems[index];
     nextItems[index] = temp;
-    await saveAll(nextItems);
+    void saveAll(nextItems);
   }
 
   const totalPages = Math.max(1, Math.ceil(items.length / PROFILE_ITEMS_PER_PAGE));
@@ -3735,7 +4370,6 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
       <div className="inline-form">
         <button type="button" onClick={load}>Load Profile Items</button>
       </div>
-      {error && <p className="error">{error}</p>}
       <div className="list table">
         <div className="row row-head profile-menu-row">
           <span>Title</span>
@@ -3838,15 +4472,19 @@ function SimpleContentSettingsTab({
   apiClient,
   title,
   settingsKey,
+  showTitleField,
 }: {
   apiClient: typeof api;
   title: string;
   settingsKey: 'helpSupportContent' | 'achievementContent' | 'privacyPolicyContent' | 'termsOfUseContent';
+  /** When set, load/save `title` from API and show a heading field (used for Achievement). */
+  showTitleField?: boolean;
 }) {
+  const { pushToast } = useAdminToast();
   const [body, setBody] = useState('');
+  const [contentTitle, setContentTitle] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
 
   useEffect(() => {
     load();
@@ -3855,13 +4493,16 @@ function SimpleContentSettingsTab({
 
   async function load() {
     try {
-      setError('');
       setLoading(true);
       const res = await apiClient.get('/admin/settings');
-      const value = String(res.data?.settings?.[settingsKey]?.body || '');
+      const block = res.data?.settings?.[settingsKey] as { body?: string; title?: string } | undefined;
+      const value = String(block?.body || '');
       setBody(value);
+      if (showTitleField) {
+        setContentTitle(String(block?.title || title).trim().slice(0, 120));
+      }
     } catch (err: any) {
-      setError(err?.response?.data?.error || `Failed to load ${title}`);
+      pushToast('error', err?.response?.data?.error || `Failed to load ${title}`);
     } finally {
       setLoading(false);
     }
@@ -3869,17 +4510,18 @@ function SimpleContentSettingsTab({
 
   async function save() {
     try {
-      setError('');
       setSaving(true);
+      const resolvedTitle = showTitleField ? String(contentTitle || '').trim() || title : title;
       await apiClient.patch('/admin/settings', {
         [settingsKey]: {
-          title,
+          title: resolvedTitle,
           body,
         },
       });
       await load();
+      pushToast('success', `${title} saved.`);
     } catch (err: any) {
-      setError(err?.response?.data?.error || `Failed to save ${title}`);
+      pushToast('error', err?.response?.data?.error || `Failed to save ${title}`);
     } finally {
       setSaving(false);
     }
@@ -3894,13 +4536,44 @@ function SimpleContentSettingsTab({
         <p className="sub">Loading...</p>
       ) : (
         <>
-          <textarea
-            className="simple-content-editor"
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder={`Write ${title} content`}
-            rows={16}
-          />
+          {showTitleField && (
+            <>
+              <p className="muted" style={{ marginTop: 0 }}>
+                <b>App par card heading</b> (optional). Neeche wala box poora message hai jo Achievements screen par dikhega.
+              </p>
+              <label className="simple-content-field">
+                <span>Heading (title)</span>
+                <input
+                  className="simple-content-title-input"
+                  value={contentTitle}
+                  onChange={(e) => setContentTitle(e.target.value.slice(0, 120))}
+                  placeholder="e.g. How achievements work"
+                  maxLength={120}
+                  aria-label="Achievement section title"
+                />
+              </label>
+            </>
+          )}
+          {showTitleField ? (
+            <label className="simple-content-field simple-content-field-spaced">
+              <span>Message (body)</span>
+              <textarea
+                className="simple-content-editor"
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                placeholder="Yahan likho jo users ko Achievements page par dikhana hai…"
+                rows={14}
+              />
+            </label>
+          ) : (
+            <textarea
+              className="simple-content-editor"
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder={`Write ${title} content`}
+              rows={16}
+            />
+          )}
           <div className="inline-form">
             <button type="button" onClick={save} disabled={saving}>
               {saving ? 'Saving...' : 'Save Content'}
@@ -3911,7 +4584,6 @@ function SimpleContentSettingsTab({
           </div>
         </>
       )}
-      {error && <p className="error">{error}</p>}
     </section>
   );
 }
@@ -3925,27 +4597,25 @@ function SupportInboxSettingsTab({
   title: string;
   settingsKey: 'feedbackInbox' | 'helpSupportInbox' | 'reportIssueInbox';
 }) {
+  const { pushToast } = useAdminToast();
+  const { confirm: adminConfirm } = useAdminDialog();
   const ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<SupportInboxItem[]>([]);
   const [user, setUser] = useState('');
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [status, setStatus] = useState<SupportInboxItem['status']>('new');
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [page, setPage] = useState(1);
 
   useEffect(() => {
-    load();
+    load(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsKey]);
 
-  async function load() {
+  async function load(announceSuccess = false) {
     try {
-      setError('');
-      setSuccess('');
       setLoading(true);
       const res = await apiClient.get('/admin/settings');
       const rawItems = res.data?.settings?.[settingsKey]?.items;
@@ -3953,6 +4623,15 @@ function SupportInboxSettingsTab({
         ? rawItems.map((item: any, index: number) => ({
             id: String(item.id || `${settingsKey}-${index + 1}`),
             user: String(item.user || ''),
+            publicId: String(
+              item.publicId != null && item.publicId !== ''
+                ? item.publicId
+                : item.sixDigitPublicId != null
+                  ? item.sixDigitPublicId
+                  : '',
+            ),
+            userId: String(item.userId || ''),
+            userEmail: String(item.userEmail || ''),
             subject: String(item.subject || ''),
             message: String(item.message || ''),
             createdAt: String(item.createdAt || ''),
@@ -3961,18 +4640,18 @@ function SupportInboxSettingsTab({
         : [];
       setItems(mapped);
       setPage(1);
-      setSuccess(`${title} records refreshed successfully.`);
+      if (announceSuccess) {
+        pushToast('success', `${title} records refreshed successfully.`);
+      }
     } catch (err: any) {
-      setError(err?.response?.data?.error || `Failed to load ${title}`);
+      pushToast('error', err?.response?.data?.error || `Failed to load ${title}`);
     } finally {
       setLoading(false);
     }
   }
 
-  async function saveAll(nextItems: SupportInboxItem[], successText: string) {
+  async function saveAll(nextItems: SupportInboxItem[], successText: string): Promise<boolean> {
     try {
-      setError('');
-      setSuccess('');
       setSaving(true);
       await apiClient.patch('/admin/settings', {
         [settingsKey]: {
@@ -3980,9 +4659,11 @@ function SupportInboxSettingsTab({
         },
       });
       setItems(nextItems);
-      setSuccess(successText);
+      pushToast('success', successText);
+      return true;
     } catch (err: any) {
-      setError(err?.response?.data?.error || `Failed to save ${title}`);
+      pushToast('error', err?.response?.data?.error || `Failed to save ${title}`);
+      return false;
     } finally {
       setSaving(false);
     }
@@ -3994,13 +4675,16 @@ function SupportInboxSettingsTab({
     const cleanSubject = subject.trim();
     const cleanMessage = message.trim();
     if (!cleanUser || !cleanSubject || !cleanMessage) {
-      setError('User, subject and message are required');
+      pushToast('error', 'User, subject and message are required');
       return;
     }
     const nextItems: SupportInboxItem[] = [
       {
         id: `${settingsKey}-${Date.now()}`,
         user: cleanUser,
+        publicId: '',
+        userId: '',
+        userEmail: '',
         subject: cleanSubject,
         message: cleanMessage,
         createdAt: new Date().toISOString(),
@@ -4008,7 +4692,8 @@ function SupportInboxSettingsTab({
       },
       ...items,
     ];
-    await saveAll(nextItems, `${title} record added successfully.`);
+    const ok = await saveAll(nextItems, `${title} record added successfully.`);
+    if (!ok) return;
     setUser('');
     setSubject('');
     setMessage('');
@@ -4017,7 +4702,14 @@ function SupportInboxSettingsTab({
   }
 
   async function removeItem(id: string) {
-    if (!window.confirm('Delete this record?')) return;
+    const ok = await adminConfirm({
+      title: `Delete ${title} record?`,
+      message: 'This demo / seed inbox row will be removed from the list.',
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      variant: 'danger',
+    });
+    if (!ok) return;
     const nextItems = items.filter((x) => x.id !== id);
     await saveAll(nextItems, `${title} record deleted successfully.`);
   }
@@ -4051,15 +4743,14 @@ function SupportInboxSettingsTab({
         <button type="submit" className="support-inbox-btn" disabled={loading || saving}>
           {saving ? 'Saving...' : 'Add'}
         </button>
-        <button type="button" className="ghost support-inbox-btn" onClick={load} disabled={loading || saving}>
+        <button type="button" className="ghost support-inbox-btn" onClick={() => load(true)} disabled={loading || saving}>
           {loading ? 'Reloading...' : 'Reload'}
         </button>
       </form>
-      {success && <p className="success-msg">{success}</p>}
-      {error && <p className="error">{error}</p>}
       <div className="list table support-table">
         <div className="row row-head">
           <span>User</span>
+          <span>Public ID</span>
           <span>Subject</span>
           <span>Message</span>
           <span>Time</span>
@@ -4068,6 +4759,9 @@ function SupportInboxSettingsTab({
         {pagedItems.map((item) => (
           <div key={item.id} className="row">
             <span>{item.user}</span>
+            <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: 'var(--text-muted, #5f6b7a)' }}>
+              {item.publicId?.trim() ? item.publicId : '—'}
+            </span>
             <span>{item.subject}</span>
             <span>{item.message}</span>
             <span>{item.createdAt}</span>
@@ -4102,6 +4796,7 @@ function SupportInboxSettingsTab({
 }
 
 function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
+  const { pushToast } = useAdminToast();
   const [settings, setSettings] = useState<HomeContentSettings>({
     welcomeText: 'Welcome {name}',
     quickActionsTitle: 'Quick actions',
@@ -4159,7 +4854,6 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   const [newExamCategoryMenuTitle, setNewExamCategoryMenuTitle] = useState('');
   const [previewColumns, setPreviewColumns] = useState<2 | 3 | 4>(3);
   const [bannerFile, setBannerFile] = useState<File | null>(null);
-  const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [uploadingBanner, setUploadingBanner] = useState(false);
   const autoSaveReadyRef = useRef(false);
@@ -4189,10 +4883,9 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   async function persistHomeContent(currentSettings: HomeContentSettings, opts?: { silent?: boolean }) {
     const silent = opts?.silent === true;
     try {
-      if (!silent) setError('');
       const draftValidationError = validateHomeContentDraft(currentSettings);
       if (draftValidationError) {
-        if (!silent) setError(draftValidationError);
+        if (!silent) pushToast('error', draftValidationError);
         return;
       }
       const normalizedSections = currentSettings.sections
@@ -4218,11 +4911,11 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
         }))
         .filter((section) => section.title && section.items.length > 0);
       if (normalizedSections.length === 0) {
-        if (!silent) setError('At least one Category section with one or more items is required');
+        if (!silent) pushToast('error', 'At least one Category section with one or more items is required');
         return;
       }
       if (normalizedQuickActionSections.length === 0) {
-        if (!silent) setError('At least one Quick actions section with valid actions is required');
+        if (!silent) pushToast('error', 'At least one Quick actions section with valid actions is required');
         return;
       }
       setSaving(true);
@@ -4300,8 +4993,9 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
           studentUpdateWidgetHtml: generatedStudentUpdateHtml,
         },
       });
+      if (!silent) pushToast('success', 'Home content saved.');
     } catch (err: any) {
-      if (!silent) setError(err?.response?.data?.error || 'Failed to save home content');
+      if (!silent) pushToast('error', err?.response?.data?.error || 'Failed to save home content');
     } finally {
       setSaving(false);
     }
@@ -4309,7 +5003,6 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
 
   async function load() {
     try {
-      setError('');
       const [settingsRes, articleRes] = await Promise.all([apiClient.get('/admin/settings'), apiClient.get('/admin/articles')]);
       const res = settingsRes;
       const home = res.data?.settings?.homeContent;
@@ -4421,7 +5114,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
         });
       }
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load home content');
+      pushToast('error', err?.response?.data?.error || 'Failed to load home content');
     }
   }
 
@@ -4514,16 +5207,15 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
 
   async function uploadAndAddBanner() {
     if (!bannerFile) return;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(bannerFile.type)) {
-      setError('Only JPG, PNG, or WEBP files are allowed');
+    if (!isAdminUploadImageMime(bannerFile.type)) {
+      pushToast('error', 'Unsupported image type (use JPEG, PNG, WebP, GIF, AVIF, or SVG).');
       return;
     }
     if (bannerFile.size > 5 * 1024 * 1024) {
-      setError('Image size must be 5MB or less');
+      pushToast('error', 'Image size must be 5MB or less');
       return;
     }
     try {
-      setError('');
       setUploadingBanner(true);
       const dataBase64 = await toBase64(bannerFile);
       const res = await apiClient.post('/admin/uploads/banner', {
@@ -4538,8 +5230,9 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
         banners: [...p.banners, { id: `banner-${Date.now()}`, imageUrl, enabled: true }],
       }));
       setBannerFile(null);
+      pushToast('success', 'Banner uploaded.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || err?.message || 'Failed to upload banner');
+      pushToast('error', err?.response?.data?.error || err?.message || 'Failed to upload banner');
     } finally {
       setUploadingBanner(false);
     }
@@ -4556,7 +5249,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
             id: `news-slide-${Date.now()}-${article.id.slice(0, 8)}`,
             articleId: article.id,
             headline: article.headline,
-            imageUrl: '',
+            imageUrl: String(article.feature_image_url || '').trim(),
             enabled: true,
           },
         ],
@@ -4852,7 +5545,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
       <div className="inline-form">
         <input
           type="file"
-          accept="image/png,image/jpeg,image/webp"
+          accept={ADMIN_IMAGE_UPLOAD_MIME_TYPES.join(',')}
           onChange={(e) => setBannerFile(e.target.files?.[0] || null)}
         />
         <button type="button" onClick={uploadAndAddBanner} disabled={uploadingBanner || !bannerFile}>
@@ -5492,7 +6185,6 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
           {saving ? 'Saving...' : 'Save All'}
         </button>
       </div>
-      {error && <p className="error">{error}</p>}
     </section>
   );
 }
@@ -5526,32 +6218,43 @@ function ExamCategoriesTab({ apiClient }: { apiClient: typeof api }) {
 }
 
 function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperAdmin: boolean }) {
+  const { pushToast } = useAdminToast();
   const [settings, setSettings] = useState<AppSettings>({
     maintenanceMode: false,
     maintenanceMessage: '',
     registrationOpen: true,
+    jobExamArticleAnnouncementEmail: true,
     emailEventToggles: { ...DEFAULT_EMAIL_EVENT_TOGGLES },
     resultUnlockEmailSettings: { enabled: true, delayHours: 3 },
+    adminImageExportFormats: { ...DEFAULT_ADMIN_IMAGE_EXPORT_FORMATS },
   });
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
 
   async function load() {
     try {
-      setError('');
       setLoading(true);
       const res = await apiClient.get('/admin/settings');
       const incoming = res.data?.settings || {};
       setSettings((prev) => ({
         ...prev,
         ...incoming,
+        jobExamArticleAnnouncementEmail:
+          incoming.jobExamArticleAnnouncementEmail !== undefined
+            ? incoming.jobExamArticleAnnouncementEmail === true
+            : prev.jobExamArticleAnnouncementEmail !== false,
         emailEventToggles: {
           ...DEFAULT_EMAIL_EVENT_TOGGLES,
           ...(incoming.emailEventToggles || {}),
         },
+        adminImageExportFormats: {
+          ...DEFAULT_ADMIN_IMAGE_EXPORT_FORMATS,
+          ...(incoming.adminImageExportFormats && typeof incoming.adminImageExportFormats === 'object'
+            ? incoming.adminImageExportFormats
+            : {}),
+        },
       }));
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load settings');
+      pushToast('error', err?.response?.data?.error || 'Failed to load settings');
     } finally {
       setLoading(false);
     }
@@ -5560,12 +6263,12 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
   async function save() {
     if (!isSuperAdmin) return;
     try {
-      setError('');
       setLoading(true);
       const res = await apiClient.patch('/admin/settings', settings);
       setSettings(res.data?.settings || settings);
+      pushToast('success', 'Settings saved.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to save settings');
+      pushToast('error', err?.response?.data?.error || 'Failed to save settings');
     } finally {
       setLoading(false);
     }
@@ -5615,6 +6318,20 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
           />
           Result unlock emails enabled
         </label>
+        <label className="check-wrap">
+          <input
+            type="checkbox"
+            checked={settings.jobExamArticleAnnouncementEmail !== false}
+            onChange={(e) =>
+              setSettings((p) => ({
+                ...p,
+                jobExamArticleAnnouncementEmail: e.target.checked,
+              }))
+            }
+            disabled={!isSuperAdmin}
+          />
+          Job / Exam article announcement emails
+        </label>
         {EMAIL_EVENT_TOGGLE_FIELDS.map((item) => (
           <label key={item.key} className="check-wrap">
             <input
@@ -5626,6 +6343,29 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
                   emailEventToggles: {
                     ...DEFAULT_EMAIL_EVENT_TOGGLES,
                     ...(p.emailEventToggles || {}),
+                    [item.key]: e.target.checked,
+                  },
+                }))
+              }
+              disabled={!isSuperAdmin}
+            />
+            {item.label}
+          </label>
+        ))}
+        <p className="muted" style={{ margin: '12px 0 6px', fontSize: '0.9rem', fontWeight: 600 }}>
+          Admin image uploads (banners and article images)
+        </p>
+        {ADMIN_IMAGE_EXPORT_CHECKBOXES.map((item) => (
+          <label key={item.key} className="check-wrap">
+            <input
+              type="checkbox"
+              checked={settings.adminImageExportFormats?.[item.key] === true}
+              onChange={(e) =>
+                setSettings((p) => ({
+                  ...p,
+                  adminImageExportFormats: {
+                    ...DEFAULT_ADMIN_IMAGE_EXPORT_FORMATS,
+                    ...(p.adminImageExportFormats || {}),
                     [item.key]: e.target.checked,
                   },
                 }))
@@ -5664,25 +6404,55 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
       ) : (
         <button disabled title="Only super admin can update settings">Restricted</button>
       )}
-      {error && <p className="error">{error}</p>}
     </section>
   );
 }
 
 function AuditLogsTab({ apiClient }: { apiClient: typeof api }) {
+  const { pushToast } = useAdminToast();
   const [items, setItems] = useState<AuditLogItem[]>([]);
-  const [limit, setLimit] = useState('120');
-  const [error, setError] = useState('');
+  const [auditPage, setAuditPage] = useState(1);
+  const [auditPageSize, setAuditPageSize] = useState(50);
+  const [auditTotal, setAuditTotal] = useState(0);
 
-  async function load() {
+  async function fetchLogs(page: number) {
+    const p = Math.max(1, page);
     try {
-      setError('');
-      const res = await apiClient.get('/admin/audit-logs', { params: { limit: Number(limit || '120') } });
-      setItems(res.data?.items || []);
+      const offset = (p - 1) * auditPageSize;
+      const res = await apiClient.get('/admin/audit-logs', {
+        params: { limit: auditPageSize, offset },
+      });
+      const total = Number(res.data?.total ?? 0);
+      const rows = res.data?.items || [];
+      const totalPages = Math.max(1, Math.ceil(total / auditPageSize));
+      const clampedPage = Math.min(p, totalPages);
+      if (clampedPage !== p && total > 0) {
+        const offset2 = (clampedPage - 1) * auditPageSize;
+        const res2 = await apiClient.get('/admin/audit-logs', {
+          params: { limit: auditPageSize, offset: offset2 },
+        });
+        setAuditPage(clampedPage);
+        setItems(res2.data?.items || []);
+        setAuditTotal(Number(res2.data?.total ?? total));
+        return;
+      }
+      setAuditPage(clampedPage);
+      setItems(rows);
+      setAuditTotal(total);
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load audit logs');
+      pushToast('error', err?.response?.data?.error || 'Failed to load audit logs');
     }
   }
+
+  useEffect(() => {
+    void fetchLogs(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auditPageSize]);
+
+  const totalAuditPages = Math.max(1, Math.ceil(auditTotal / auditPageSize) || 1);
+  const safeAuditPage = Math.min(auditPage, totalAuditPages);
+  const auditRangeStart = auditTotal === 0 ? 0 : (safeAuditPage - 1) * auditPageSize + 1;
+  const auditRangeEnd = Math.min(safeAuditPage * auditPageSize, auditTotal);
 
   return (
     <section className="panel-card">
@@ -5690,10 +6460,24 @@ function AuditLogsTab({ apiClient }: { apiClient: typeof api }) {
         <h3>Audit Logs</h3>
       </div>
       <div className="inline-form">
-        <input value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="Limit" type="number" min={20} max={300} />
-        <button onClick={load}>Load Logs</button>
+        <label className="check-wrap" style={{ gap: 8 }}>
+          Rows per page
+          <select
+            value={auditPageSize}
+            onChange={(e) => {
+              setAuditPageSize(Number(e.target.value) || 50);
+              setAuditPage(1);
+            }}
+          >
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </label>
+        <button type="button" onClick={() => void fetchLogs(safeAuditPage)}>
+          Refresh
+        </button>
       </div>
-      {error && <p className="error">{error}</p>}
       <div className="list table audit-table">
         <div className="row row-head">
           <span>Time</span>
@@ -5712,47 +6496,106 @@ function AuditLogsTab({ apiClient }: { apiClient: typeof api }) {
           </div>
         ))}
       </div>
+      <div className="pagination-wrap">
+        <span>
+          Page {safeAuditPage} of {totalAuditPages}
+        </span>
+        <span>
+          Showing {auditRangeStart}-{auditRangeEnd} of {auditTotal}
+        </span>
+        <div className="inline-form pagination-controls">
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => void fetchLogs(safeAuditPage - 1)}
+            disabled={safeAuditPage <= 1}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => void fetchLogs(safeAuditPage + 1)}
+            disabled={safeAuditPage >= totalAuditPages}
+          >
+            Next
+          </button>
+        </div>
+      </div>
     </section>
   );
 }
+const USERS_PAGE_SIZE = 50;
+
 function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperAdmin: boolean }) {
+  const { pushToast } = useAdminToast();
+  const { confirm: adminConfirm, prompt: adminPrompt } = useAdminDialog();
   const [items, setItems] = useState<UserItem[]>([]);
   const [query, setQuery] = useState('');
-  const [error, setError] = useState('');
+  const [usersPage, setUsersPage] = useState(1);
+  const [usersTotal, setUsersTotal] = useState(0);
+  const [usersLoading, setUsersLoading] = useState(true);
 
-  async function load() {
+  useEffect(() => {
+    void fetchUsers(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function fetchUsers(page: number) {
+    const p = Math.max(1, page);
+    setUsersLoading(true);
     try {
-      setError('');
-      const res = await apiClient.get('/admin/users', { params: { q: query } });
-      setItems(res.data?.items || []);
+      const offset = (p - 1) * USERS_PAGE_SIZE;
+      const res = await apiClient.get('/admin/users', {
+        params: { q: query, limit: USERS_PAGE_SIZE, offset },
+      });
+      const total = Number(res.data?.total ?? 0);
+      const rows = res.data?.items || [];
+      const totalPages = Math.max(1, Math.ceil(total / USERS_PAGE_SIZE));
+      const clampedPage = Math.min(p, totalPages);
+      if (clampedPage !== p && total > 0) {
+        const offset2 = (clampedPage - 1) * USERS_PAGE_SIZE;
+        const res2 = await apiClient.get('/admin/users', {
+          params: { q: query, limit: USERS_PAGE_SIZE, offset: offset2 },
+        });
+        setUsersPage(clampedPage);
+        setItems(res2.data?.items || []);
+        setUsersTotal(Number(res2.data?.total ?? total));
+        return;
+      }
+      setUsersPage(clampedPage);
+      setItems(rows);
+      setUsersTotal(total);
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to load users');
+      pushToast('error', err?.response?.data?.error || 'Failed to load users');
+    } finally {
+      setUsersLoading(false);
     }
   }
 
   async function toggleAdmin(user: UserItem) {
     try {
-      setError('');
       await apiClient.patch(`/admin/users/${user.id}/admin`, {
         isAdmin: !user.is_admin,
         isSuperAdmin: user.is_super_admin,
       });
-      await load();
+      await fetchUsers(usersPage);
+      pushToast('success', 'Admin role updated.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to update admin role');
+      pushToast('error', err?.response?.data?.error || 'Failed to update admin role');
     }
   }
 
   async function toggleSuperAdmin(user: UserItem) {
     try {
-      setError('');
       await apiClient.patch(`/admin/users/${user.id}/admin`, {
         isAdmin: true,
         isSuperAdmin: !user.is_super_admin,
       });
-      await load();
+      await fetchUsers(usersPage);
+      pushToast('success', 'Super admin role updated.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to update admin role');
+      pushToast('error', err?.response?.data?.error || 'Failed to update admin role');
     }
   }
 
@@ -5760,42 +6603,72 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
     const shouldBan = !user.is_banned;
     let reason = '';
     if (shouldBan) {
-      reason = window.prompt(`Ban reason for ${user.email}`, user.ban_reason || 'Policy violation') || '';
-      if (!reason.trim()) return;
+      const entered = await adminPrompt({
+        title: `Ban user — ${user.email}`,
+        description: 'This reason may be shown to the user or in admin logs.',
+        defaultValue: user.ban_reason || 'Policy violation',
+        placeholder: 'Ban reason',
+        confirmLabel: 'Ban user',
+        cancelLabel: 'Cancel',
+        required: true,
+        multiline: true,
+        rows: 3,
+      });
+      if (entered === null) return;
+      reason = entered;
     }
     try {
-      setError('');
       await apiClient.patch(`/admin/users/${user.id}/ban`, {
         isBanned: shouldBan,
         banReason: reason.trim(),
       });
-      await load();
+      await fetchUsers(usersPage);
+      pushToast('success', shouldBan ? 'User banned.' : 'User unbanned.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to update ban status');
+      pushToast('error', err?.response?.data?.error || 'Failed to update ban status');
     }
   }
 
   async function revokeSessions(user: UserItem) {
-    if (!window.confirm(`Revoke all login sessions for ${user.email}?`)) return;
+    const ok = await adminConfirm({
+      title: 'Revoke all sessions?',
+      message: `All active logins for ${user.email} will be signed out.`,
+      confirmLabel: 'Revoke',
+      cancelLabel: 'Cancel',
+      variant: 'danger',
+    });
+    if (!ok) return;
     try {
-      setError('');
       await apiClient.post(`/admin/users/${user.id}/revoke-sessions`);
-      await load();
+      await fetchUsers(usersPage);
+      pushToast('success', 'Sessions revoked.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to revoke sessions');
+      pushToast('error', err?.response?.data?.error || 'Failed to revoke sessions');
     }
   }
 
   async function deleteUser(user: UserItem) {
-    if (!window.confirm(`Delete user ${user.email}? This cannot be undone.`)) return;
+    const ok = await adminConfirm({
+      title: 'Delete user permanently?',
+      message: `Account ${user.email} will be removed. This cannot be undone.`,
+      confirmLabel: 'Delete user',
+      cancelLabel: 'Cancel',
+      variant: 'danger',
+    });
+    if (!ok) return;
     try {
-      setError('');
       await apiClient.delete(`/admin/users/${user.id}`);
-      await load();
+      await fetchUsers(usersPage);
+      pushToast('success', 'User deleted.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to delete user');
+      pushToast('error', err?.response?.data?.error || 'Failed to delete user');
     }
   }
+
+  const totalUsersPages = Math.max(1, Math.ceil(usersTotal / USERS_PAGE_SIZE));
+  const safeUsersPage = Math.min(usersPage, totalUsersPages);
+  const usersRangeStart = usersTotal === 0 ? 0 : (safeUsersPage - 1) * USERS_PAGE_SIZE + 1;
+  const usersRangeEnd = Math.min(safeUsersPage * USERS_PAGE_SIZE, usersTotal);
 
   return (
     <section className="panel-card">
@@ -5803,10 +6676,11 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
         <h3>User Access Control</h3>
       </div>
       <div className="inline-form">
-        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search users" />
-        <button onClick={load}>Load Users</button>
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name, email, phone, or user id" />
+        <button type="button" onClick={() => void fetchUsers(1)} disabled={usersLoading}>
+          {usersLoading ? 'Loading…' : 'Search / refresh'}
+        </button>
       </div>
-      {error && <p className="error">{error}</p>}
       <div className="list table users-table">
         <div className="row row-head">
           <span>Name</span>
@@ -5815,6 +6689,16 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
           <span>Ban Status</span>
           <span>Actions</span>
         </div>
+        {usersLoading && items.length === 0 ? (
+          <div className="row" style={{ gridColumn: '1 / -1', padding: '16px', color: 'var(--text-muted, #5f6b7a)' }}>
+            Loading users…
+          </div>
+        ) : null}
+        {!usersLoading && items.length === 0 ? (
+          <div className="row" style={{ gridColumn: '1 / -1', padding: '16px', color: 'var(--text-muted, #5f6b7a)' }}>
+            {query.trim() ? 'No users match this search.' : 'No users yet.'}
+          </div>
+        ) : null}
         {items.map((item) => (
           <div key={item.id} className="row">
             <span>{item.display_name || '-'}</span>
@@ -5822,19 +6706,21 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
             <span>{item.is_super_admin ? 'Super Admin' : item.is_admin ? 'Admin' : 'User'}</span>
             <span>{item.is_banned ? `Banned: ${item.ban_reason || 'No reason'}` : 'Active'}</span>
             {isSuperAdmin ? (
-              <div className="inline-form">
-                <button onClick={() => toggleAdmin(item)}>{item.is_admin ? 'Remove Admin' : 'Make Admin'}</button>
-                <button onClick={() => toggleSuperAdmin(item)}>
+              <div className="inline-form users-table-actions">
+                <button type="button" onClick={() => toggleAdmin(item)}>
+                  {item.is_admin ? 'Remove Admin' : 'Make Admin'}
+                </button>
+                <button type="button" onClick={() => toggleSuperAdmin(item)}>
                   {item.is_super_admin ? 'Remove Super Admin' : 'Make Super Admin'}
                 </button>
-                <button className="ghost" onClick={() => toggleBan(item)}>
+                <button type="button" className="ghost" onClick={() => toggleBan(item)}>
                   {item.is_banned ? 'Unban User' : 'Ban User'}
                 </button>
-                <button className="ghost" onClick={() => revokeSessions(item)}>
-                  Revoke Sessions
+                <button type="button" className="ghost" onClick={() => revokeSessions(item)}>
+                  Revoke sessions
                 </button>
-                <button className="danger" onClick={() => deleteUser(item)}>
-                  Delete User
+                <button type="button" className="danger" onClick={() => deleteUser(item)}>
+                  Delete user
                 </button>
               </div>
             ) : (
@@ -5845,6 +6731,34 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
           </div>
         ))}
       </div>
+      {usersTotal > 0 ? (
+        <div className="pagination-wrap users-pagination-wrap">
+          <span>
+            Page {safeUsersPage} of {totalUsersPages} ({USERS_PAGE_SIZE} / page)
+          </span>
+          <span>
+            Showing {usersRangeStart}–{usersRangeEnd} of {usersTotal}
+          </span>
+          <div className="inline-form pagination-controls">
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void fetchUsers(safeUsersPage - 1)}
+              disabled={usersLoading || safeUsersPage <= 1}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void fetchUsers(safeUsersPage + 1)}
+              disabled={usersLoading || safeUsersPage >= totalUsersPages}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -5854,9 +6768,4 @@ function UserManagementAdvancedTab({ apiClient, isSuperAdmin }: { apiClient: typ
 }
 
 export default App;
-
-
-
-
-
 

@@ -13,7 +13,10 @@ const {
   sendSecurityAccountAlertEmail,
 } = require('../mail');
 const { verifyGoogleIdToken, isGoogleAuthConfigured } = require('../googleAuth');
-const { sendAdminForgotPasswordOtpEmail } = require('../mailer/events/adminForgotPasswordOtp');
+const {
+  sendAdminForgotPasswordOtpEmail,
+  isAdminForgotMailConfigured,
+} = require('../mailer/events/adminForgotPasswordOtp');
 
 const router = express.Router();
 
@@ -522,8 +525,10 @@ router.post('/admin/password-reset/request', async (req, res) => {
   if (!identifier) {
     return res.status(400).json({ error: 'Email or mobile is required' });
   }
+  let admin = null;
+  let tokenHash = null;
   try {
-    const admin = await findAdminByIdentifier(identifier);
+    admin = await findAdminByIdentifier(identifier);
     if (!admin || !admin.is_admin) {
       return res.status(200).json({
         ok: false,
@@ -535,8 +540,15 @@ router.post('/admin/password-reset/request', async (req, res) => {
       return res.status(400).json({ error: 'Admin account must have a valid email for OTP delivery.' });
     }
 
+    if (!isAdminForgotMailConfigured()) {
+      return res.status(503).json({
+        error:
+          'Admin password reset email is not configured. Set SMTP_ADMIN_FP_USER and SMTP_ADMIN_FP_PASS (or SMTP_USER / SMTP_PASS) in server .env and restart the API.',
+      });
+    }
+
     const otp = String(pickSixDigit());
-    const tokenHash = sha256Hex(otp);
+    tokenHash = sha256Hex(otp);
     const expires = new Date();
     expires.setMinutes(expires.getMinutes() + ADMIN_PASSWORD_RESET_OTP_MINUTES());
     const client = await pool.connect();
@@ -571,12 +583,32 @@ router.post('/admin/password-reset/request', async (req, res) => {
       message: `Admin OTP sent to ${adminEmail}.`,
     });
   } catch (e) {
+    if (admin && tokenHash) {
+      try {
+        await pool.query(
+          `DELETE FROM user_one_time_tokens
+           WHERE user_id = $1::uuid
+             AND purpose = 'admin_password_reset'
+             AND token_hash = $2
+             AND used_at IS NULL`,
+          [admin.id, tokenHash],
+        );
+      } catch (delErr) {
+        console.error('admin_password_reset_token_cleanup_failed', delErr && (delErr.message || delErr));
+      }
+    }
     console.error(e);
-    const raw = e && e.message ? String(e.message) : '';
+    const raw = [e && e.message, e && e.code, typeof e === 'string' ? e : '']
+      .filter(Boolean)
+      .map(String)
+      .join(' ');
     let detail = 'Could not send admin reset OTP.';
     if (raw.includes('SMTP') || raw.includes('not configured')) {
       detail =
         'Email could not be sent: SMTP is not configured on this server. Set SMTP_ADMIN_FP_USER and SMTP_ADMIN_FP_PASS (or SMTP_USER / SMTP_PASS) in server .env and restart the API.';
+    } else if (raw.includes('454') || raw.includes('Too many login')) {
+      detail =
+        'Email could not be sent: Gmail temporarily limited SMTP sign-ins (too many attempts or rate limit). Wait and retry, verify the App Password in .env, or use a separate mailbox for admin OTP (SMTP_ADMIN_FP_*). See https://support.google.com/mail/answer/7126229';
     } else if (raw.includes('Invalid login') || raw.includes('authentication failed')) {
       detail =
         'Email could not be sent: SMTP rejected the login. Check app password / SMTP credentials in .env.';

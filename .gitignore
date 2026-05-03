@@ -19,6 +19,10 @@ gradle-bin.zip
 
 # Node (server)
 server/node_modules/
+admin-web/node_modules/
+
+# Runtime uploads (banners, article images, etc.)
+server/uploads/
 
 # Secrets
 server/.env

@@ -1,0 +1,616 @@
+/*
+ * Subset of quill1.3.7-table-module styles WITHOUT global * / input / button resets
+ * (the package dist/index.css breaks all admin buttons & inputs).
+ * Table “custom size” dialog + table UI only.
+ */
+
+.dialog {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2000;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  overflow: auto;
+}
+
+.dialog_overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 1rem;
+  overflow: auto;
+  text-align: center;
+}
+
+.dialog_overlay::after {
+  content: '';
+  display: inline-block;
+  height: 100%;
+  width: 0;
+  vertical-align: middle;
+}
+
+.dialog_content {
+  display: inline-block;
+  max-width: 50vw;
+  width: 100%;
+  vertical-align: middle;
+  background-color: #fff;
+  border-radius: 0.25rem;
+  border: 0.0625rem solid #ebeef5;
+  font-size: 1.125rem;
+  box-shadow: 0 0 0.75rem rgba(0, 0, 0, 0.12);
+  text-align: left;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.dialog .input_item {
+  display: flex;
+  align-items: center;
+}
+
+.dialog .input_item + .input_item {
+  margin-top: 1rem;
+}
+
+.dialog .input_label {
+  width: 5rem;
+  flex-shrink: 0;
+}
+
+.dialog .input_input {
+  --input-height: 2rem;
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  height: var(--input-height);
+  line-height: var(--input-height);
+  padding: 0.0625rem 0.5rem;
+  border-radius: 0.25rem;
+  box-shadow: 0 0 0 0.0625rem #dcdfe6 inset;
+  transition: box-shadow 0.2s linear;
+}
+
+.dialog .input_input.focus {
+  box-shadow: 0 0 0 0.0625rem #409eff inset;
+}
+
+.dialog .input_input input {
+  --input-inner-height: calc(var(--input-height) - 0.125rem);
+  width: 100%;
+  height: var(--input-inner-height);
+  line-height: var(--input-inner-height);
+  flex-grow: 1;
+  font-size: 0.875rem;
+  color: #606266;
+  border: none;
+  outline: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.dialog .input_input input:focus {
+  outline: 0;
+}
+
+.dialog .input_input.error {
+  box-shadow: 0 0 0 0.0625rem #f56c6c inset;
+}
+
+.dialog .input_input.error .error_tip {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  padding-top: 0.125rem;
+  font-size: 0.75rem;
+  color: #f56c6c;
+  line-height: 1;
+}
+
+.dialog .create_box {
+  padding: 1.5rem;
+}
+
+.dialog .create_input_content {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.dialog .create_control {
+  margin-top: 0.5rem;
+  text-align: right;
+}
+
+.dialog .create_control_btn {
+  display: inline-flex;
+  height: 2rem;
+  line-height: 1;
+  padding: 0.5rem 1rem;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+  margin: 0;
+  border: 0.0625rem solid #dcdfe6;
+  color: #606266;
+  background-color: transparent;
+}
+
+.dialog .create_control_btn + .create_control_btn {
+  margin-left: 0.375rem;
+}
+
+.dialog .create_control_btn:hover {
+  background-color: #f3f4f6;
+}
+
+.dialog .create_control_btn.confirm {
+  border-color: #409eff;
+  background-color: #409eff;
+  color: #fff;
+}
+
+.dialog .create_control_btn.confirm:hover {
+  background-color: #79bbff;
+}
+
+.dialog .create_control_btn.confirm:focus-visible {
+  outline: 0.125rem solid #a0cfff;
+  outline-offset: 0.0625rem;
+}
+
+.dialog .create_select_block {
+  display: flex;
+  width: 10rem;
+  margin: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog .create_select_block_item {
+  margin: 0.125rem;
+  height: 1rem;
+  width: 1rem;
+  border: 0.0625rem solid #e5e7eb;
+}
+
+.dialog .create_select_block_item.active {
+  border-color: #0ea5e9;
+  background-color: #e0f2fe;
+}
+
+.dialog .create_select_custom {
+  padding: 0.5rem;
+  border-top: 0.0625rem solid #f5f5f5;
+  color: #000;
+  font-size: 1rem;
+  cursor: pointer;
+  text-align: center;
+}
+
+.dialog .create_select_custom:hover {
+  background-color: #f5f5f5;
+}
+
+.ql-table-selection_line {
+  display: none;
+  position: absolute;
+  border: 0.125rem solid;
+  pointer-events: none;
+}
+
+.ql-table-drag-line {
+  position: fixed;
+  width: 0.125rem;
+  background-color: #409eff;
+  cursor: e-resize;
+}
+
+.ql-table-col-header {
+  position: relative;
+  flex-shrink: 0;
+  height: 100%;
+  background-color: #f3f4f5;
+  border: 0.0625rem solid #ccc;
+}
+
+.ql-table-col-separator {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -0.125rem;
+  width: 0.125rem;
+  cursor: ew-resize;
+  z-index: 1;
+}
+
+.ql-table-col-separator::after {
+  right: -0.375rem;
+}
+
+.ql-table-col-separator::before {
+  left: -0.375rem;
+}
+
+.ql-table-col-separator::after,
+.ql-table-col-separator::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  display: block;
+  width: 0.5rem;
+  height: 100%;
+}
+
+.ql-table-tooltip {
+  position: absolute;
+  display: flex;
+  width: calc(100% - 1.875rem);
+  overflow: hidden;
+}
+
+.ql-table-tooltip.ql-hidden {
+  display: none;
+}
+
+.ql-toolbar.ql-snow .ql-table.ql-picker .ql-picker-label {
+  padding: 0.125rem 0.25rem;
+}
+
+.ql-toolbar.ql-snow .ql-table.ql-picker .ql-picker-label svg {
+  position: static;
+  margin-top: 0;
+}
+
+.ql-toolbar.ql-snow .ql-table.ql-picker .ql-picker-options {
+  padding: 0;
+}
+
+/*
+ * Quill toolbar uses a BUTTON.ql-table (not .ql-picker) for the "table" format string.
+ * The table module injects .ql-custom-select inside that button.
+ * IMPORTANT: Do NOT open the size grid on :hover — moving the pointer toward the editor kept the
+ * button “hovered” while the grid overlapped the table, so it looked like the grid “came down” on the table.
+ * Open the grid only after a real click (module sets .ql-expanded + data-active).
+ */
+.ql-toolbar.ql-snow button.ql-table {
+  position: relative;
+  z-index: 40;
+}
+
+.article-rich-stack .ql-toolbar.ql-snow .ql-picker.ql-table,
+.article-rich-editor-root .ql-toolbar.ql-snow .ql-picker.ql-table {
+  position: relative;
+  z-index: 40;
+}
+
+.article-rich-stack .ql-toolbar.ql-snow button.ql-table:not(.ql-disabled-table) .ql-custom-select,
+.article-rich-editor-root .ql-toolbar.ql-snow button.ql-table:not(.ql-disabled-table) .ql-custom-select {
+  display: none !important;
+}
+
+.article-rich-stack .ql-toolbar.ql-snow button.ql-table:not(.ql-disabled-table).ql-expanded .ql-custom-select,
+.article-rich-editor-root .ql-toolbar.ql-snow button.ql-table:not(.ql-disabled-table).ql-expanded .ql-custom-select,
+.article-rich-stack .ql-toolbar.ql-snow button.ql-table:not(.ql-disabled-table)[data-active] .ql-custom-select,
+.article-rich-editor-root .ql-toolbar.ql-snow button.ql-table:not(.ql-disabled-table)[data-active] .ql-custom-select {
+  display: block !important;
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 4px;
+  right: auto;
+  bottom: auto;
+  z-index: 50;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.18);
+}
+
+/* If a theme ever builds table as a Snow picker instead of a button, keep these too */
+.article-rich-stack .ql-toolbar.ql-snow .ql-picker.ql-table:not(.ql-disabled-table) .ql-picker-options,
+.article-rich-editor-root .ql-toolbar.ql-snow .ql-picker.ql-table:not(.ql-disabled-table) .ql-picker-options {
+  display: none !important;
+}
+
+.article-rich-stack .ql-toolbar.ql-snow .ql-picker.ql-table:not(.ql-disabled-table).ql-expanded .ql-picker-options,
+.article-rich-editor-root .ql-toolbar.ql-snow .ql-picker.ql-table:not(.ql-disabled-table).ql-expanded .ql-picker-options {
+  display: block !important;
+  top: 100%;
+  bottom: auto;
+  margin-top: 4px;
+  z-index: 50;
+}
+
+.article-rich-stack .ql-toolbar.ql-snow .ql-picker.ql-table:not(.ql-disabled-table).ql-expanded .ql-picker-label,
+.article-rich-editor-root .ql-toolbar.ql-snow .ql-picker.ql-table:not(.ql-disabled-table).ql-expanded .ql-picker-label {
+  z-index: 26;
+}
+
+/*
+ * insertTable() inserts a newline before the table → an empty <p><br></p> that looks like a thin rule.
+ * Tighten only the paragraph immediately before a table wrapper / contain.
+ */
+.article-rich-stack .ql-editor > p:has(+ .contain),
+.article-rich-editor-root .ql-editor > p:has(+ .contain),
+.article-rich-stack .ql-editor > p:has(+ .ql-table-wrapper),
+.article-rich-editor-root .ql-editor > p:has(+ .ql-table-wrapper) {
+  margin: 0 !important;
+  padding: 0 !important;
+  min-height: 0;
+  line-height: 0;
+  font-size: 0;
+  border: none !important;
+  height: 0;
+  overflow: hidden;
+}
+
+.article-rich-stack .ql-editor > p:has(+ .contain) br,
+.article-rich-editor-root .ql-editor > p:has(+ .contain) br,
+.article-rich-stack .ql-editor > p:has(+ .ql-table-wrapper) br,
+.article-rich-editor-root .ql-editor > p:has(+ .ql-table-wrapper) br {
+  display: none;
+}
+
+.article-rich-stack .ql-editor .ql-table-wrapper,
+.article-rich-editor-root .ql-editor .ql-table-wrapper {
+  margin-top: 0;
+}
+
+/* Table size grid lives in toolbar picker (not .dialog) — keep scoped to Quill toolbar */
+.ql-toolbar.ql-snow .create_select_block {
+  display: flex;
+  width: 10rem;
+  margin: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+}
+
+.ql-toolbar.ql-snow .create_select_block_item {
+  margin: 0.125rem;
+  height: 1rem;
+  width: 1rem;
+  border: 0.0625rem solid #e5e7eb;
+}
+
+.ql-toolbar.ql-snow .create_select_block_item.active {
+  border-color: #0ea5e9;
+  background-color: #e0f2fe;
+}
+
+/* Footer row (custom row/column / localized label) — grid-only insert; module injects async. */
+.article-rich-editor-root .ql-toolbar .create_select_custom,
+.article-rich-stack .ql-toolbar .create_select_custom,
+.ql-toolbar.ql-snow .ql-custom-select .create_select_custom,
+.ql-toolbar.ql-snow .create_select .create_select_custom {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  border: 0 !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+
+.ql-toolbar.ql-snow .ql-disabled-table {
+  opacity: 0.3;
+  background-color: transparent;
+  cursor: not-allowed;
+}
+
+.ql-toolbar.ql-snow .ql-disabled-table .ql-picker-label {
+  cursor: not-allowed;
+}
+
+.ql-toolbar.ql-snow .ql-disabled-table .ql-picker-options {
+  display: none;
+}
+
+.ql-table-operation-menu {
+  --bg-color: #fff;
+  border-radius: 0.375rem;
+  box-shadow: 0 0.125rem 0.75rem 0 rgba(0, 0, 0, 0.1);
+  width: 12.5rem;
+  max-height: 17.5rem;
+  overflow: auto;
+  background-color: var(--bg-color);
+  font-size: 0.875rem;
+  z-index: 1;
+}
+
+.ql-table-operation-menu-dividing {
+  height: 0.0625rem;
+  background-color: #efefef;
+}
+
+.ql-table-operation-menu-hit {
+  color: #999;
+  font-size: 0.75rem;
+}
+
+.ql-table-operation-menu-subtitle {
+  color: #999;
+  font-size: 0.75rem;
+  padding: 0.3125rem 1rem;
+}
+
+.ql-table-operation-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 0.5rem;
+  font-size: 1rem;
+}
+
+.ql-table-operation-menu-icon svg {
+  width: 1.2em;
+  height: 1.2em;
+}
+
+.ql-table-operation-menu-item {
+  display: flex;
+  align-items: center;
+  padding: 0.625rem 1rem;
+  background-color: #fff;
+  cursor: pointer;
+  color: #595959;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ql-table-operation-menu-item:hover {
+  background-color: #f5f5f5;
+}
+
+.ql-table {
+  border-collapse: separate;
+  table-layout: fixed;
+}
+
+.ql-table[data-full] {
+  width: 100%;
+}
+
+.ql-table-dragging {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+}
+
+.ql-table-wrapper {
+  width: 100%;
+  padding-left: 0.0625rem;
+  padding-right: 0.0625rem;
+  overflow: auto;
+}
+
+.ql-table-wrapper:hover::-webkit-scrollbar-thumb {
+  background-color: #a1a1aa;
+}
+
+.ql-table-wrapper::-webkit-scrollbar {
+  width: 0.25rem;
+  height: 0.25rem;
+}
+
+.ql-table-wrapper::-webkit-scrollbar-thumb {
+  background-color: #d2d2d2;
+  border-radius: 0.25rem;
+}
+
+.ql-table-cell {
+  padding: 0.5rem 0.75rem;
+  border: 0.0625rem solid #a1a1aa;
+  font-size: 0.875rem;
+  outline: 0;
+  overflow: auto;
+}
+
+.ql-table-cell-inner {
+  display: inline-block;
+  min-width: 100%;
+  word-break: break-word;
+}
+
+.ql-table col {
+  border-collapse: separate;
+  text-indent: initial;
+  display: table-column;
+  table-layout: fixed;
+}
+
+/* Floating + below table, horizontally centered (ArticleBodyEditor portal) — above fullscreen (10050) */
+.article-table-tools-wrap {
+  position: fixed;
+  z-index: 10075;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.article-table-tools-wrap > * {
+  pointer-events: auto;
+}
+
+.article-table-tools-fab {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid #0f766e;
+  background: linear-gradient(135deg, #0f766e, #0d9488);
+  color: #fff;
+  font-size: 1.28rem;
+  font-weight: 700;
+  line-height: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.2);
+  display: grid;
+  place-items: center;
+  text-indent: 0;
+}
+
+.article-table-tools-fab:hover {
+  filter: brightness(1.06);
+}
+
+.article-table-tools-menu {
+  min-width: 208px;
+  max-width: min(92vw, 280px);
+  border-radius: 10px;
+  border: 1px solid #dbe4ef;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+  padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.article-table-tools-menu-hint {
+  font-size: 0.72rem;
+  color: #64748b;
+  padding: 4px 12px 8px;
+  line-height: 1.35;
+}
+
+.article-table-tools-menu button {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  font-family: inherit;
+  color: #0f172a;
+}
+
+.article-table-tools-menu button:hover {
+  background: #f1f5f9;
+}
+
+.article-table-tools-menu-div {
+  height: 1px;
+  margin: 4px 8px;
+  background: #e2e8f0;
+}
+
+.article-table-tools-menu-danger {
+  color: #b91c1c !important;
+}

@@ -386,16 +386,21 @@ router.post('/support', async (req, res) => {
   if (!message) return res.status(400).json({ error: 'Message is required' });
   try {
     const userQ = await pool.query(
-      `SELECT email, display_name FROM users WHERE id = $1::uuid LIMIT 1`,
+      `SELECT email, display_name, six_digit_public_id FROM users WHERE id = $1::uuid LIMIT 1`,
       [req.userId],
     );
     const user = userQ.rows[0];
     if (!user) return res.status(404).json({ error: 'User not found' });
+    const publicId =
+      user.six_digit_public_id != null && user.six_digit_public_id !== ''
+        ? String(user.six_digit_public_id)
+        : '';
     await appendInboxItem('helpSupportInbox', {
       id: `support-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
       userId: String(req.userId || ''),
       userEmail: String(user.email || ''),
       user: String(user.display_name || user.email || 'User'),
+      publicId,
       subject: 'Help & Support',
       message,
       createdAt: new Date().toISOString(),
@@ -464,16 +469,21 @@ router.post('/report-issue', async (req, res) => {
   if (!message) return res.status(400).json({ error: 'Issue details are required' });
   try {
     const userQ = await pool.query(
-      `SELECT email, display_name FROM users WHERE id = $1::uuid LIMIT 1`,
+      `SELECT email, display_name, six_digit_public_id FROM users WHERE id = $1::uuid LIMIT 1`,
       [req.userId],
     );
     const user = userQ.rows[0];
     if (!user) return res.status(404).json({ error: 'User not found' });
+    const publicId =
+      user.six_digit_public_id != null && user.six_digit_public_id !== ''
+        ? String(user.six_digit_public_id)
+        : '';
     await appendInboxItem('reportIssueInbox', {
       id: `issue-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
       userId: String(req.userId || ''),
       userEmail: String(user.email || ''),
       user: String(user.display_name || user.email || 'User'),
+      publicId,
       subject: 'Reported Issue',
       message,
       createdAt: new Date().toISOString(),

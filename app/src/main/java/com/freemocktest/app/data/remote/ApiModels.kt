@@ -121,6 +121,7 @@ data class NewsArticleDto(
     val category: String,
     val body: String? = null,
     @SerializedName("linkUrl") val linkUrl: String? = null,
+    @SerializedName("featureImageUrl") val featureImageUrl: String? = null,
     @SerializedName("publishedAt") val publishedAt: String? = null,
 )
 
@@ -318,6 +319,12 @@ data class ExamCategoriesDto(
     val items: List<ExamCategoryItemDto> = emptyList(),
 )
 
+/** Admin `achievementContent` (public GET /v1/home/content) — same keys as server admin settings. */
+data class AchievementContentDto(
+    val title: String? = null,
+    val body: String? = null,
+)
+
 data class HomeContentResponse(
     val content: HomeContentDto? = null,
     @SerializedName("submitApplicationContent") val submitApplicationContent: SubmitApplicationContentDto? = null,
@@ -326,6 +333,7 @@ data class HomeContentResponse(
     @SerializedName("examCategories") val examCategories: ExamCategoriesDto? = null,
     @SerializedName("pollSettings") val pollSettings: PollSettingsDto? = null,
     @SerializedName("pushNotificationSettings") val pushNotificationSettings: PushNotificationSettingsDto? = null,
+    @SerializedName("achievementContent") val achievementContent: AchievementContentDto? = null,
 )
 
 data class PollItemDto(

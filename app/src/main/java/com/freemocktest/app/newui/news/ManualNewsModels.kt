@@ -16,6 +16,8 @@ data class ManualNewsItem(
 
     val body: String,
 
+    val featureImageUrl: String? = null,
+
 )
 
 
@@ -30,7 +32,11 @@ fun ManualNewsItem.imageUrl(
 
     seedPrefix: String = "mocktest_news",
 
-): String = "https://picsum.photos/seed/${seedPrefix}_${id}/$width/$height"
+): String {
+    val u = featureImageUrl?.trim().orEmpty()
+    if (u.isNotEmpty()) return u
+    return "https://picsum.photos/seed/${seedPrefix}_${id}/$width/$height"
+}
 
 
 

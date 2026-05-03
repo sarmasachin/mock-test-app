@@ -72,10 +72,21 @@ async function sendAdminForgotPasswordOtpEmail(opts) {
   });
 }
 
+/** True when env has credentials used by [createAdminForgotPasswordTransport] (no network I/O). */
+function isAdminForgotMailConfigured() {
+  const user = String(process.env.SMTP_ADMIN_FP_USER || process.env.SMTP_USER || '').trim();
+  const pass = String(process.env.SMTP_ADMIN_FP_PASS || process.env.SMTP_PASS || '').trim();
+  return Boolean(user && pass);
+}
+
 /** E2E / ops: confirm SMTP can connect and authenticate (does not send email). */
 async function verifyAdminForgotPasswordSmtp() {
   const transporter = createAdminForgotPasswordTransport();
   await transporter.verify();
 }
 
-module.exports = { sendAdminForgotPasswordOtpEmail, verifyAdminForgotPasswordSmtp };
+module.exports = {
+  sendAdminForgotPasswordOtpEmail,
+  verifyAdminForgotPasswordSmtp,
+  isAdminForgotMailConfigured,
+};

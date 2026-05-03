@@ -155,7 +155,9 @@ async function main() {
     } catch (e) {
       console.error('    FAIL:', e && e.message ? e.message : e);
       console.error('    Fix credentials, app password (Gmail), host/port, or firewall.\n');
-      process.exitCode = 1;
+      console.error('Done (stopped after SMTP verify).');
+      process.exit(1);
+      return;
     }
   } else if (verifySmtp && !smtp.configured) {
     console.log('[2] SKIP verify (no credentials)\n');

@@ -3,6 +3,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../middleware/requireAuth');
+const { clampMcqCorrectIndex } = require('../mcqShuffle');
 
 const router = express.Router();
 
@@ -162,7 +163,7 @@ function applyPerUserShuffleToQuestions(rows, seedText, options) {
       String(row.choice_c || ''),
       String(row.choice_d || ''),
     ].map((x) => x.trim());
-    const sourceCorrect = Number(row.correct_index || 0);
+    const sourceCorrect = clampMcqCorrectIndex(row.correct_index);
     if (!shuffleOptions) {
       return {
         id: Number(row.id),
@@ -177,12 +178,22 @@ function applyPerUserShuffleToQuestions(rows, seedText, options) {
     const shuffled = seededShuffle(indexed, rng);
     const newOptions = shuffled.map((x) => x.opt);
     const newCorrectIndex = shuffled.findIndex((x) => x.idx === sourceCorrect);
+    if (newCorrectIndex < 0) {
+      return {
+        id: Number(row.id),
+        position: Number(newPosition + 1),
+        questionPrompt: String(row.stem || ''),
+        options: sourceOptions,
+        correctIndex: sourceCorrect,
+        explanation: String(row.explanation || ''),
+      };
+    }
     return {
       id: Number(row.id),
       position: Number(newPosition + 1),
       questionPrompt: String(row.stem || ''),
       options: newOptions,
-      correctIndex: Math.max(0, newCorrectIndex),
+      correctIndex: newCorrectIndex,
       explanation: String(row.explanation || ''),
     };
   });

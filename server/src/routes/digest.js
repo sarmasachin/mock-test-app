@@ -2,6 +2,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
+const { clampMcqCorrectIndex } = require('../mcqShuffle');
 
 const router = express.Router();
 
@@ -41,6 +42,7 @@ function pickDailyDigestItem(rows, dayKey) {
 }
 
 function shuffleOptionsAndRemap(item, dayKey) {
+  const orig = clampMcqCorrectIndex(item.correct_index);
   const options = [
     { text: item.option_a, originalIndex: 0 },
     { text: item.option_b, originalIndex: 1 },
@@ -55,14 +57,21 @@ function shuffleOptionsAndRemap(item, dayKey) {
     list[i] = list[j];
     list[j] = tmp;
   }
-  const correctIndex = list.findIndex((x) => x.originalIndex === Number(item.correct_index));
+  const correctIndex = list.findIndex((x) => x.originalIndex === orig);
+  if (correctIndex < 0) {
+    return {
+      options: [item.option_a, item.option_b, item.option_c, item.option_d].map((x) => String(x || '')),
+      correctIndex: orig,
+    };
+  }
   return {
     options: list.map((x) => x.text),
-    correctIndex: correctIndex >= 0 ? correctIndex : 0,
+    correctIndex,
   };
 }
 
 function shuffleQuizOptions(item, dayKey) {
+  const orig = clampMcqCorrectIndex(item.correctIndex);
   const options = [
     { text: item.optionA, originalIndex: 0 },
     { text: item.optionB, originalIndex: 1 },
@@ -77,10 +86,16 @@ function shuffleQuizOptions(item, dayKey) {
     list[i] = list[j];
     list[j] = tmp;
   }
-  const correctIndex = list.findIndex((x) => x.originalIndex === Number(item.correctIndex));
+  const correctIndex = list.findIndex((x) => x.originalIndex === orig);
+  if (correctIndex < 0) {
+    return {
+      options: [item.optionA, item.optionB, item.optionC, item.optionD].map((x) => String(x || '')),
+      correctIndex: orig,
+    };
+  }
   return {
     options: list.map((x) => x.text),
-    correctIndex: correctIndex >= 0 ? correctIndex : 0,
+    correctIndex,
   };
 }
 

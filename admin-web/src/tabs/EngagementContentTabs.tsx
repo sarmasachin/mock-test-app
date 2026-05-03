@@ -1,4 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
+import { useAdminDialog } from '../adminDialog';
+import { useAdminToast } from '../adminToast';
 
 type ApiClient = {
   get: (url: string, config?: any) => Promise<any>;
@@ -56,15 +58,14 @@ type InstructionContent = {
 };
 
 export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
+  const { pushToast } = useAdminToast();
   const POLLS_PER_PAGE = 20;
   const [settings, setSettings] = useState<PollSettings>({ showHomePopup: true, items: [] });
   const [newItem, setNewItem] = useState({ question: '', options: ['', '', '', ''], allowMultiple: false, durationMinutes: '1440' });
   const [page, setPage] = useState(1);
-  const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   async function load() {
     try {
-      setError('');
       const res = await apiClient.get('/admin/settings');
       const s = res.data?.settings?.pollSettings || {};
       const itemsRaw = Array.isArray(s.items) ? s.items : s.question ? [s] : [];
@@ -81,14 +82,20 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
         })),
       });
       setPage(1);
-    } catch (err: any) { setError(err?.response?.data?.error || 'Failed to load poll settings'); }
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to load poll settings');
+    }
   }
   async function save() {
     try {
-      setError('');
       setSaving(true);
       await apiClient.patch('/admin/settings', { pollSettings: settings });
-    } catch (err: any) { setError(err?.response?.data?.error || 'Failed to save poll settings'); } finally { setSaving(false); }
+      pushToast('success', 'Poll settings saved.');
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to save poll settings');
+    } finally {
+      setSaving(false);
+    }
   }
   function normalizeOptions(list: string[]) {
     return list.map((x) => x.trim()).filter(Boolean);
@@ -96,21 +103,20 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
   function addPoll() {
     const question = newItem.question.trim();
     if (!question) {
-      setError('Poll question is required');
+      pushToast('error', 'Poll question is required');
       return;
     }
     const options = normalizeOptions(newItem.options);
     if (options.length < 2) {
-      setError('At least 2 poll options are required');
+      pushToast('error', 'At least 2 poll options are required');
       return;
     }
     if (options.length > 8) {
-      setError('Maximum 8 poll options are allowed');
+      pushToast('error', 'Maximum 8 poll options are allowed');
       return;
     }
     setSettings((p) => ({ ...p, items: [...p.items, { id: `poll-${Date.now()}`, question, options, allowMultiple: newItem.allowMultiple, durationMinutes: Number(newItem.durationMinutes || '1440'), enabled: true, createdAt: new Date().toISOString() }] }));
     setNewItem({ question: '', options: ['', '', '', ''], allowMultiple: false, durationMinutes: '1440' });
-    setError('');
   }
   function setNewOptionAt(index: number, value: string) {
     setNewItem((p) => ({ ...p, options: p.options.map((x, i) => (i === index ? value : x)) }));
@@ -151,11 +157,11 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
   async function saveSinglePoll(item: PollItem) {
     const normalized = normalizeOptions(item.options);
     if (normalized.length < 2) {
-      setError('Each poll must have at least 2 options');
+      pushToast('error', 'Each poll must have at least 2 options');
       return;
     }
     if (normalized.length > 8) {
-      setError('Each poll can have maximum 8 options');
+      pushToast('error', 'Each poll can have maximum 8 options');
       return;
     }
     const next = {
@@ -164,11 +170,11 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
     };
     setSettings(next);
     try {
-      setError('');
       setSaving(true);
       await apiClient.patch('/admin/settings', { pollSettings: next });
+      pushToast('success', 'Poll saved.');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to save poll settings');
+      pushToast('error', err?.response?.data?.error || 'Failed to save poll settings');
     } finally {
       setSaving(false);
     }
@@ -263,18 +269,17 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
       </div>
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
       <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button><button type="button" onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save Poll Settings'}</button></div>
-      {error && <p className="error">{error}</p>}
     </section>
   );
 }
 
 export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
+  const { pushToast } = useAdminToast();
+  const { confirm: adminConfirm } = useAdminDialog();
   const PUSH_PER_PAGE = 20;
   const [settings, setSettings] = useState<PushSettings>({ items: [] });
   const [newItem, setNewItem] = useState({ title: '', message: '', target: 'all' as PushItem['target'], deepLink: '', scheduledAt: '', enabled: true });
   const [page, setPage] = useState(1);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
   const [sendResult, setSendResult] = useState('');
   const [saving, setSaving] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -295,33 +300,35 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   }
   async function load() {
     try {
-      setError('');
-      setSuccess('');
       const res = await apiClient.get('/admin/settings');
       const s = res.data?.settings?.pushNotificationSettings || {};
       const itemsRaw = Array.isArray(s.items) ? s.items : s.title || s.message ? [s] : [];
       setSettings({ items: itemsRaw.map((x: any, idx: number) => ({ id: String(x.id || `push-${idx + 1}`), title: String(x.title || ''), message: String(x.message || ''), target: ['all', 'new_users', 'active_users'].includes(String(x.target)) ? x.target : 'all', deepLink: String(x.deepLink || ''), scheduledAt: String(x.scheduledAt || ''), enabled: x.enabled !== false, status: x.status === 'sent' ? 'sent' : 'draft', resendCount: Number(x.resendCount || 0), lastSentAt: String(x.lastSentAt || ''), createdAt: String(x.createdAt || new Date().toISOString()) })) });
       setPage(1);
-    } catch (err: any) { setError(err?.response?.data?.error || 'Failed to load push notification settings'); }
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to load push notification settings');
+    }
   }
   async function save(nextSettings?: PushSettings, successText?: string) {
     try {
-      setError('');
-      setSuccess('');
       setSaving(true);
       const payload = nextSettings || settings;
       await apiClient.patch('/admin/settings', { pushNotificationSettings: payload });
       setSettings(payload);
-      setSuccess(successText || 'Push notification settings saved successfully.');
+      pushToast('success', successText || 'Push notification settings saved successfully.');
       return true;
-    } catch (err: any) { setError(err?.response?.data?.error || 'Failed to save push notification settings'); } finally { setSaving(false); }
-    return false;
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to save push notification settings');
+      return false;
+    } finally {
+      setSaving(false);
+    }
   }
   async function addPush() {
     const title = newItem.title.trim();
     const message = newItem.message.trim();
     if (!title || !message) {
-      setError('Title and message are required.');
+      pushToast('error', 'Title and message are required.');
       return;
     }
     try {
@@ -354,7 +361,14 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
     }
   }
   async function removePush(itemId: string) {
-    if (!window.confirm('Delete this push item permanently?')) return;
+    const ok = await adminConfirm({
+      title: 'Delete push item?',
+      message: 'This notification template will be removed from the list and saved settings.',
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      variant: 'danger',
+    });
+    if (!ok) return;
     try {
       setDeletingId(itemId);
       const next = { ...settings, items: settings.items.filter((x) => x.id !== itemId) };
@@ -365,12 +379,10 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   }
   async function sendNow(item: PushItem) {
     if (!item.title.trim() || !item.message.trim()) {
-      setError('Title and message are required to send push');
+      pushToast('error', 'Title and message are required to send push');
       return;
     }
     try {
-      setError('');
-      setSuccess('');
       setSendResult('');
       setSendingId(item.id);
       const res = await apiClient.post('/admin/notifications/send', {
@@ -382,8 +394,9 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       const sent = Number(res.data?.sent || 0);
       const failed = Number(res.data?.failed || 0);
       const total = Number(res.data?.total || sent + failed);
-      setSendResult(`Push delivered: ${sent}/${total}, failed: ${failed} (matched tokens: ${total})`);
-      setSuccess('Push sent successfully.');
+      const resultLine = `Push sent: ${sent}/${total} delivered, ${failed} failed.`;
+      setSendResult(resultLine);
+      pushToast('success', resultLine);
       setSettings((p) => ({
         ...p,
         items: p.items.map((x) =>
@@ -393,7 +406,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
         ),
       }));
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to send push notification');
+      pushToast('error', err?.response?.data?.error || 'Failed to send push notification');
     } finally {
       setSendingId('');
     }
@@ -419,35 +432,38 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       </div>
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
       <div className="inline-form"><button type="button" className="ghost" onClick={load} disabled={saving || adding || !!sendingId || !!deletingId}>Load</button><button type="button" onClick={() => { void save(); }} disabled={saving || adding || !!sendingId || !!deletingId}>{saving ? 'Saving...' : 'Save Push Settings'}</button></div>
-      {success && <p className="success-msg">{success}</p>}
-      {sendResult && <p className="success">{sendResult}</p>}
-      {error && <p className="error">{error}</p>}
+      {sendResult ? <p className="muted">{sendResult}</p> : null}
     </section>
   );
 }
 
 export function SubmitApplicationContentTabImpl({ apiClient }: { apiClient: ApiClient }) {
+  const { pushToast } = useAdminToast();
   const ITEMS_PER_PAGE = 20;
   const [settings, setSettings] = useState<SubmitApplicationContent>({ title: 'Apply', benefitsTitle: 'What you’ll get', submitButtonLabel: 'Submit Application', successMessage: 'Your application was submitted successfully.', bulletItems: ['Instant access after approval', 'Mock test practice & review', 'Score history in your profile'] });
   const [newBullet, setNewBullet] = useState('');
   const [page, setPage] = useState(1);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
   async function load() {
     try {
-      setError('');
       const res = await apiClient.get('/admin/settings');
       const s = res.data?.settings?.submitApplicationContent || {};
       setSettings({ title: String(s.title || 'Apply'), benefitsTitle: String(s.benefitsTitle || 'What you’ll get'), submitButtonLabel: String(s.submitButtonLabel || 'Submit Application'), successMessage: String(s.successMessage || 'Your application was submitted successfully.'), bulletItems: Array.isArray(s.bulletItems) ? s.bulletItems.map((x: any) => String(x)).filter(Boolean) : [] });
       setPage(1);
-    } catch (err: any) { setError(err?.response?.data?.error || 'Failed to load submit application content'); }
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to load submit application content');
+    }
   }
   async function save() {
     try {
-      setError('');
       setSaving(true);
       await apiClient.patch('/admin/settings', { submitApplicationContent: settings });
-    } catch (err: any) { setError(err?.response?.data?.error || 'Failed to save submit application content'); } finally { setSaving(false); }
+      pushToast('success', 'Submit application content saved.');
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to save submit application content');
+    } finally {
+      setSaving(false);
+    }
   }
   function addBullet() { const text = newBullet.trim(); if (!text) return; setSettings((p) => ({ ...p, bulletItems: [...p.bulletItems, text] })); setNewBullet(''); }
   const totalPages = Math.max(1, Math.ceil(settings.bulletItems.length / ITEMS_PER_PAGE));
@@ -469,12 +485,12 @@ export function SubmitApplicationContentTabImpl({ apiClient }: { apiClient: ApiC
       </div>
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
       <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button><button type="button" onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button></div>
-      {error && <p className="error">{error}</p>}
     </section>
   );
 }
 
 export function InstructionContentTabImpl({ apiClient }: { apiClient: ApiClient }) {
+  const { pushToast } = useAdminToast();
   const ITEMS_PER_PAGE = 20;
   const [openModule, setOpenModule] = useState<'instructions' | 'submitPopup' | 'postSubmitCard' | 'navigation' | 'instructionLines' | null>(null);
   const [settings, setSettings] = useState<InstructionContent>({
@@ -498,10 +514,8 @@ export function InstructionContentTabImpl({ apiClient }: { apiClient: ApiClient 
   const [newPostSubmitLine, setNewPostSubmitLine] = useState('');
   const [page, setPage] = useState(1);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
   async function load() {
     try {
-      setError('');
       const res = await apiClient.get('/admin/settings');
       const s = res.data?.settings?.instructionContent || {};
       setSettings({
@@ -522,14 +536,20 @@ export function InstructionContentTabImpl({ apiClient }: { apiClient: ApiClient 
         items: Array.isArray(s.items) ? s.items.map((x: any) => String(x)).filter(Boolean) : [],
       });
       setPage(1);
-    } catch (err: any) { setError(err?.response?.data?.error || 'Failed to load instruction content'); }
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to load instruction content');
+    }
   }
   async function save() {
     try {
-      setError('');
       setSaving(true);
       await apiClient.patch('/admin/settings', { instructionContent: settings });
-    } catch (err: any) { setError(err?.response?.data?.error || 'Failed to save instruction content'); } finally { setSaving(false); }
+      pushToast('success', 'Instruction content saved.');
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to save instruction content');
+    } finally {
+      setSaving(false);
+    }
   }
   function addLine() { const text = newLine.trim(); if (!text) return; setSettings((p) => ({ ...p, items: [...p.items, text] })); setNewLine(''); }
   function addPostSubmitLine() { const text = newPostSubmitLine.trim(); if (!text) return; setSettings((p) => ({ ...p, postSubmitCardLines: [...p.postSubmitCardLines, text] })); setNewPostSubmitLine(''); }
@@ -542,7 +562,7 @@ export function InstructionContentTabImpl({ apiClient }: { apiClient: ApiClient 
     () => settings.postSubmitCardLines.slice((postSubmitSafePage - 1) * ITEMS_PER_PAGE, (postSubmitSafePage - 1) * ITEMS_PER_PAGE + ITEMS_PER_PAGE),
     [settings.postSubmitCardLines, postSubmitSafePage],
   );
-  const sectionToggleStyle: React.CSSProperties = {
+  const sectionToggleStyle: CSSProperties = {
     width: 40,
     height: 40,
     borderRadius: 10,
@@ -655,7 +675,6 @@ export function InstructionContentTabImpl({ apiClient }: { apiClient: ApiClient 
         </>
       )}
       <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button><button type="button" onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button></div>
-      {error && <p className="error">{error}</p>}
     </section>
   );
 }

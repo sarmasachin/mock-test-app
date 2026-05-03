@@ -106,7 +106,7 @@ router.get('/content', async (_req, res) => {
     const { rows } = await pool.query(
       `SELECT setting_key, setting_value
        FROM app_settings
-       WHERE setting_key IN ('homeContent', 'submitApplicationContent', 'instructionContent', 'profileMenuItems', 'examCategories', 'pollSettings', 'pushNotificationSettings')`,
+       WHERE setting_key IN ('homeContent', 'submitApplicationContent', 'instructionContent', 'profileMenuItems', 'examCategories', 'pollSettings', 'pushNotificationSettings', 'achievementContent')`,
     );
     if (!rows.length) {
       return res.json({
@@ -117,6 +117,7 @@ router.get('/content', async (_req, res) => {
         examCategories: { items: [] },
         pollSettings: { items: [] },
         pushNotificationSettings: { items: [] },
+        achievementContent: null,
       });
     }
     const map = {};
@@ -167,6 +168,20 @@ router.get('/content', async (_req, res) => {
     } catch (_e) {
       parsedPushNotificationSettings = { items: [] };
     }
+    /** Admin-managed Achievement intro copy (same shape as admin normalizeSimpleContent). Public read-only. */
+    let parsedAchievementContent = null;
+    try {
+      const raw = JSON.parse(String(map.achievementContent || '{}'));
+      if (raw && typeof raw === 'object') {
+        const title = String(raw.title || 'Achievement').trim().slice(0, 120);
+        const body = String(raw.body || '').trim().slice(0, 10000);
+        if (body) {
+          parsedAchievementContent = { title, body };
+        }
+      }
+    } catch (_e) {
+      parsedAchievementContent = null;
+    }
     return res.json({
       content: sanitizeHomeContent(parsedHome),
       submitApplicationContent: parsedSubmit,
@@ -175,6 +190,7 @@ router.get('/content', async (_req, res) => {
       examCategories: parsedExamCategories,
       pollSettings: parsedPollSettings,
       pushNotificationSettings: parsedPushNotificationSettings,
+      achievementContent: parsedAchievementContent,
     });
   } catch (e) {
     if (e && e.code === '42P01') {
@@ -186,6 +202,7 @@ router.get('/content', async (_req, res) => {
         examCategories: { items: [] },
         pollSettings: { items: [] },
         pushNotificationSettings: { items: [] },
+        achievementContent: null,
       });
     }
     console.error(e);

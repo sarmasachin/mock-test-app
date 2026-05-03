@@ -17,6 +17,7 @@ const homeRouter = require('./routes/home');
 const adminRouter = require('./routes/admin');
 const pollsRouter = require('./routes/polls');
 const { pool } = require('./db');
+const { clampMcqCorrectIndex } = require('./mcqShuffle');
 const {
   isMailConfigured,
   sendCompleteProfileReminderEmail,
@@ -41,7 +42,28 @@ if (!process.env.DATABASE_URL) {
 }
 
 const app = express();
-app.use(cors());
+
+/** When CORS_ALLOWED_ORIGINS is set (comma-separated), only those browser origins may call the API. */
+function buildCorsMiddleware() {
+  const raw = process.env.CORS_ALLOWED_ORIGINS;
+  if (!raw || !String(raw).trim()) {
+    return cors();
+  }
+  const allowList = String(raw)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!allowList.length) return cors();
+  return cors({
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      if (allowList.includes(origin)) return callback(null, true);
+      return callback(new Error(`CORS blocked origin: ${origin}`));
+    },
+  });
+}
+
+app.use(buildCorsMiddleware());
 app.use(express.json({ limit: '8mb' }));
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 app.use(async (req, res, next) => {
@@ -175,6 +197,14 @@ async function ensureOptionalColumns() {
       `ALTER TABLE users
        ADD COLUMN IF NOT EXISTS date_of_birth DATE`,
     );
+    await pool.query(
+      `ALTER TABLE news_articles
+       ADD COLUMN IF NOT EXISTS feature_image_url TEXT`,
+    );
+    await pool.query(
+      `ALTER TABLE news_articles
+       DROP CONSTRAINT IF EXISTS news_articles_feed_kind_check`,
+    );
   } catch (e) {
     if (e && e.code === '42P01') return;
     console.error('optional_columns_init_error', e);
@@ -193,6 +223,7 @@ function shuffleArray(arr) {
 }
 
 function shuffleQuestionOptions(row) {
+  const sourceOld = clampMcqCorrectIndex(row.correct_index);
   const options = [
     { text: row.choice_a, oldIndex: 0 },
     { text: row.choice_b, oldIndex: 1 },
@@ -200,14 +231,25 @@ function shuffleQuestionOptions(row) {
     { text: row.choice_d, oldIndex: 3 },
   ];
   const shuffled = shuffleArray(options);
-  const newCorrectIndex = shuffled.findIndex((x) => x.oldIndex === Number(row.correct_index));
+  const newCorrectIndex = shuffled.findIndex((x) => x.oldIndex === sourceOld);
+  if (newCorrectIndex < 0) {
+    return {
+      stem: row.stem,
+      choice_a: row.choice_a,
+      choice_b: row.choice_b,
+      choice_c: row.choice_c,
+      choice_d: row.choice_d,
+      correct_index: sourceOld,
+      explanation: row.explanation || '',
+    };
+  }
   return {
     stem: row.stem,
     choice_a: shuffled[0]?.text || '',
     choice_b: shuffled[1]?.text || '',
     choice_c: shuffled[2]?.text || '',
     choice_d: shuffled[3]?.text || '',
-    correct_index: Math.max(0, newCorrectIndex),
+    correct_index: newCorrectIndex,
     explanation: row.explanation || '',
   };
 }

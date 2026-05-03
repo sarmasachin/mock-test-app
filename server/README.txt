@@ -67,6 +67,8 @@ PATCH /v1/admin/digest/:id                         (admin auth)
 DELETE /v1/admin/digest/:id                        (admin auth)
 GET /v1/admin/articles        (admin auth)
 POST /v1/admin/articles       (admin auth)
+GET /v1/admin/articles/categories   (admin auth)
+PUT /v1/admin/articles/categories   (admin auth)
 
 GET /health
 

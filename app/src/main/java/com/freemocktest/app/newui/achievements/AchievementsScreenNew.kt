@@ -27,8 +27,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,8 +43,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freemocktest.app.data.AppPreferencesRepository
+import com.freemocktest.app.data.remote.RetrofitProvider
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private data class Badge(
     val id: String,
@@ -58,6 +65,23 @@ fun AchievementsScreenNew(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val streak by AppPreferencesRepository.streakDays.collectAsState(initial = 0)
+
+    var adminIntro by remember { mutableStateOf<Pair<String?, String>?>(null) }
+    LaunchedEffect(Unit) {
+        adminIntro = withContext(Dispatchers.IO) {
+            try {
+                val ac = RetrofitProvider.publicApi.getHomeContent().achievementContent
+                val body = ac?.body?.trim().orEmpty()
+                if (body.isBlank()) {
+                    null
+                } else {
+                    Pair(ac?.title?.trim()?.takeIf { it.isNotBlank() }, body)
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
 
     val badges = listOf(
         Badge(
@@ -127,6 +151,33 @@ fun AchievementsScreenNew(
                 fontSize = 13.sp,
             )
             Spacer(Modifier.height(14.dp))
+
+            adminIntro?.let { (heading, bodyText) ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surface),
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        heading?.let { h ->
+                            Text(
+                                text = h,
+                                color = p.textPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                        }
+                        Text(
+                            text = bodyText,
+                            color = p.textSecondary,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+            }
 
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
