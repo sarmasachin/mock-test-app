@@ -1,6 +1,11 @@
 MockTestApp Admin Web
 =====================
 
+Live admin panel (production)
+-----------------------------
+Public URL: https://indiaapk.com/admin/
+(Vite is built with base path `/admin/` — deploy the `dist/` output so nginx (or your host) serves it under `/admin/`.)
+
 Run
 ---
 1. cd admin-web
@@ -11,6 +16,10 @@ Environment
 -----------
 Create .env with:
 VITE_API_BASE_URL=http://127.0.0.1:3000/v1
+
+Production build (.env.production) example:
+VITE_API_BASE_URL=https://indiaapk.com/v1
+(or your real API base; must match where `/v1` is exposed)
 
 Login
 -----
