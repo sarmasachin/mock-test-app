@@ -98,3 +98,6 @@ Android emulator uses base URL http://10.0.2.2:3000/v1/ (see app build.gradle.kt
 Physical device: set mocktest.apiBaseUrl in project local.properties, e.g.
   mocktest.apiBaseUrl=http://192.168.1.10:3000/v1/
 
+Production API host (keep admin + Android defaults in sync when env files are empty):
+  https://indiaapk.com/v1/
+

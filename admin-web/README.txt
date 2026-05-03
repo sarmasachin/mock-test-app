@@ -21,6 +21,9 @@ Production build (.env.production) example:
 VITE_API_BASE_URL=https://indiaapk.com/v1
 (or your real API base; must match where `/v1` is exposed)
 
+If you omit VITE_API_BASE_URL in production, the admin bundle still defaults to https://indiaapk.com/v1
+(same as Android release default in app/build.gradle.kts) so you do not accidentally hit a second host.
+
 Login
 -----
 - Use existing /v1/auth/login credentials.

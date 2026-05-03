@@ -465,12 +465,14 @@ function normalizeApiBaseUrl(raw: string): string {
 }
 
 const envApiBase = import.meta.env.VITE_API_BASE_URL?.trim();
+/** Production fallback when `.env.production` omits `VITE_API_BASE_URL` — same host as live API (VPS), not a second deploy. */
+const DEFAULT_PRODUCTION_API_BASE = 'https://indiaapk.com/v1';
 const apiBase = normalizeApiBaseUrl(
   envApiBase && envApiBase.length > 0
     ? envApiBase
     : import.meta.env.DEV
       ? 'http://127.0.0.1:3000/v1'
-      : 'https://mock-test-app-1-d1gf.onrender.com/v1',
+      : DEFAULT_PRODUCTION_API_BASE,
 );
 
 const ADMIN_AUTH_STORAGE_KEY = 'mocktest_admin_auth_v1';

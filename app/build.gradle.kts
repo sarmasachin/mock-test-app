@@ -23,10 +23,11 @@ android {
         targetSdk = 34
         versionCode = 2
         versionName = "1.0.1"
+        // Default release API (no local.properties): same VPS as admin — avoid a second stale host (e.g. old Render).
         val apiBase = (
             localProperties.getProperty("mocktest.releaseApiBaseUrl")
                 ?: localProperties.getProperty("mocktest.apiBaseUrl")
-                ?: "https://api.mocktestapp.com/v1/"
+                ?: "https://indiaapk.com/v1/"
             ).let { b -> if (b.endsWith("/")) b else "$b/" }
         val escaped = apiBase.replace("\\", "\\\\").replace("\"", "\\\"")
         buildConfigField("String", "API_BASE_URL", "\"$escaped\"")
