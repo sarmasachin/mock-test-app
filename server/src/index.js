@@ -1,9 +1,11 @@
 'use strict';
 
-require('dotenv').config();
+const path = require('path');
+// Load server/.env by path (PM2 cwd can differ; vars may not appear in `pm2 env` but process.env will have them).
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
 const { requireAuth } = require('./middleware/requireAuth');
 const { requireAdmin } = require('./middleware/requireAdmin');
 const authRouter = require('./routes/auth');
