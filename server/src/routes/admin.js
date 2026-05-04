@@ -3658,6 +3658,11 @@ router.post('/notifications/send', async (req, res) => {
           sent += 1;
         } else {
           failed += 1;
+          console.error(
+            'fcm_push_token_failed',
+            result.code || 'unknown',
+            (result.detail && String(result.detail).slice(0, 400)) || '',
+          );
           if (result.code === 'UNREGISTERED') {
             if (activeColumn) {
               const updateTs = cols.has('updated_at') ? ', updated_at = now()' : '';
@@ -3677,8 +3682,9 @@ router.post('/notifications/send', async (req, res) => {
             deactivated += 1;
           }
         }
-      } catch (_e) {
+      } catch (e) {
         failed += 1;
+        console.error('fcm_push_token_exception', e && (e.message || e));
       }
     }
     // Keep app bell/inbox feed in sync with manually sent pushes.

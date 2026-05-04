@@ -394,7 +394,12 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       const sent = Number(res.data?.sent || 0);
       const failed = Number(res.data?.failed || 0);
       const total = Number(res.data?.total || sent + failed);
-      const resultLine = `Push sent: ${sent}/${total} delivered, ${failed} failed.`;
+      const deactivated = Number(res.data?.deactivated || 0);
+      const nextSendN = (item.resendCount || 0) + 1;
+      let resultLine = `${total} device(s): ${sent} delivered, ${failed} failed. Send #${nextSendN} (= Resend count for this row).`;
+      if (deactivated > 0) {
+        resultLine += ` ${deactivated} invalid token(s) cleared.`;
+      }
       setSendResult(resultLine);
       pushToast('success', resultLine);
       setSettings((p) => ({
