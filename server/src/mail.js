@@ -80,7 +80,10 @@ function resolveReplyToAddress() {
   return String(process.env.MAIL_SUPPORT_EMAIL || process.env.SMTP_USER || '').trim();
 }
 
-function createTransport() {
+/** One pooled transport for OTP/support mail — avoids a fresh SMTP AUTH on every send (Gmail 454). */
+let pooledDefaultTransport = null;
+
+function buildDefaultTransportOptions() {
   const host = String(process.env.SMTP_HOST || 'smtp.gmail.com').trim();
   const port = parseInt(process.env.SMTP_PORT || '587', 10);
   const secure = String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true';
@@ -91,7 +94,10 @@ function createTransport() {
     String(process.env.SMTP_TLS_REJECT_UNAUTHORIZED || 'true').toLowerCase() !== 'false';
   const tlsMinVersion = String(process.env.SMTP_TLS_MIN_VERSION || 'TLSv1.2').trim();
 
-  return nodemailer.createTransport({
+  return {
+    pool: true,
+    maxConnections: 1,
+    maxMessages: Number(process.env.SMTP_POOL_MAX_MESSAGES || '200'),
     host,
     port,
     secure,
@@ -106,7 +112,14 @@ function createTransport() {
       rejectUnauthorized: tlsRejectUnauthorized,
       minVersion: tlsMinVersion,
     },
-  });
+  };
+}
+
+function getPooledDefaultTransport() {
+  if (!pooledDefaultTransport) {
+    pooledDefaultTransport = nodemailer.createTransport(buildDefaultTransportOptions());
+  }
+  return pooledDefaultTransport;
 }
 
 function createTransportForPrefix(prefix) {
@@ -228,7 +241,7 @@ async function sendMail({ to, subject, text, html }) {
   if (!toAddress) {
     throw new Error('Recipient email is required');
   }
-  const transporter = createTransport();
+  const transporter = getPooledDefaultTransport();
   await transporter.sendMail({
     from: resolveFromAddress(),
     replyTo: resolveReplyToAddress(),
@@ -285,8 +298,14 @@ async function sendWelcomeEmail(opts) {
 async function sendSecurityAccountAlertEmail(opts) {
   const eventType = String(opts?.eventType || '').toLowerCase();
   const subject = String(opts?.subject || '').toLowerCase();
-  const isLoginAlert = eventType.includes('login') || subject.includes('login');
-  if (isLoginAlert) {
+  // User password-login mail (auth.js) says "New login" — must use security_alert, not admin_login_alert.
+  // Admin UI "Admin Login Alert" was incorrectly gating those emails when toggled off.
+  const isUserPasswordLoginNotice =
+    eventType === 'new login' || subject.includes('new login on your account');
+  const mentionsLogin = eventType.includes('login') || subject.includes('login');
+  if (isUserPasswordLoginNotice) {
+    if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.securityAlert))) return undefined;
+  } else if (mentionsLogin) {
     if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.adminLoginAlert))) return undefined;
   } else if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.securityAlert))) {
     return undefined;
@@ -372,8 +391,39 @@ async function sendBirthdayEmail(opts) {
 const sendNewContentByInterestEmail = noop;
 const sendReEngagementEmail = noop;
 
+/** Safe short message for API JSON when SMTP send fails (log full error server-side). */
+function mapSmtpSendErrorToClientMessage(err) {
+  const s = String((err && err.message) || err || '');
+  const low = s.toLowerCase();
+  if (low.includes('454') || low.includes('too many login') || low.includes('rate limit')) {
+    return (
+      'Mail provider temporarily blocked sending (too many attempts). ' +
+      'Wait 30–60 minutes and try again; avoid sending many test emails in a short time.'
+    );
+  }
+  if (
+    low.includes('invalid login') ||
+    low.includes('eauth') ||
+    low.includes('authentication failed') ||
+    low.includes('username and password not accepted')
+  ) {
+    return 'Mail login failed on server. Check SMTP_USER and SMTP_PASS (Gmail needs an App Password).';
+  }
+  if (low.includes('recipient') && (low.includes('required') || low.includes('empty'))) {
+    return 'No recipient email configured for this account.';
+  }
+  if (low.includes('getaddrinfo') || low.includes('enotfound') || low.includes('econnrefused')) {
+    return 'Could not reach the mail server. Check SMTP_HOST and network.';
+  }
+  if (low.includes('timeout') || low.includes('etimedout')) {
+    return 'Mail server timed out. Try again later.';
+  }
+  return 'Could not send email. If this continues, check server logs and SMTP settings.';
+}
+
 module.exports = {
   isMailConfigured,
+  mapSmtpSendErrorToClientMessage,
   sendPasswordResetOtp,
   sendEmailVerificationOtp,
   sendWelcomeEmail,

@@ -8,7 +8,9 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "e2e:auth-health": "node scripts/e2eAuthHealth.js",
-    "e2e:google-auth": "node scripts/e2eGoogleAuth.js"
+    "e2e:google-auth": "node scripts/e2eGoogleAuth.js",
+    "e2e:mail-live": "node scripts/e2eMailLive.js",
+    "e2e:mail-otp": "node scripts/e2eMailOtpOnly.js"
   },
   "engines": {
     "node": ">=18"

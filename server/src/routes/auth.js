@@ -13,11 +13,13 @@ const {
 } = require('../services/sessionTokens');
 const {
   isMailConfigured,
+  mapSmtpSendErrorToClientMessage,
   sendPasswordResetOtp,
   sendWelcomeEmail,
   sendSecurityAccountAlertEmail,
 } = require('../mail');
 const { postGoogleSignIn } = require('../auth/googleSignInPost');
+const { checkPasswordResetIp, checkPasswordResetEmail } = require('../lib/otpSendRateLimit');
 
 const router = express.Router();
 
@@ -218,6 +220,13 @@ router.post('/password-reset/request', async (req, res) => {
   if (!em || !em.includes('@')) {
     return res.status(400).json({ error: 'Valid email required' });
   }
+  const rlIp = checkPasswordResetIp(req);
+  if (!rlIp.ok) {
+    res.setHeader('Retry-After', String(rlIp.retryAfterSec));
+    return res.status(429).json({
+      error: `Too many reset attempts from this network. Try again in ${rlIp.retryAfterSec}s.`,
+    });
+  }
   try {
     const { rows } = await pool.query(
       `SELECT id, email FROM users WHERE email_normalized = lower(trim($1)) LIMIT 1`,
@@ -236,6 +245,13 @@ router.post('/password-reset/request', async (req, res) => {
       return res.status(503).json({
         error:
           'Password reset email is not configured. Add SMTP settings to the server .env (see .env.example).',
+      });
+    }
+    const rlEm = checkPasswordResetEmail(em);
+    if (!rlEm.ok) {
+      res.setHeader('Retry-After', String(rlEm.retryAfterSec));
+      return res.status(429).json({
+        error: `Too many codes sent to this email. Try again in ${rlEm.retryAfterSec}s.`,
       });
     }
     const otp = String(pickSixDigit());
@@ -268,8 +284,8 @@ router.post('/password-reset/request', async (req, res) => {
       message: 'We sent a 6-digit code to this email. It expires in 15 minutes.',
     });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Could not send reset code' });
+    console.error('password_reset_request_send_failed', e);
+    return res.status(500).json({ error: mapSmtpSendErrorToClientMessage(e) });
   }
 });
 

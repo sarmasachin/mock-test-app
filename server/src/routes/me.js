@@ -7,10 +7,12 @@ const { sha256Hex } = require('../cryptoUtil');
 const { mapUserRow } = require('../userMapper');
 const {
   isMailConfigured,
+  mapSmtpSendErrorToClientMessage,
   sendEmailVerificationOtp,
   sendSecurityAccountAlertEmail,
   sendSupportJourneyEmail,
 } = require('../mail');
+const { checkEmailVerificationUser } = require('../lib/otpSendRateLimit');
 
 const router = express.Router();
 const EMAIL_VERIFY_OTP_MINUTES = () =>
@@ -296,6 +298,17 @@ router.post('/email-verification/request', async (req, res) => {
         error: 'Email verification is not configured. Add SMTP settings to server .env.',
       });
     }
+    const rlEv = checkEmailVerificationUser(req.userId);
+    if (!rlEv.ok) {
+      res.setHeader('Retry-After', String(rlEv.retryAfterSec));
+      return res.status(429).json({
+        error: `Too many verification emails requested. Try again in ${rlEv.retryAfterSec}s.`,
+      });
+    }
+    const emailTrim = String(user.email || '').trim();
+    if (!emailTrim || !emailTrim.includes('@')) {
+      return res.status(400).json({ error: 'No valid email on this account.' });
+    }
     const otp = String(pickSixDigit());
     const tokenHash = sha256Hex(otp);
     const expires = new Date();
@@ -320,14 +333,14 @@ router.post('/email-verification/request', async (req, res) => {
     } finally {
       client.release();
     }
-    await sendEmailVerificationOtp({ to: user.email, otp });
+    await sendEmailVerificationOtp({ to: emailTrim, otp });
     return res.status(200).json({
       ok: true,
       message: 'We sent a 6-digit verification code to your email.',
     });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Could not send verification code' });
+    console.error('email_verification_request_failed', e);
+    return res.status(500).json({ error: mapSmtpSendErrorToClientMessage(e) });
   }
 });
 
