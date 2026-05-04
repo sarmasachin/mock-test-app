@@ -197,6 +197,12 @@ async function ensureOptionalColumns() {
       `ALTER TABLE users
        ADD COLUMN IF NOT EXISTS date_of_birth DATE`,
     );
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(255)`);
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_users_google_sub_nonempty
+       ON users (google_sub)
+       WHERE google_sub IS NOT NULL AND trim(google_sub) <> ''`,
+    );
     await pool.query(
       `ALTER TABLE news_articles
        ADD COLUMN IF NOT EXISTS feature_image_url TEXT`,

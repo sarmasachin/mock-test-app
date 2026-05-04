@@ -19,7 +19,7 @@ data class LoginRequest(
     val password: String,
 )
 
-data class GoogleSignInRequest(
+data class GoogleSignInRequestBody(
     @SerializedName("idToken") val idToken: String,
 )
 

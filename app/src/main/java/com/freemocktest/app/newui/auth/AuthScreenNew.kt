@@ -1,9 +1,7 @@
 package com.freemocktest.app.newui.auth
 
 import android.content.Context
-import android.content.ContextWrapper
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -58,11 +56,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
-import com.freemocktest.app.BuildConfig
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.data.needsProfileCompletion
-import com.freemocktest.app.data.auth.GoogleSignInHelper
 import com.freemocktest.app.newui.components.AppSnackbarHostNew
 import com.freemocktest.app.newui.components.rememberAppSnackbarHostStateNew
 import com.freemocktest.app.newui.components.showError
@@ -74,13 +70,6 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-private tailrec fun Context.findComponentActivity(): ComponentActivity? =
-    when (this) {
-        is ComponentActivity -> this
-        is ContextWrapper -> baseContext.findComponentActivity()
-        else -> null
-    }
 
 private enum class PendingAuthRoute { None, Home, Profile }
 
@@ -461,42 +450,9 @@ private fun AuthCard(
     onSuccess: (String) -> Unit,
     onError: (String) -> Unit,
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val p = mockTestPalette()
     val cardShape = RoundedCornerShape(18.dp)
     val stroke = p.border.copy(alpha = 0.30f)
-
-    val onGoogleSignIn: () -> Unit = {
-        val act = context.findComponentActivity()
-        if (act == null) {
-            onError("Google Sign-In is not available.")
-        } else if (BuildConfig.GOOGLE_WEB_CLIENT_ID.isBlank()) {
-            onError(
-                "Add mocktest.googleWebClientId to local.properties (Web client ID — same as server GOOGLE_WEB_CLIENT_ID).",
-            )
-        } else {
-            scope.launch {
-                val idToken = GoogleSignInHelper.requestIdToken(act).getOrElse { e ->
-                    onError(networkAwareError(e, "Google Sign-In failed"))
-                    return@launch
-                }
-                AuthRepository.loginWithGoogle(idToken)
-                    .onSuccess { user ->
-                        if (user.needsProfileCompletion()) {
-                            onSuccess("Login successful")
-                            delay(600)
-                            onProfileIncomplete()
-                        } else {
-                            onSuccess("Login successful")
-                            delay(600)
-                            onAuthSuccess()
-                        }
-                    }
-                    .onFailure { e -> onError(networkAwareError(e, "Google Sign-In failed")) }
-            }
-        }
-    }
 
     Column(
         modifier = Modifier
@@ -521,7 +477,6 @@ private fun AuthCard(
                     onSuccess = onSuccess,
                     onError = onError,
                     onForgotPassword = onForgotPassword,
-                    onGoogleSignIn = onGoogleSignIn,
                 )
             }
         } else {
@@ -542,9 +497,9 @@ private fun AuthCard(
                 SignupForm(
                     onSwitch = { onModeChange(AuthModeNew.Login) },
                     onSuccess = onAuthSuccess,
+                    onProfileIncomplete = onProfileIncomplete,
                     onUiSuccess = onSuccess,
                     onError = onError,
-                    onGoogleSignIn = onGoogleSignIn,
                     onOpenTerms = onOpenTerms,
                 )
             }
@@ -677,7 +632,6 @@ private fun LoginForm(
     onSuccess: (String) -> Unit,
     onError: (String) -> Unit,
     onForgotPassword: () -> Unit,
-    onGoogleSignIn: () -> Unit,
 ) {
     val p = mockTestPalette()
     val scope = rememberCoroutineScope()
@@ -687,6 +641,8 @@ private fun LoginForm(
     var identifierError by remember { mutableStateOf<String?>(null) }
     var passwordError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var googlePicking by remember { mutableStateOf(false) }
+    var googleSubmitting by remember { mutableStateOf(false) }
 
     NeonTextField(
         value = identifier,
@@ -726,6 +682,36 @@ private fun LoginForm(
                 ) { onForgotPassword() },
         )
     }
+    Spacer(Modifier.height(14.dp))
+    ContinueWithGoogleSection(
+        requireTermsAccepted = false,
+        termsAccepted = true,
+        onTermsNotAccepted = { },
+        enabled = !busy && !googlePicking && !googleSubmitting,
+        pickingAccount = googlePicking,
+        onPickingAccountChange = { googlePicking = it },
+        onGoogleIdToken = { idToken ->
+            scope.launch {
+                googleSubmitting = true
+                AuthRepository.signInWithGoogle(idToken)
+                    .onSuccess { user ->
+                        googleSubmitting = false
+                        if (user.needsProfileCompletion()) {
+                            Toast.makeText(context, "Signed in with Google", Toast.LENGTH_SHORT).show()
+                            onProfileIncomplete()
+                        } else {
+                            Toast.makeText(context, "Signed in with Google", Toast.LENGTH_SHORT).show()
+                            onAuthSuccess()
+                        }
+                    }
+                    .onFailure { e ->
+                        googleSubmitting = false
+                        onError(networkAwareError(e, "Google sign-in failed"))
+                    }
+            }
+        },
+        onPickerErrorMessage = { msg -> onError(msg) },
+    )
     Spacer(Modifier.height(16.dp))
 
     // Ensure the login CTA stretches to the full card width (some parent constraints
@@ -733,7 +719,7 @@ private fun LoginForm(
     Box(modifier = Modifier.fillMaxWidth()) {
         NeonButton(
             text = "Login",
-            enabled = !busy,
+            enabled = !busy && !googlePicking && !googleSubmitting,
             loading = busy,
             onClick = {
                 if (busy) return@NeonButton
@@ -779,12 +765,6 @@ private fun LoginForm(
             },
         )
     }
-    Spacer(Modifier.height(14.dp))
-    GoogleAuthButton(
-        text = "Continue with Google",
-        onClick = onGoogleSignIn,
-    )
-
     Spacer(Modifier.height(10.dp))
 
     Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
@@ -810,9 +790,9 @@ private fun LoginForm(
 private fun SignupForm(
     onSwitch: () -> Unit,
     onSuccess: () -> Unit,
+    onProfileIncomplete: () -> Unit,
     onUiSuccess: (String) -> Unit,
     onError: (String) -> Unit,
-    onGoogleSignIn: () -> Unit,
     onOpenTerms: () -> Unit,
 ) {
     val p = mockTestPalette()
@@ -833,6 +813,8 @@ private fun SignupForm(
     var termsError by remember { mutableStateOf<String?>(null) }
     var agreedToTerms by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    var googlePicking by remember { mutableStateOf(false) }
+    var googleSubmitting by remember { mutableStateOf(false) }
 
     val stateMatched = remember(state) {
         SignupRegionData.indianStates.any { it.equals(state, ignoreCase = true) }
@@ -945,11 +927,42 @@ private fun SignupForm(
                 .padding(start = 8.dp),
         )
     }
+    Spacer(Modifier.height(14.dp))
+    ContinueWithGoogleSection(
+        requireTermsAccepted = true,
+        termsAccepted = agreedToTerms,
+        onTermsNotAccepted = {
+            termsError = "Please accept Terms & Condition"
+        },
+        enabled = !busy && !googlePicking && !googleSubmitting,
+        pickingAccount = googlePicking,
+        onPickingAccountChange = { googlePicking = it },
+        onGoogleIdToken = { idToken ->
+            scope.launch {
+                googleSubmitting = true
+                AuthRepository.signInWithGoogle(idToken)
+                    .onSuccess { user ->
+                        googleSubmitting = false
+                        Toast.makeText(context, "Signed up with Google", Toast.LENGTH_SHORT).show()
+                        if (user.needsProfileCompletion()) {
+                            onProfileIncomplete()
+                        } else {
+                            onSuccess()
+                        }
+                    }
+                    .onFailure { e ->
+                        googleSubmitting = false
+                        onError(networkAwareError(e, "Google sign-up failed"))
+                    }
+            }
+        },
+        onPickerErrorMessage = { msg -> onError(msg) },
+    )
     Spacer(Modifier.height(16.dp))
 
     NeonButton(
         text = "Register",
-        enabled = !busy,
+        enabled = !busy && !googlePicking && !googleSubmitting,
         loading = busy,
         onClick = {
             if (busy) return@NeonButton
@@ -1030,11 +1043,6 @@ private fun SignupForm(
                     }
             }
         },
-    )
-    Spacer(Modifier.height(14.dp))
-    GoogleAuthButton(
-        text = "Continue with Google",
-        onClick = onGoogleSignIn,
     )
     Spacer(Modifier.height(10.dp))
 

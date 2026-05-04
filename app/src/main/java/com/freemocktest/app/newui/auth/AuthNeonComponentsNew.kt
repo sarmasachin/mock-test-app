@@ -261,31 +261,6 @@ fun NeonButton(
     }
 }
 
-@Composable
-fun GoogleAuthButton(
-    text: String,
-    onClick: () -> Unit,
-) {
-    val p = mockTestPalette()
-    val shape = RoundedCornerShape(12.dp)
-    Button(
-        onClick = onClick,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = androidx.compose.ui.graphics.Color.Transparent,
-            contentColor = p.textPrimary,
-        ),
-        shape = shape,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(48.dp)
-            .border(1.dp, p.border.copy(alpha = 0.28f), shape),
-    ) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(text = text, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        }
-    }
-}
-
 fun isValidMobile(input: String): Boolean {
     val digits = input.trim()
     if (digits.length != 10 || !digits.all { it.isDigit() }) return false

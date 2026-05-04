@@ -7,8 +7,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "e2e:admin-fp": "node scripts/e2eAdminForgotPassword.js",
-    "e2e:auth-health": "node scripts/e2eAuthHealth.js"
+    "e2e:auth-health": "node scripts/e2eAuthHealth.js",
+    "e2e:google-auth": "node scripts/e2eGoogleAuth.js"
   },
   "engines": {
     "node": ">=18"

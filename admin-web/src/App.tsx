@@ -482,22 +482,6 @@ const api = axios.create({
   timeout: 15000,
 });
 
-const googleWebClientId = String(import.meta.env.VITE_GOOGLE_WEB_CLIENT_ID || '').trim();
-
-function loadGoogleIdentityScript(): Promise<void> {
-  if (typeof window === 'undefined') return Promise.resolve();
-  if (window.google?.accounts?.id) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = 'https://accounts.google.com/gsi/client';
-    s.async = true;
-    s.defer = true;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error('Failed to load Google Sign-In'));
-    document.head.appendChild(s);
-  });
-}
-
 /** Avoid showing raw nginx HTML pages in the UI; map common proxy mistakes to a short hint. */
 function formatAxiosErr(err: unknown, fallback: string): string {
   const e = err as {
@@ -656,22 +640,9 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'info' | 'error' | 'success'>('info');
-  const [authView, setAuthView] = useState<'login' | 'forgot'>('login');
-  const [forgotIdentifier, setForgotIdentifier] = useState('');
-  const [forgotOtp, setForgotOtp] = useState('');
-  const [forgotNewPassword, setForgotNewPassword] = useState('');
-  const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
-  const [forgotSending, setForgotSending] = useState(false);
-  const [forgotResetting, setForgotResetting] = useState(false);
-  const [forgotMessage, setForgotMessage] = useState('');
-  const [forgotMessageType, setForgotMessageType] = useState<'info' | 'error' | 'success'>('info');
-  /** After successful “Send OTP”, show OTP + new password fields. */
-  const [forgotOtpSent, setForgotOtpSent] = useState(false);
   const [tab, setTab] = useState<Tab>('dashboard');
   const [selectedQuestionTestId, setSelectedQuestionTestId] = useState<string>('');
   const sideNavRef = useRef<HTMLElement | null>(null);
-  const googleBtnMountRef = useRef<HTMLDivElement | null>(null);
-  const googleCallbackRef = useRef<(credential: string) => void>(() => {});
   const handleAuthExpiredRef = useRef<() => void>(() => {});
 
   handleAuthExpiredRef.current = () => {
@@ -808,53 +779,6 @@ function App() {
     }
   }, [tab, selectedQuestionTestId]);
 
-  useEffect(() => {
-    if (isAdmin || authView !== 'login' || !googleWebClientId) return undefined;
-    const mount = googleBtnMountRef.current;
-    if (!mount) return undefined;
-    let cancelled = false;
-    void (async () => {
-      try {
-        await loadGoogleIdentityScript();
-        if (cancelled || !googleBtnMountRef.current) return;
-        const node = googleBtnMountRef.current;
-        node.innerHTML = '';
-        const id = window.google?.accounts?.id;
-        if (!id) {
-          throw new Error('Google Sign-In unavailable');
-        }
-        id.initialize({
-          client_id: googleWebClientId,
-          callback: (r: { credential?: string }) => {
-            void googleCallbackRef.current(String(r?.credential || ''));
-          },
-          auto_select: false,
-        });
-        id.renderButton(node, {
-          type: 'standard',
-          theme: 'outline',
-          size: 'large',
-          text: 'continue_with',
-          shape: 'rectangular',
-          logo_alignment: 'left',
-          width: 320,
-        });
-      } catch (e) {
-        if (!cancelled) {
-          setMessageType('error');
-          setMessage(e instanceof Error ? e.message : 'Could not load Google Sign-In.');
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-      window.google?.accounts?.id?.cancel?.();
-      if (googleBtnMountRef.current) {
-        googleBtnMountRef.current.innerHTML = '';
-      }
-    };
-  }, [isAdmin, authView, googleWebClientId]);
-
   type LoginUserPayload = { isAdmin?: boolean; isSuperAdmin?: boolean; email?: string } | null;
 
   async function bootstrapAdminSession(
@@ -880,35 +804,6 @@ function App() {
     setToken(accessToken);
     return { ok: true };
   }
-
-  googleCallbackRef.current = async (credential: string) => {
-    const idToken = String(credential || '').trim();
-    if (!idToken) return;
-    setLoading(true);
-    setMessage('');
-    setMessageType('info');
-    try {
-      const loginRes = await api.post('/auth/google', { idToken });
-      const accessToken = String(loginRes.data?.accessToken || '');
-      if (!accessToken) throw new Error('Token missing in login response');
-      const loginUser = (loginRes.data?.user || null) as LoginUserPayload;
-      const idLabel = String(loginUser?.email || '').trim() || identifier;
-      const result = await bootstrapAdminSession(accessToken, idLabel, loginUser);
-      if (!result.ok) {
-        setMessageType('error');
-        setMessage(result.message);
-        return;
-      }
-      setIdentifier(idLabel);
-      setMessageType('success');
-      setMessage('Login successful.');
-    } catch (err: unknown) {
-      setMessageType('error');
-      setMessage(formatAxiosErr(err, 'Google sign-in failed.'));
-    } finally {
-      setLoading(false);
-    }
-  };
 
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
@@ -939,96 +834,6 @@ function App() {
     }
   }
 
-  async function handleAdminForgotPasswordRequest(e: FormEvent) {
-    e.preventDefault();
-    const nextIdentifier = String(forgotIdentifier || '').trim();
-    if (!nextIdentifier) {
-      setForgotMessageType('error');
-      setForgotMessage('Email or mobile is required.');
-      return;
-    }
-    // Common typo: # instead of @ — server would return ok:false, but catch confusion early
-    if (nextIdentifier.includes('#')) {
-      setForgotMessageType('error');
-      setForgotMessage('Email looks invalid: use @ not # (example: name@gmail.com).');
-      return;
-    }
-    setForgotSending(true);
-    setForgotMessage('');
-    setForgotMessageType('info');
-    try {
-      const res = await api.post('/auth/admin/password-reset/request', {
-        identifier: nextIdentifier,
-      });
-      const data = res.data as { ok?: boolean; error?: string; message?: string } | undefined;
-      if (data?.ok !== true) {
-        setForgotMessageType('error');
-        setForgotMessage(
-          String(data?.error || 'Request did not complete. Check API URL and try again.'),
-        );
-        return;
-      }
-      setForgotMessageType('success');
-      setForgotMessage(String(data?.message || 'OTP sent successfully.'));
-      setForgotOtpSent(true);
-    } catch (err: unknown) {
-      setForgotMessageType('error');
-      setForgotMessage(
-        formatAxiosErr(err, 'Could not send OTP. Check that the API is reachable and try again.'),
-      );
-    } finally {
-      setForgotSending(false);
-    }
-  }
-
-  async function handleAdminForgotPasswordComplete(e: FormEvent) {
-    e.preventDefault();
-    const nextIdentifier = String(forgotIdentifier || '').trim();
-    if (!nextIdentifier) {
-      setForgotMessageType('error');
-      setForgotMessage('Email or mobile is required.');
-      return;
-    }
-    if (forgotOtp.replace(/\D/g, '').length !== 6) {
-      setForgotMessageType('error');
-      setForgotMessage('Enter a valid 6-digit OTP.');
-      return;
-    }
-    if (forgotNewPassword.length < 4) {
-      setForgotMessageType('error');
-      setForgotMessage('New password must be at least 4 characters.');
-      return;
-    }
-    if (forgotNewPassword !== forgotConfirmPassword) {
-      setForgotMessageType('error');
-      setForgotMessage('Confirm password does not match.');
-      return;
-    }
-    setForgotResetting(true);
-    setForgotMessage('');
-    setForgotMessageType('info');
-    try {
-      await api.post('/auth/admin/password-reset/complete', {
-        identifier: nextIdentifier,
-        otp: forgotOtp,
-        newPassword: forgotNewPassword,
-      });
-      setForgotMessageType('success');
-      setForgotMessage('Password reset successful. Please login with your new password.');
-      setForgotOtp('');
-      setForgotNewPassword('');
-      setForgotConfirmPassword('');
-      setForgotOtpSent(false);
-      setAuthView('login');
-      setPassword('');
-    } catch (err: unknown) {
-      setForgotMessageType('error');
-      setForgotMessage(formatAxiosErr(err, 'Password reset failed.'));
-    } finally {
-      setForgotResetting(false);
-    }
-  }
-
   if (!isAdmin) {
     return (
       <div className="page auth-page">
@@ -1039,176 +844,44 @@ function App() {
         </div>
         <div className="auth-shell">
           <div className="auth-card login-card">
-            {authView === 'login' ? (
-              <>
-                <p className="auth-login-title">Admin login</p>
-                <form onSubmit={handleLogin} className="auth-form auth-float-form">
-                  <div className="input-group">
-                    <div className="input-box input-box-float">
-                      <i aria-hidden="true">✉</i>
-                      <input
-                        id="admin-login-identifier"
-                        value={identifier}
-                        onChange={(e) => setIdentifier(e.target.value)}
-                        placeholder=" "
-                        autoComplete="username"
-                        required
-                      />
-                      <label htmlFor="admin-login-identifier">Email / Mobile</label>
-                    </div>
+            <>
+              <p className="auth-login-title">Admin login</p>
+              <form onSubmit={handleLogin} className="auth-form auth-float-form">
+                <div className="input-group">
+                  <div className="input-box input-box-float">
+                    <i aria-hidden="true">✉</i>
+                    <input
+                      id="admin-login-identifier"
+                      value={identifier}
+                      onChange={(e) => setIdentifier(e.target.value)}
+                      placeholder=" "
+                      autoComplete="username"
+                      required
+                    />
+                    <label htmlFor="admin-login-identifier">Email / Mobile</label>
                   </div>
-                  <div className="input-group">
-                    <div className="input-box input-box-float">
-                      <i aria-hidden="true">🔒</i>
-                      <input
-                        id="admin-login-password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder=" "
-                        type="password"
-                        autoComplete="current-password"
-                        required
-                      />
-                      <label htmlFor="admin-login-password">Password</label>
-                    </div>
-                  </div>
-                  <div className="auth-forgot-row">
-                    <button
-                      type="button"
-                      className="auth-forgot-link"
-                      onClick={() => {
-                        setAuthView('forgot');
-                        setForgotMessage('');
-                        setForgotMessageType('info');
-                        setForgotOtpSent(false);
-                        setForgotIdentifier(String(identifier || '').trim());
-                      }}
-                    >
-                      Forgot password?
-                    </button>
-                  </div>
-                  <button type="submit" className="login-btn" disabled={loading}>
-                    {loading ? 'Logging in...' : 'Login'}
-                  </button>
-                </form>
-                {googleWebClientId ? (
-                  <>
-                    <div className="auth-google-divider" role="separator" aria-label="or">
-                      <span>or</span>
-                    </div>
-                    <div className={`auth-google-row${loading ? ' auth-google-row--busy' : ''}`}>
-                      <div ref={googleBtnMountRef} className="google-signin-mount" />
-                    </div>
-                  </>
-                ) : (
-                  <p className="auth-google-config-hint">
-                    Optional: set <code>VITE_GOOGLE_WEB_CLIENT_ID</code> (same Web client ID as server{' '}
-                    <code>GOOGLE_WEB_CLIENT_ID</code>) to show Continue with Google.
-                  </p>
-                )}
-                {message && <p className={`auth-message ${messageType} ${messageType === 'error' ? 'error-p' : ''}`}>{message}</p>}
-              </>
-            ) : (
-              <>
-                <div className="auth-forgot-back">
-                  <button
-                    type="button"
-                    className="auth-back-link"
-                    onClick={() => {
-                      setAuthView('login');
-                      setForgotMessage('');
-                      setMessage('');
-                      setForgotOtpSent(false);
-                    }}
-                  >
-                    ← Back to login
-                  </button>
                 </div>
-                <p className="auth-section-heading">Reset password</p>
-                {forgotMessage && (
-                  <p
-                    className={`auth-message ${forgotMessageType} ${forgotMessageType === 'error' ? 'error-p' : ''}`}
-                    role="status"
-                    aria-live="polite"
-                  >
-                    {forgotMessage}
-                  </p>
-                )}
-                <form onSubmit={handleAdminForgotPasswordRequest} className="auth-form auth-float-form">
-                  <div className="input-group">
-                    <div className="input-box input-box-float">
-                      <i aria-hidden="true">✉</i>
-                      <input
-                        id="admin-forgot-identifier"
-                        value={forgotIdentifier}
-                        onChange={(e) => {
-                          setForgotIdentifier(e.target.value);
-                          setForgotOtpSent(false);
-                        }}
-                        placeholder=" "
-                        autoComplete="username"
-                        required
-                      />
-                      <label htmlFor="admin-forgot-identifier">Email / Mobile</label>
-                    </div>
+                <div className="input-group">
+                  <div className="input-box input-box-float">
+                    <i aria-hidden="true">🔒</i>
+                    <input
+                      id="admin-login-password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder=" "
+                      type="password"
+                      autoComplete="current-password"
+                      required
+                    />
+                    <label htmlFor="admin-login-password">Password</label>
                   </div>
-                  <button type="submit" className="login-btn" disabled={forgotSending}>
-                    {forgotSending ? 'Sending OTP...' : 'Send OTP'}
-                  </button>
-                </form>
-                {forgotOtpSent ? (
-                  <form onSubmit={handleAdminForgotPasswordComplete} className="auth-form auth-float-form">
-                    <div className="input-group">
-                      <div className="input-box input-box-float">
-                        <i aria-hidden="true">#</i>
-                        <input
-                          id="admin-forgot-otp"
-                          value={forgotOtp}
-                          onChange={(e) => setForgotOtp(e.target.value)}
-                          placeholder=" "
-                          inputMode="numeric"
-                          required
-                        />
-                        <label htmlFor="admin-forgot-otp">6-digit OTP</label>
-                      </div>
-                    </div>
-                    <div className="input-group">
-                      <div className="input-box input-box-float">
-                        <i aria-hidden="true">🔒</i>
-                        <input
-                          id="admin-forgot-new-password"
-                          value={forgotNewPassword}
-                          onChange={(e) => setForgotNewPassword(e.target.value)}
-                          placeholder=" "
-                          type="password"
-                          autoComplete="new-password"
-                          required
-                        />
-                        <label htmlFor="admin-forgot-new-password">New Password</label>
-                      </div>
-                    </div>
-                    <div className="input-group">
-                      <div className="input-box input-box-float">
-                        <i aria-hidden="true">🔒</i>
-                        <input
-                          id="admin-forgot-confirm-password"
-                          value={forgotConfirmPassword}
-                          onChange={(e) => setForgotConfirmPassword(e.target.value)}
-                          placeholder=" "
-                          type="password"
-                          autoComplete="new-password"
-                          required
-                        />
-                        <label htmlFor="admin-forgot-confirm-password">Confirm Password</label>
-                      </div>
-                    </div>
-                    <button type="submit" className="login-btn" disabled={forgotResetting}>
-                      {forgotResetting ? 'Resetting password...' : 'Verify OTP & Reset Password'}
-                    </button>
-                  </form>
-                ) : null}
-              </>
-            )}
+                </div>
+                <button type="submit" className="login-btn" disabled={loading}>
+                  {loading ? 'Logging in...' : 'Login'}
+                </button>
+              </form>
+              {message && <p className={`auth-message ${messageType} ${messageType === 'error' ? 'error-p' : ''}`}>{message}</p>}
+            </>
           </div>
         </div>
       </div>

@@ -31,14 +31,18 @@ android {
             ).let { b -> if (b.endsWith("/")) b else "$b/" }
         val escaped = apiBase.replace("\\", "\\\\").replace("\"", "\\\"")
         buildConfigField("String", "API_BASE_URL", "\"$escaped\"")
-        // OAuth 2.0 Web client ID (Google Cloud Console) — same value as server GOOGLE_WEB_CLIENT_ID
-        val googleWeb = (localProperties.getProperty("mocktest.googleWebClientId") ?: "").replace("\\", "\\\\").replace("\"", "\\\"")
-        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWeb\"")
         val resultDelayHours = (localProperties.getProperty("mocktest.resultReleaseDelayHours") ?: "3")
             .toIntOrNull()
             ?.coerceAtLeast(1)
             ?: 3
         buildConfigField("int", "RESULT_RELEASE_DELAY_HOURS", resultDelayHours.toString())
+        // Must match Web OAuth client (type 3) in Firebase — same value as server GOOGLE_SIGN_IN_WEB_CLIENT_ID.
+        val googleWebClientId = (
+            localProperties.getProperty("mocktest.googleWebClientId")
+                ?: "532425267567-rphktqaqjlbhpf6o39ondpk84h8b7cjg.apps.googleusercontent.com"
+            ).trim()
+        val googleWebEscaped = googleWebClientId.replace("\\", "\\\\").replace("\"", "\\\"")
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebEscaped\"")
     }
 
     buildTypes {
@@ -100,11 +104,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
-    implementation("androidx.credentials:credentials:1.3.0")
-    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
-    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
     implementation(platform("com.google.firebase:firebase-bom:33.5.1"))
     implementation("com.google.firebase:firebase-messaging-ktx")
+    implementation("com.google.android.gms:play-services-auth:21.3.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

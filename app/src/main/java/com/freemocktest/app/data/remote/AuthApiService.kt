@@ -8,11 +8,11 @@ interface AuthApiService {
     @POST("auth/login")
     suspend fun login(@Body body: LoginRequest): AuthResponse
 
-    @POST("auth/google")
-    suspend fun loginWithGoogle(@Body body: GoogleSignInRequest): AuthResponse
-
     @POST("auth/register")
     suspend fun register(@Body body: RegisterRequest): AuthResponse
+
+    @POST("auth/google")
+    suspend fun googleSignIn(@Body body: GoogleSignInRequestBody): AuthResponse
 
     @POST("auth/refresh")
     suspend fun refresh(@Body body: RefreshRequest): RefreshResponse

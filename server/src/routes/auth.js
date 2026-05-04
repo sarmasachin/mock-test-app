@@ -2,58 +2,24 @@
 
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const { pool } = require('../db');
 const { sha256Hex, randomRefreshToken } = require('../cryptoUtil');
 const { mapUserRow } = require('../userMapper');
+const {
+  ACCESS_TTL,
+  signAccessToken,
+  insertRefreshSession,
+  issueTokens,
+} = require('../services/sessionTokens');
 const {
   isMailConfigured,
   sendPasswordResetOtp,
   sendWelcomeEmail,
   sendSecurityAccountAlertEmail,
 } = require('../mail');
-const { verifyGoogleIdToken, isGoogleAuthConfigured } = require('../googleAuth');
-const {
-  sendAdminForgotPasswordOtpEmail,
-  isAdminForgotMailConfigured,
-} = require('../mailer/events/adminForgotPasswordOtp');
+const { postGoogleSignIn } = require('../auth/googleSignInPost');
 
 const router = express.Router();
-
-const ACCESS_TTL = () => parseInt(process.env.ACCESS_TOKEN_TTL_SECONDS || '86400', 10);
-const REFRESH_DAYS = () => parseInt(process.env.REFRESH_TOKEN_TTL_DAYS || '14', 10);
-
-function signAccessToken(userId) {
-  return jwt.sign({ sub: userId }, process.env.JWT_SECRET, { expiresIn: ACCESS_TTL() });
-}
-
-async function insertRefreshSession(client, userId, plainRefresh) {
-  const hash = sha256Hex(plainRefresh);
-  const expires = new Date();
-  expires.setDate(expires.getDate() + REFRESH_DAYS());
-  await client.query(
-    `INSERT INTO user_refresh_sessions (user_id, refresh_token_hash, expires_at)
-     VALUES ($1::uuid, $2, $3)`,
-    [userId, hash, expires.toISOString()],
-  );
-}
-
-async function issueTokens(userId) {
-  const accessToken = signAccessToken(userId);
-  const refreshToken = randomRefreshToken();
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await insertRefreshSession(client, userId, refreshToken);
-    await client.query('COMMIT');
-  } catch (e) {
-    await client.query('ROLLBACK');
-    throw e;
-  } finally {
-    client.release();
-  }
-  return { accessToken, refreshToken, expiresInSeconds: ACCESS_TTL() };
-}
 
 function pickSixDigit() {
   return 100000 + Math.floor(Math.random() * 900000);
@@ -61,8 +27,6 @@ function pickSixDigit() {
 
 const PASSWORD_RESET_OTP_MINUTES = () =>
   parseInt(process.env.PASSWORD_RESET_OTP_MINUTES || '15', 10);
-const ADMIN_PASSWORD_RESET_OTP_MINUTES = () =>
-  parseInt(process.env.ADMIN_PASSWORD_RESET_OTP_MINUTES || '15', 10);
 
 function isValidPhone(input) {
   const digits = String(input || '').replace(/\D/g, '').slice(0, 10);
@@ -70,31 +34,6 @@ function isValidPhone(input) {
   const allSameDigit = new Set(digits.split('')).size === 1;
   const firstFiveSame = new Set(digits.slice(0, 5).split('')).size === 1;
   return !allSameDigit && !firstFiveSame;
-}
-
-async function findAdminByIdentifier(identifierRaw) {
-  const idRaw = String(identifierRaw || '').trim();
-  if (!idRaw) return null;
-  if (idRaw.includes('@')) {
-    const { rows } = await pool.query(
-      `SELECT id, email, display_name, is_admin
-       FROM users
-       WHERE email_normalized = lower(trim($1))
-       LIMIT 1`,
-      [idRaw],
-    );
-    return rows[0] || null;
-  }
-  const digits = idRaw.replace(/\D/g, '').slice(0, 10);
-  if (!isValidPhone(digits)) return null;
-  const { rows } = await pool.query(
-    `SELECT id, email, display_name, is_admin
-     FROM users
-     WHERE phone = $1
-     LIMIT 1`,
-    [digits],
-  );
-  return rows[0] || null;
 }
 
 router.post('/register', async (req, res) => {
@@ -230,109 +169,6 @@ router.post('/login', async (req, res) => {
   }
 });
 
-/**
- * POST /v1/auth/google
- * Body: { idToken } — Android Credential Manager ID token; verified with GOOGLE_WEB_CLIENT_ID.
- * Creates user (phone/state empty) or logs in / links google_sub on existing email.
- */
-router.post('/google', async (req, res) => {
-  const idToken = String((req.body || {}).idToken || '').trim();
-  if (!idToken) return res.status(400).json({ error: 'idToken required' });
-  if (!isGoogleAuthConfigured()) {
-    return res.status(503).json({ error: 'Google Sign-In is not configured on this server' });
-  }
-
-  let gp;
-  try {
-    gp = await verifyGoogleIdToken(idToken);
-  } catch (e) {
-    console.error('Google token verify failed:', e.message || e);
-    return res.status(401).json({ error: 'Invalid or expired Google sign-in' });
-  }
-
-  const crypto = require('crypto');
-  const client = await pool.connect();
-  try {
-    const byEmail = await client.query(
-      `SELECT * FROM users WHERE email_normalized = lower(trim($1)) LIMIT 1`,
-      [gp.email],
-    );
-    let row = byEmail.rows[0];
-
-    if (row) {
-      if (row.google_sub && row.google_sub !== gp.sub) {
-        return res.status(409).json({ error: 'This email is linked to a different Google account' });
-      }
-      await client.query(
-        `UPDATE users
-         SET google_sub = COALESCE(google_sub, $1),
-             email_verified_at = COALESCE(email_verified_at, now())
-         WHERE id = $2::uuid`,
-        [gp.sub, row.id],
-      );
-      const again = await client.query(`SELECT * FROM users WHERE id = $1::uuid`, [row.id]);
-      row = again.rows[0];
-    } else {
-      const randomPw = crypto.randomBytes(32).toString('hex');
-      const passwordHash = await bcrypt.hash(randomPw, 12);
-      let userRow = null;
-      for (let attempt = 0; attempt < 40; attempt++) {
-        const six = pickSixDigit();
-        try {
-          const ins = await client.query(
-            `INSERT INTO users (
-               email, password_hash, display_name, phone, six_digit_public_id,
-               signup_state, signup_district, google_sub, email_verified_at
-             ) VALUES ($1, $2, $3, '', $4, '', '', $5, now())
-             RETURNING *`,
-            [gp.email, passwordHash, gp.name, six, gp.sub],
-          );
-          userRow = ins.rows[0];
-          break;
-        } catch (e) {
-          if (e.code === '23505' && e.constraint === 'users_six_digit_public_id_unique') {
-            continue;
-          }
-          throw e;
-        }
-      }
-      if (!userRow) {
-        return res.status(500).json({ error: 'Could not create account; try again' });
-      }
-      row = userRow;
-    }
-    if (row.is_banned) {
-      return res.status(403).json({ error: row.ban_reason || 'Account is blocked by admin' });
-    }
-    const tokens = await issueTokens(row.id);
-    if (isMailConfigured() && row.email) {
-      sendSecurityAccountAlertEmail({
-        to: String(row.email || '').trim(),
-        displayName: String(row.display_name || '').trim(),
-        subject: 'Security Alert: Google sign-in on your account',
-        eventType: 'Google Login',
-        eventDetail: `A Google sign-in was detected from IP ${String(req.ip || '')}. If this was not you, secure your account now.`,
-      }).catch((mailErr) => {
-        console.error('security_google_login_alert_failed', mailErr && (mailErr.message || mailErr));
-      });
-    }
-    return res.json({
-      user: mapUserRow(row),
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      expiresInSeconds: tokens.expiresInSeconds,
-    });
-  } catch (e) {
-    console.error(e);
-    if (e.code === '23505') {
-      return res.status(409).json({ error: 'Email or Google account already registered' });
-    }
-    return res.status(500).json({ error: 'Google sign-in failed' });
-  } finally {
-    client.release();
-  }
-});
-
 router.post('/refresh', async (req, res) => {
   const { refreshToken } = req.body || {};
   const plain = String(refreshToken || '');
@@ -438,6 +274,13 @@ router.post('/password-reset/request', async (req, res) => {
 });
 
 /**
+ * POST /v1/auth/google
+ * Body: { idToken } — Google ID token from the Android app (Play Services Sign-In).
+ * Separate from SMTP / email-OTP flows (see password-reset routes and ../mail).
+ */
+router.post('/google', postGoogleSignIn);
+
+/**
  * POST /v1/auth/password-reset/complete
  * Body: { email, otp, newPassword }
  */
@@ -511,175 +354,6 @@ router.post('/password-reset/complete', async (req, res) => {
     await client.query('ROLLBACK').catch(() => {});
     console.error(e);
     return res.status(500).json({ error: 'Password reset failed' });
-  } finally {
-    client.release();
-  }
-});
-
-/**
- * POST /v1/auth/admin/password-reset/request
- * Body: { identifier } where identifier is email or phone
- */
-router.post('/admin/password-reset/request', async (req, res) => {
-  const identifier = String((req.body || {}).identifier || '').trim();
-  if (!identifier) {
-    return res.status(400).json({ error: 'Email or mobile is required' });
-  }
-  let admin = null;
-  let tokenHash = null;
-  try {
-    admin = await findAdminByIdentifier(identifier);
-    if (!admin || !admin.is_admin) {
-      return res.status(200).json({
-        ok: false,
-        error: 'Admin account not found for this email/mobile.',
-      });
-    }
-    const adminEmail = String(admin.email || '').trim().toLowerCase();
-    if (!adminEmail || !adminEmail.includes('@')) {
-      return res.status(400).json({ error: 'Admin account must have a valid email for OTP delivery.' });
-    }
-
-    if (!isAdminForgotMailConfigured()) {
-      return res.status(503).json({
-        error:
-          'Admin password reset email is not configured. Set SMTP_ADMIN_FP_USER and SMTP_ADMIN_FP_PASS (or SMTP_USER / SMTP_PASS) in server .env and restart the API.',
-      });
-    }
-
-    const otp = String(pickSixDigit());
-    tokenHash = sha256Hex(otp);
-    const expires = new Date();
-    expires.setMinutes(expires.getMinutes() + ADMIN_PASSWORD_RESET_OTP_MINUTES());
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(
-        `UPDATE user_one_time_tokens SET used_at = now()
-         WHERE user_id = $1::uuid AND purpose = 'admin_password_reset' AND used_at IS NULL`,
-        [admin.id],
-      );
-      await client.query(
-        `INSERT INTO user_one_time_tokens (user_id, purpose, token_hash, expires_at)
-         VALUES ($1::uuid, 'admin_password_reset', $2, $3)`,
-        [admin.id, tokenHash, expires.toISOString()],
-      );
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw e;
-    } finally {
-      client.release();
-    }
-
-    await sendAdminForgotPasswordOtpEmail({
-      to: adminEmail,
-      otp,
-      displayName: String(admin.display_name || adminEmail).trim(),
-      minutes: ADMIN_PASSWORD_RESET_OTP_MINUTES(),
-    });
-    return res.status(200).json({
-      ok: true,
-      message: `Admin OTP sent to ${adminEmail}.`,
-    });
-  } catch (e) {
-    if (admin && tokenHash) {
-      try {
-        await pool.query(
-          `DELETE FROM user_one_time_tokens
-           WHERE user_id = $1::uuid
-             AND purpose = 'admin_password_reset'
-             AND token_hash = $2
-             AND used_at IS NULL`,
-          [admin.id, tokenHash],
-        );
-      } catch (delErr) {
-        console.error('admin_password_reset_token_cleanup_failed', delErr && (delErr.message || delErr));
-      }
-    }
-    console.error(e);
-    const raw = [e && e.message, e && e.code, typeof e === 'string' ? e : '']
-      .filter(Boolean)
-      .map(String)
-      .join(' ');
-    let detail = 'Could not send admin reset OTP.';
-    if (raw.includes('SMTP') || raw.includes('not configured')) {
-      detail =
-        'Email could not be sent: SMTP is not configured on this server. Set SMTP_ADMIN_FP_USER and SMTP_ADMIN_FP_PASS (or SMTP_USER / SMTP_PASS) in server .env and restart the API.';
-    } else if (raw.includes('454') || raw.includes('Too many login')) {
-      detail =
-        'Email could not be sent: Gmail temporarily limited SMTP sign-ins (too many attempts or rate limit). Wait and retry, verify the App Password in .env, or use a separate mailbox for admin OTP (SMTP_ADMIN_FP_*). See https://support.google.com/mail/answer/7126229';
-    } else if (raw.includes('Invalid login') || raw.includes('authentication failed')) {
-      detail =
-        'Email could not be sent: SMTP rejected the login. Check app password / SMTP credentials in .env.';
-    } else if (raw.includes('ECONNECTION') || raw.includes('ETIMEDOUT') || raw.includes('ENOTFOUND')) {
-      detail =
-        'Email could not be sent: could not reach the mail server. Check SMTP_ADMIN_FP_HOST / PORT and firewall.';
-    }
-    return res.status(500).json({ error: detail });
-  }
-});
-
-/**
- * POST /v1/auth/admin/password-reset/complete
- * Body: { identifier, otp, newPassword }
- */
-router.post('/admin/password-reset/complete', async (req, res) => {
-  const identifier = String((req.body || {}).identifier || '').trim();
-  const otpRaw = String((req.body || {}).otp || '').replace(/\D/g, '');
-  const newPw = String((req.body || {}).newPassword || '');
-  if (!identifier) {
-    return res.status(400).json({ error: 'Email or mobile is required' });
-  }
-  if (otpRaw.length !== 6) {
-    return res.status(400).json({ error: 'Enter the 6-digit OTP' });
-  }
-  if (newPw.length < 4) {
-    return res.status(400).json({ error: 'Password must be at least 4 characters' });
-  }
-  const tokenHash = sha256Hex(otpRaw);
-  const client = await pool.connect();
-  try {
-    const admin = await findAdminByIdentifier(identifier);
-    if (!admin || !admin.is_admin) {
-      return res.status(400).json({ error: 'Invalid or expired OTP' });
-    }
-    const tok = await client.query(
-      `SELECT id FROM user_one_time_tokens
-       WHERE user_id = $1::uuid
-         AND purpose = 'admin_password_reset'
-         AND token_hash = $2
-         AND used_at IS NULL
-         AND expires_at > now()
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [admin.id, tokenHash],
-    );
-    const tokenRow = tok.rows[0];
-    if (!tokenRow) {
-      return res.status(400).json({ error: 'Invalid or expired OTP' });
-    }
-    const passwordHash = await bcrypt.hash(newPw, 12);
-    await client.query('BEGIN');
-    await client.query(`UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2::uuid`, [
-      passwordHash,
-      admin.id,
-    ]);
-    await client.query(`UPDATE user_one_time_tokens SET used_at = now() WHERE id = $1`, [tokenRow.id]);
-    await client.query(
-      `UPDATE user_one_time_tokens SET used_at = now()
-       WHERE user_id = $1::uuid AND purpose = 'admin_password_reset' AND used_at IS NULL AND id <> $2`,
-      [admin.id, tokenRow.id],
-    );
-    await client.query(`UPDATE user_refresh_sessions SET revoked_at = now() WHERE user_id = $1::uuid AND revoked_at IS NULL`, [
-      admin.id,
-    ]);
-    await client.query('COMMIT');
-    return res.json({ ok: true });
-  } catch (e) {
-    await client.query('ROLLBACK').catch(() => {});
-    console.error(e);
-    return res.status(500).json({ error: 'Admin password reset failed' });
   } finally {
     client.release();
   }

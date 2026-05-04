@@ -5,7 +5,6 @@ import android.util.Log
 import com.freemocktest.app.data.remote.AttemptRequest
 import com.freemocktest.app.data.remote.EmailVerificationConfirmBody
 import com.freemocktest.app.data.remote.AuthTokenStore
-import com.freemocktest.app.data.remote.GoogleSignInRequest
 import com.freemocktest.app.data.remote.LoginRequest
 import com.freemocktest.app.data.remote.PatchPasswordRequest
 import com.freemocktest.app.data.remote.PatchProfileRequest
@@ -13,6 +12,7 @@ import com.freemocktest.app.data.remote.PasswordResetCompleteBody
 import com.freemocktest.app.data.remote.PasswordResetRequestBody
 import com.freemocktest.app.data.remote.PasswordResetRequestResponse
 import com.freemocktest.app.data.remote.RefreshRequest
+import com.freemocktest.app.data.remote.GoogleSignInRequestBody
 import com.freemocktest.app.data.remote.RegisterRequest
 import com.freemocktest.app.data.remote.AuthUserDto
 import com.freemocktest.app.data.remote.RetrofitProvider
@@ -159,9 +159,11 @@ object AuthRepository {
         }
     }
 
-    suspend fun loginWithGoogle(idToken: String): Result<AuthUserDto> = withContext(Dispatchers.IO) {
+    suspend fun signInWithGoogle(idToken: String): Result<AuthUserDto> = withContext(Dispatchers.IO) {
         try {
-            val resp = RetrofitProvider.authApi.loginWithGoogle(GoogleSignInRequest(idToken = idToken.trim()))
+            val resp = RetrofitProvider.authApi.googleSignIn(
+                GoogleSignInRequestBody(idToken = idToken.trim()),
+            )
             persistTokens(resp.accessToken, resp.refreshToken)
             AppPreferencesRepository.applyServerAuthProfile(
                 displayName = resp.user.displayName,
