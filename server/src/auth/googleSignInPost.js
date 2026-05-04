@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const { pool } = require('../db');
 const { mapUserRow } = require('../userMapper');
 const { issueTokens } = require('../services/sessionTokens');
-const { verifyGoogleSignInIdToken } = require('./verifyGoogleIdToken');
+const { verifyGoogleSignInIdToken, peekIdTokenAud, configuredAudiences } = require('./verifyGoogleIdToken');
 
 function pickSixDigit() {
   return 100000 + Math.floor(Math.random() * 900000);
@@ -59,7 +59,15 @@ async function postGoogleSignIn(req, res) {
       console.error('google_sign_in_disabled', 'Set GOOGLE_SIGN_IN_WEB_CLIENT_ID in server .env');
       return res.status(503).json({ error: 'Google sign-in is not configured on this server' });
     }
-    console.error('google_id_token_verify_failed', e && (e.message || e));
+    const peek = peekIdTokenAud(idToken);
+    console.error(
+      'google_id_token_verify_failed',
+      e && (e.message || e),
+      'token_aud_azp=',
+      peek,
+      'server_audiences=',
+      configuredAudiences(),
+    );
     return res.status(401).json({ error: 'Invalid or expired Google sign-in' });
   }
 

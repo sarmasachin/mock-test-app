@@ -37,7 +37,21 @@ async function verifyGoogleSignInIdToken(idToken) {
   return payload;
 }
 
+/** Decode JWT payload without verifying (debug only: safe fields like aud). */
+function peekIdTokenAud(idToken) {
+  try {
+    const parts = String(idToken || '').split('.');
+    if (parts.length < 2) return null;
+    const json = Buffer.from(parts[1], 'base64url').toString('utf8');
+    const payload = JSON.parse(json);
+    return { aud: payload.aud, azp: payload.azp };
+  } catch (_e) {
+    return null;
+  }
+}
+
 module.exports = {
   verifyGoogleSignInIdToken,
   configuredAudiences,
+  peekIdTokenAud,
 };
