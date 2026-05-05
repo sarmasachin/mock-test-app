@@ -55,6 +55,7 @@ private fun defaultDynamicProfileMenuItems() = listOf(
     DynamicProfileMenuItem("edit-username", "Username", "{value}", "/edit-username", true),
     DynamicProfileMenuItem("edit-email", "Email", "{value}", "/edit-email", true),
     DynamicProfileMenuItem("edit-mobile", "Mobile number", "{value}", "/edit-mobile", true),
+    DynamicProfileMenuItem("edit-dob", "Date of birth", "{value}", "/edit-dob", true),
     DynamicProfileMenuItem("edit-gender", "Gender", "{value}", "/edit-gender", true),
     DynamicProfileMenuItem("edit-password", "Password", "Change password (current + new + confirm)", "/edit-password", true),
     DynamicProfileMenuItem("verify-email", "Email verification", "Not verified", "/verify-email", true),
@@ -79,6 +80,7 @@ fun ProfileScreenNew(
     onEditUsername: () -> Unit,
     onEditEmail: () -> Unit,
     onEditMobile: () -> Unit,
+    onEditBirthday: () -> Unit,
     onEditGender: () -> Unit,
     onEditPassword: () -> Unit,
     onOpenNotifications: () -> Unit,
@@ -100,14 +102,14 @@ fun ProfileScreenNew(
     val emailOk by AppPreferencesRepository.emailVerified.collectAsState(initial = false)
     val phoneOk by AppPreferencesRepository.phoneVerified.collectAsState(initial = false)
     val profile by AppPreferencesRepository.editableProfile.collectAsState(
-        initial = AppPreferencesRepository.EditableProfileState("", "", "", ""),
+        initial = AppPreferencesRepository.EditableProfileState("", "", "", "", ""),
     )
     var menuItems by remember { mutableStateOf(defaultDynamicProfileMenuItems()) }
 
     LaunchedEffect(Unit) {
         val remote = ContentRepository.loadProfileMenuItems()
         if (remote.isNotEmpty()) {
-            menuItems = remote.map {
+            val mapped = remote.map {
                 DynamicProfileMenuItem(
                     id = it.id,
                     title = it.title,
@@ -116,6 +118,16 @@ fun ProfileScreenNew(
                     enabled = it.enabled,
                 )
             }
+            menuItems =
+                if (mapped.none { it.path == "/edit-dob" }) {
+                    val insertIdx =
+                        (mapped.indexOfFirst { it.path == "/edit-mobile" }).let { idx ->
+                            if (idx >= 0) idx + 1 else mapped.size
+                        }
+                    mapped.toMutableList().apply { add(insertIdx, DynamicProfileMenuItem("edit-dob", "Date of birth", "{value}", "/edit-dob", true)) }
+                } else {
+                    mapped
+                }
         }
     }
 
@@ -169,6 +181,7 @@ fun ProfileScreenNew(
                         "/edit-username" -> item.subtitle.replace("{value}", profile.displayName.ifBlank { "Tap to set" })
                         "/edit-email" -> item.subtitle.replace("{value}", profile.email.ifBlank { "Tap to set" })
                         "/edit-mobile" -> item.subtitle.replace("{value}", profile.mobile.ifBlank { "Tap to set" })
+                        "/edit-dob" -> item.subtitle.replace("{value}", profile.birthdayDate.ifBlank { "Tap to set" })
                         "/edit-gender" -> item.subtitle.replace("{value}", profile.gender.ifBlank { "Tap to set" })
                         "/verify-email" -> if (emailOk) "Verified" else if (item.subtitle.isBlank()) "Not verified — tap to send OTP" else item.subtitle
                         "/verify-phone" -> if (phoneOk) "Verified" else if (item.subtitle.isBlank()) "Not verified — tap to send OTP" else item.subtitle
@@ -178,6 +191,7 @@ fun ProfileScreenNew(
                         "/edit-username" -> onEditUsername
                         "/edit-email" -> onEditEmail
                         "/edit-mobile" -> onEditMobile
+                        "/edit-dob" -> onEditBirthday
                         "/edit-gender" -> onEditGender
                         "/edit-password" -> onEditPassword
                         "/verify-email" -> onSendEmailVerification

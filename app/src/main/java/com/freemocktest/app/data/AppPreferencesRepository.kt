@@ -55,9 +55,11 @@ object AppPreferencesRepository {
     private val keyProfileEmail = stringPreferencesKey("profile_email")
     private val keyProfileMobile = stringPreferencesKey("profile_mobile")
     private val keyProfileGender = stringPreferencesKey("profile_gender")
+    /** Cached from server `birthdayDate` (YYYY-MM-DD). */
+    private val keyProfileBirthdayDate = stringPreferencesKey("profile_birthday_date")
     private val keyProfileNotificationsEnabled = intPreferencesKey("profile_notifications_enabled")
     private val keyScoreVisibilityEnabled = intPreferencesKey("score_visibility_enabled")
-    /** Eight-digit numeric id (10000000–99999999), 0 = not assigned yet. */
+    /** Stored numeric id: server `six_digit_public_id` (100000–999999) or legacy local 8-digit; 0 = not assigned. */
     private val keyProfileUserCode = intPreferencesKey("profile_user_code")
     private val keyPendingResultTestName = stringPreferencesKey("pending_result_test_name")
     private val keyPendingResultPublishAt = longPreferencesKey("pending_result_publish_at")
@@ -81,11 +83,20 @@ object AppPreferencesRepository {
     private const val DefaultStartSeriesActiveWindowMs = 30 * 60 * 1000L
     private const val HourMs = 60 * 60 * 1000L
 
+    /** Matches server `pickSixDigit()` in auth.js (100000–999999 inclusive). */
+    private const val MIN_SIX_DIGIT_PUBLIC_ID = 100_000
+    private const val MAX_SIX_DIGIT_PUBLIC_ID = 999_999
+
+    /** Older builds assigned a local-only id in this range before server ids were persisted correctly. */
+    private const val MIN_LEGACY_EIGHT_DIGIT_USER_CODE = 10_000_000
+    private const val MAX_LEGACY_EIGHT_DIGIT_USER_CODE = 99_999_999
+
     data class EditableProfileState(
         val displayName: String,
         val email: String,
         val mobile: String,
         val gender: String,
+        val birthdayDate: String,
     )
 
     val editableProfile: Flow<EditableProfileState>
@@ -103,15 +114,16 @@ object AppPreferencesRepository {
                 email = email,
                 mobile = mobile,
                 gender = prefs[keyProfileGender].orEmpty(),
+                birthdayDate = prefs[keyProfileBirthdayDate].orEmpty(),
             )
-        } ?: flowOf(EditableProfileState("", "", "", ""))
+        } ?: flowOf(EditableProfileState("", "", "", "", ""))
 
     data class DrawerUserProfile(
         /** Username from signup / profile (shown first in drawer). */
         val displayName: String,
         /** Email line under name (Gmail etc.); drawer does not mix mobile here. */
         val emailLine: String,
-        /** Formatted eight digits from server or local, or null until assigned. */
+        /** Formatted public id (6 digits when synced with server; legacy local may show 8); null if none. */
         val userIdFormatted: String?,
     )
 
@@ -134,8 +146,7 @@ object AppPreferencesRepository {
     val drawerUserProfile: Flow<DrawerUserProfile>
         get() = storeOrNull()?.data?.map { prefs ->
             val code = prefs[keyProfileUserCode] ?: 0
-            val formatted =
-                if (code in 10_000_000..99_999_999) String.format(Locale.US, "%08d", code) else null
+            val formatted = formatUserIdForDisplay(code)
             val legacyContact = prefs[keyProfileContact].orEmpty()
             val email = prefs[keyProfileEmail].orEmpty().ifBlank {
                 if (legacyContact.contains('@')) legacyContact.trim() else ""
@@ -151,7 +162,25 @@ object AppPreferencesRepository {
         appContext = context.applicationContext
     }
 
-    private fun randomEightDigitUserCode(): Int = Random.nextInt(10_000_000, 100_000_000)
+    private fun isSixDigitPublicId(code: Int): Boolean =
+        code in MIN_SIX_DIGIT_PUBLIC_ID..MAX_SIX_DIGIT_PUBLIC_ID
+
+    private fun isLegacyEightDigitUserCode(code: Int): Boolean =
+        code in MIN_LEGACY_EIGHT_DIGIT_USER_CODE..MAX_LEGACY_EIGHT_DIGIT_USER_CODE
+
+    private fun hasStoredUserCode(code: Int): Boolean =
+        isSixDigitPublicId(code) || isLegacyEightDigitUserCode(code)
+
+    /** Admin panel shows `six_digit_public_id` without leading zeros beyond the natural 6 digits. */
+    private fun formatUserIdForDisplay(code: Int): String? = when {
+        isSixDigitPublicId(code) -> String.format(Locale.US, "%06d", code)
+        isLegacyEightDigitUserCode(code) -> String.format(Locale.US, "%08d", code)
+        else -> null
+    }
+
+    /** Same allocation domain as server `pickSixDigit()`. */
+    private fun randomSixDigitPublicId(): Int =
+        Random.nextInt(MIN_SIX_DIGIT_PUBLIC_ID, MAX_SIX_DIGIT_PUBLIC_ID + 1)
 
     private fun deriveDisplayNameFromLogin(identifier: String): String {
         val trimmed = identifier.trim()
@@ -180,10 +209,11 @@ object AppPreferencesRepository {
                 prefs[keyProfileEmail] = email.trim()
                 prefs[keyProfileMobile] = mobile.trim()
                 prefs[keyProfileGender] = prefs[keyProfileGender].orEmpty()
+                prefs[keyProfileBirthdayDate] = ""
                 prefs[keyProfileContact] = email.trim()
                 val existing = prefs[keyProfileUserCode] ?: 0
-                if (existing !in 10_000_000..99_999_999) {
-                    prefs[keyProfileUserCode] = randomEightDigitUserCode()
+                if (!hasStoredUserCode(existing)) {
+                    prefs[keyProfileUserCode] = randomSixDigitPublicId()
                 }
             }
         }.onFailure { Log.e(TAG, "applySignupProfile failed", it) }
@@ -206,8 +236,8 @@ object AppPreferencesRepository {
                 }
                 prefs[keyProfileGender] = prefs[keyProfileGender].orEmpty()
                 val existing = prefs[keyProfileUserCode] ?: 0
-                if (existing !in 10_000_000..99_999_999) {
-                    prefs[keyProfileUserCode] = randomEightDigitUserCode()
+                if (!hasStoredUserCode(existing)) {
+                    prefs[keyProfileUserCode] = randomSixDigitPublicId()
                 }
             }
         }.onFailure { Log.e(TAG, "applyLoginProfile failed", it) }
@@ -223,6 +253,7 @@ object AppPreferencesRepository {
         sixDigitPublicId: Int,
         isEmailVerified: Boolean,
         passwordPlain: String,
+        birthdayDate: String? = null,
     ) {
         if (!::appContext.isInitialized) return
         runCatching {
@@ -231,8 +262,9 @@ object AppPreferencesRepository {
                 prefs[keyProfileEmail] = email.trim()
                 prefs[keyProfileMobile] = mobile.trim().filter(Char::isDigit).take(10)
                 prefs[keyProfileGender] = prefs[keyProfileGender].orEmpty()
+                prefs[keyProfileBirthdayDate] = birthdayDate?.trim().orEmpty()
                 prefs[keyProfileContact] = email.trim()
-                if (sixDigitPublicId in 10_000_000..99_999_999) {
+                if (isSixDigitPublicId(sixDigitPublicId)) {
                     prefs[keyProfileUserCode] = sixDigitPublicId
                 }
                 // Never persist plain passwords on device storage.
@@ -329,8 +361,8 @@ object AppPreferencesRepository {
         runCatching {
             store().edit { prefs ->
                 val existing = prefs[keyProfileUserCode] ?: 0
-                if (existing !in 10_000_000..99_999_999) {
-                    prefs[keyProfileUserCode] = randomEightDigitUserCode()
+                if (!hasStoredUserCode(existing)) {
+                    prefs[keyProfileUserCode] = randomSixDigitPublicId()
                 }
             }
         }.onFailure { Log.e(TAG, "ensureDrawerUserCode failed", it) }
@@ -641,10 +673,8 @@ object AppPreferencesRepository {
     private fun currentContentStateOwnerId(prefs: Preferences): String {
         val email = prefs[keyProfileEmail].orEmpty().trim()
         val contact = prefs[keyProfileContact].orEmpty().trim()
-        val userCode = (prefs[keyProfileUserCode] ?: 0)
-            .takeIf { it in 10_000_000..99_999_999 }
-            ?.let { String.format(Locale.US, "%08d", it) }
-            .orEmpty()
+        val userCodeRaw = prefs[keyProfileUserCode] ?: 0
+        val userCode = formatUserIdForDisplay(userCodeRaw).orEmpty()
         return when {
             email.isNotBlank() -> email.lowercase(Locale.US)
             contact.isNotBlank() -> contact.lowercase(Locale.US)
@@ -759,6 +789,7 @@ object AppPreferencesRepository {
                 prefs[keyProfileEmail] = ""
                 prefs[keyProfileMobile] = ""
                 prefs[keyProfileGender] = ""
+                prefs[keyProfileBirthdayDate] = ""
                 prefs[keyProfileUserCode] = 0
                 prefs[keyEmailVerified] = 0
                 prefs[keyPhoneVerified] = 0
@@ -813,9 +844,10 @@ object AppPreferencesRepository {
         val email = prefs[keyProfileEmail]
         val mobile = prefs[keyProfileMobile]
         val gender = prefs[keyProfileGender]
+        val birthday = prefs[keyProfileBirthdayDate]
         val uid = prefs[keyProfileUserCode] ?: 0
         return """
-            {"streakDays":$streak,"lastOpenedTest":"${q(lastTest)}","lastOpenedTestTime":$lastTestTime,"cachedFeedJobUrl":"${q(job)}","cachedFeedExamUrl":"${q(exam)}","cachedFeedNewsUrl":"${q(news)}","emailVerified":$emailV,"phoneVerified":$phoneV,"displayName":"${q(display)}","contact":"${q(contact)}","email":"${q(email)}","mobile":"${q(mobile)}","gender":"${q(gender)}","userCode":$uid}
+            {"streakDays":$streak,"lastOpenedTest":"${q(lastTest)}","lastOpenedTestTime":$lastTestTime,"cachedFeedJobUrl":"${q(job)}","cachedFeedExamUrl":"${q(exam)}","cachedFeedNewsUrl":"${q(news)}","emailVerified":$emailV,"phoneVerified":$phoneV,"displayName":"${q(display)}","contact":"${q(contact)}","email":"${q(email)}","mobile":"${q(mobile)}","gender":"${q(gender)}","birthdayDate":"${q(birthday)}","userCode":$uid}
         """.trimIndent().replace("\n", "")
     }
 

@@ -2,6 +2,9 @@ package com.freemocktest.app.newui.profile
 
 import android.content.Intent
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,6 +36,7 @@ import com.freemocktest.app.newui.components.rememberAppSnackbarHostStateNew
 import com.freemocktest.app.newui.components.showError
 import com.freemocktest.app.newui.components.showSuccess
 import com.freemocktest.app.newui.navigation.RoutesNew
+import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -42,6 +46,7 @@ private object ProfileInnerRoutes {
     const val EMAIL = "profile_edit_email"
     const val EMAIL_VERIFY = "profile_email_verify"
     const val MOBILE = "profile_edit_mobile"
+    const val BIRTHDAY = "profile_edit_birthday"
     const val GENDER = "profile_edit_gender"
     const val PASSWORD = "profile_edit_password"
     const val NOTIFICATIONS = "profile_notifications"
@@ -64,6 +69,7 @@ fun ProfileRouteNew(
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
     val innerNav = rememberNavController()
+    val palette = mockTestPalette()
 
     BackHandler(enabled = innerNav.previousBackStackEntry != null) {
         innerNav.popBackStack()
@@ -92,12 +98,17 @@ fun ProfileRouteNew(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(palette.surface)
                 .padding(padding),
         ) {
             NavHost(
                 navController = innerNav,
                 startDestination = ProfileInnerRoutes.MAIN,
                 modifier = Modifier.fillMaxSize(),
+                enterTransition = { EnterTransition.None },
+                exitTransition = { ExitTransition.None },
+                popEnterTransition = { EnterTransition.None },
+                popExitTransition = { ExitTransition.None },
             ) {
                 composable(ProfileInnerRoutes.MAIN) {
                     ProfileScreenNew(
@@ -106,6 +117,7 @@ fun ProfileRouteNew(
                         onEditUsername = { innerNav.navigate(ProfileInnerRoutes.USERNAME) },
                         onEditEmail = { innerNav.navigate(ProfileInnerRoutes.EMAIL) },
                         onEditMobile = { innerNav.navigate(ProfileInnerRoutes.MOBILE) },
+                        onEditBirthday = { innerNav.navigate(ProfileInnerRoutes.BIRTHDAY) },
                         onEditGender = { innerNav.navigate(ProfileInnerRoutes.GENDER) },
                         onEditPassword = { innerNav.navigate(ProfileInnerRoutes.PASSWORD) },
                         onOpenNotifications = { innerNav.navigate(ProfileInnerRoutes.NOTIFICATIONS) },
@@ -171,6 +183,11 @@ fun ProfileRouteNew(
                 }
                 composable(ProfileInnerRoutes.MOBILE) {
                     ProfileEditMobileScreen(
+                        onBack = { innerNav.popBackStack() },
+                    )
+                }
+                composable(ProfileInnerRoutes.BIRTHDAY) {
+                    ProfileEditBirthdayScreen(
                         onBack = { innerNav.popBackStack() },
                     )
                 }

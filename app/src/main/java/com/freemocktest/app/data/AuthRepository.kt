@@ -95,6 +95,7 @@ object AuthRepository {
                 sixDigitPublicId = me.user.sixDigitPublicId,
                 isEmailVerified = !me.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
+                birthdayDate = me.user.birthdayDate,
             )
             val status = if (me.user.needsProfileCompletion()) {
                 RestoreSessionStatus.ProfileIncomplete
@@ -142,6 +143,7 @@ object AuthRepository {
                 sixDigitPublicId = resp.user.sixDigitPublicId,
                 isEmailVerified = !resp.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = password,
+                birthdayDate = resp.user.birthdayDate,
             )
             AppPreferencesRepository.setAuthBootstrapState(
                 if (resp.user.needsProfileCompletion()) {
@@ -172,6 +174,7 @@ object AuthRepository {
                 sixDigitPublicId = resp.user.sixDigitPublicId,
                 isEmailVerified = !resp.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
+                birthdayDate = resp.user.birthdayDate,
             )
             AppPreferencesRepository.setAuthBootstrapState(
                 if (resp.user.needsProfileCompletion()) {
@@ -216,6 +219,7 @@ object AuthRepository {
                 sixDigitPublicId = resp.user.sixDigitPublicId,
                 isEmailVerified = !resp.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = password,
+                birthdayDate = resp.user.birthdayDate,
             )
             AppPreferencesRepository.setAuthBootstrapState(
                 if (resp.user.needsProfileCompletion()) {
@@ -249,15 +253,22 @@ object AuthRepository {
         phone: String? = null,
         state: String? = null,
         district: String? = null,
+        /** Pass `""` to clear on server; `null` = do not send this field. */
+        birthdayDate: String? = null,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         loadStoredTokens()
         if (accessTokenMem.isNullOrBlank()) {
             return@withContext Result.failure(Exception("Sign in to sync your profile"))
         }
-        if (displayName == null && email == null && phone == null && state == null && district == null) {
+        if (displayName == null && email == null && phone == null && state == null && district == null && birthdayDate == null) {
             return@withContext Result.failure(IllegalArgumentException("Nothing to update"))
         }
         try {
+            val birthdayPayload: String? =
+                when (birthdayDate) {
+                    null -> null
+                    else -> birthdayDate.trim()
+                }
             val resp = RetrofitProvider.appApi.patchProfile(
                 PatchProfileRequest(
                     displayName = displayName?.trim()?.takeIf { it.isNotEmpty() },
@@ -265,6 +276,7 @@ object AuthRepository {
                     phone = phone?.filter(Char::isDigit)?.take(10)?.takeIf { it.length == 10 },
                     state = state?.trim()?.takeIf { it.isNotEmpty() },
                     district = district?.trim()?.takeIf { it.isNotEmpty() },
+                    birthdayDate = birthdayPayload,
                 ),
             )
             val u = resp.user
@@ -275,6 +287,7 @@ object AuthRepository {
                 sixDigitPublicId = u.sixDigitPublicId,
                 isEmailVerified = !u.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
+                birthdayDate = u.birthdayDate,
             )
             Result.success(Unit)
         } catch (e: HttpException) {

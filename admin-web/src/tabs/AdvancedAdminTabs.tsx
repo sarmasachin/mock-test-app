@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { AdminAnalyticsDashboard } from '../components/AdminAnalyticsDashboard';
 import { useAdminDialog } from '../adminDialog';
 import { useAdminToast } from '../adminToast';
@@ -202,6 +202,10 @@ export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiCli
       pushToast('error', err?.response?.data?.error || 'Failed to load notification scheduling');
     }
   }
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function saveAll(nextItems: NotificationScheduleItem[]) {
     try {
@@ -357,6 +361,10 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
       pushToast('error', err?.response?.data?.error || 'Failed to load publish scheduling');
     }
   }
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   async function addSchedule(e: FormEvent) {
     e.preventDefault();
     const scheduleIso = datetimeLocalToIsoUtc(scheduleAt);
@@ -451,6 +459,7 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
 export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
   const ITEMS_PER_PAGE = 20;
+  const ACCEPTED_IMAGE_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif', 'image/avif', 'image/svg+xml'] as const;
   const [items, setItems] = useState<ExamCategoryItem[]>([]);
   const [iconOptions, setIconOptions] = useState<ExamCategoryIconOption[]>(DEFAULT_EXAM_CATEGORY_ICON_OPTIONS);
   const [newIconValue, setNewIconValue] = useState('');
@@ -459,10 +468,83 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const [newLevel2, setNewLevel2] = useState('');
   const [newLevel3, setNewLevel3] = useState('');
   const [newIconKey, setNewIconKey] = useState('');
+  const [newIconUploading, setNewIconUploading] = useState(false);
+  const [rowIconUploadingId, setRowIconUploadingId] = useState('');
   const [newEnabled, setNewEnabled] = useState(true);
   const [page, setPage] = useState(1);
   const [saving, setSaving] = useState(false);
   const [showIconManager, setShowIconManager] = useState(false);
+
+  function isUploadMimeSupported(mime: string): boolean {
+    return ACCEPTED_IMAGE_MIME.includes((mime || '').toLowerCase() as (typeof ACCEPTED_IMAGE_MIME)[number]);
+  }
+
+  function isRemoteIconKey(value: string): boolean {
+    const v = String(value || '').trim().toLowerCase();
+    return v.startsWith('http://') || v.startsWith('https://');
+  }
+
+  function fileToBase64Data(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || '');
+        const marker = 'base64,';
+        const idx = result.indexOf(marker);
+        if (idx === -1) {
+          reject(new Error('Failed to process selected image'));
+          return;
+        }
+        resolve(result.slice(idx + marker.length));
+      };
+      reader.onerror = () => reject(new Error('Failed to read image file'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function uploadIconFile(file: File): Promise<string> {
+    if (!isUploadMimeSupported(file.type)) {
+      throw new Error('Unsupported image type (use JPEG, PNG, WebP, GIF, AVIF, or SVG).');
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      throw new Error('Image size must be 5MB or less');
+    }
+    const dataBase64 = await fileToBase64Data(file);
+    const res = await apiClient.post('/admin/uploads/article-image', {
+      fileName: file.name,
+      contentType: file.type,
+      dataBase64,
+    });
+    const url = String(res.data?.imageUrl || '').trim();
+    if (!url) throw new Error('Upload response missing image URL');
+    return url;
+  }
+
+  async function uploadNewIcon(file: File) {
+    try {
+      setNewIconUploading(true);
+      const url = await uploadIconFile(file);
+      setNewIconKey(url);
+      pushToast('success', 'Icon uploaded. It will be used for this hierarchy row.');
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || err?.message || 'Failed to upload icon');
+    } finally {
+      setNewIconUploading(false);
+    }
+  }
+
+  async function uploadRowIcon(itemId: string, file: File) {
+    try {
+      setRowIconUploadingId(itemId);
+      const url = await uploadIconFile(file);
+      setItems((prev) => prev.map((x) => (x.id === itemId ? { ...x, iconKey: url } : x)));
+      pushToast('success', 'Icon uploaded for this row. Click Save to persist.');
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || err?.message || 'Failed to upload icon');
+    } finally {
+      setRowIconUploadingId('');
+    }
+  }
   async function load() {
     try {
       const res = await apiClient.get('/admin/settings');
@@ -494,6 +576,10 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
       pushToast('error', err?.response?.data?.error || 'Failed to load exam categories');
     }
   }
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   async function saveAll(nextItems: ExamCategoryItem[]) {
     try {
       setSaving(true);
@@ -581,30 +667,84 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
         <input value={newLevel2} onChange={(e) => setNewLevel2(e.target.value)} placeholder="Level 2 (e.g. MP Govt)" />
         <input value={newLevel3} onChange={(e) => setNewLevel3(e.target.value)} placeholder="Level 3 (e.g. Patwari)" />
         <select value={newIconKey} onChange={(e) => setNewIconKey(e.target.value)}>
+          {newIconKey && !iconOptions.some((opt) => opt.value === newIconKey) ? (
+            <option value={newIconKey}>Custom uploaded icon</option>
+          ) : null}
           {iconOptions.map((opt) => (
             <option key={opt.id} value={opt.value}>
               {opt.label}
             </option>
           ))}
         </select>
+        <input
+          type="file"
+          accept={ACCEPTED_IMAGE_MIME.join(',')}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void uploadNewIcon(f);
+            e.currentTarget.value = '';
+          }}
+          disabled={newIconUploading || saving}
+          title="Upload custom icon image"
+        />
+        {isRemoteIconKey(newIconKey) ? (
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => setNewIconKey('')}
+            title="Remove uploaded icon and use preset icon"
+            disabled={newIconUploading || saving}
+          >
+            Use preset icon
+          </button>
+        ) : null}
         <label className="check-wrap"><input type="checkbox" checked={newEnabled} onChange={(e) => setNewEnabled(e.target.checked)} />enabled</label>
         <button type="submit">Add Hierarchy</button>
       </form>
       <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button><button type="button" onClick={() => saveAll(items)} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button></div>
       <div className="list table">
-        <div className="row row-head" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr 120px 90px 90px' }}><span>Level 1</span><span>Level 2</span><span>Level 3</span><span>Icon Key</span><span>Enabled</span><span>Update</span><span>Delete</span></div>
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr 170px 96px 120px 90px 90px' }}><span>Level 1</span><span>Level 2</span><span>Level 3</span><span>Icon Key</span><span>Upload Icon</span><span>Icon Mode</span><span>Enabled</span><span>Update</span><span>Delete</span></div>
         {visibleItems.map((item) => (
-          <div key={item.id} className="row" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr 120px 90px 90px' }}>
+          <div key={item.id} className="row" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr 170px 96px 120px 90px 90px' }}>
             <input value={item.level1} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, level1: e.target.value } : x)))} />
             <input value={item.level2} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, level2: e.target.value } : x)))} />
             <input value={item.level3} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, level3: e.target.value } : x)))} />
             <select value={item.iconKey} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, iconKey: e.target.value } : x)))}>
+              {item.iconKey && !iconOptions.some((opt) => opt.value === item.iconKey) ? (
+                <option value={item.iconKey}>Custom uploaded icon</option>
+              ) : null}
               {iconOptions.map((opt) => (
                 <option key={opt.id} value={opt.value}>
                   {opt.label}
                 </option>
               ))}
             </select>
+            <input
+              type="file"
+              accept={ACCEPTED_IMAGE_MIME.join(',')}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void uploadRowIcon(item.id, f);
+                e.currentTarget.value = '';
+              }}
+              disabled={saving || rowIconUploadingId === item.id}
+              title="Upload custom icon image"
+            />
+            {isRemoteIconKey(item.iconKey) ? (
+              <button
+                type="button"
+                className="ghost"
+                onClick={() =>
+                  setItems((prev) => prev.map((x) => (x.id === item.id ? { ...x, iconKey: '' } : x)))
+                }
+                title="Remove uploaded icon and switch to preset icon"
+                disabled={saving || rowIconUploadingId === item.id}
+              >
+                Preset
+              </button>
+            ) : (
+              <span />
+            )}
             <label className="check-wrap"><input type="checkbox" checked={item.enabled} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, enabled: e.target.checked } : x)))} />{item.enabled ? 'on' : 'off'}</label>
             <button type="button" onClick={() => saveAll(items)}>Save</button>
             <button type="button" className="danger" onClick={() => { const next = items.filter((x) => x.id !== item.id); setItems(next); saveAll(next); }}>Delete</button>
@@ -681,6 +821,10 @@ export function UserManagementAdvancedTabImpl({ apiClient, isSuperAdmin }: { api
       pushToast('error', err?.response?.data?.error || 'Failed to load user reports');
     }
   }
+  useEffect(() => {
+    void load(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   async function toggleBan(item: UserReportItem) {
     const shouldBan = !item.is_banned;
     let reason = '';

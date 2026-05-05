@@ -14,6 +14,7 @@ import {
   InstructionContentTabImpl,
   PollSettingsTabImpl,
   PushNotificationSettingsTabImpl,
+  ShareContentTabImpl,
   SubmitApplicationContentTabImpl,
 } from './tabs/EngagementContentTabs';
 import { ArticleBodyEditor } from './components/ArticleBodyEditor';
@@ -49,6 +50,7 @@ type Tab =
   | 'helpSupport'
   | 'reportIssue'
   | 'achievement'
+  | 'shareContent'
   | 'privacyPolicy'
   | 'termsOfUse'
   | 'dailyDigest'
@@ -410,6 +412,7 @@ const TAB_LABELS: Record<Tab, string> = {
   helpSupport: 'Help and Support',
   reportIssue: 'Report Issue',
   achievement: 'Achievement',
+  shareContent: 'Share Text',
   privacyPolicy: 'Privacy Policy',
   termsOfUse: 'Terms of Use',
   dailyDigest: 'Daily Digest',
@@ -439,6 +442,7 @@ const TAB_ICONS: Record<Tab, string> = {
   helpSupport: 'HS',
   reportIssue: 'RI',
   achievement: 'AC',
+  shareContent: 'SH',
   privacyPolicy: 'PP',
   termsOfUse: 'TU',
   dailyDigest: 'DD',
@@ -914,6 +918,7 @@ function App() {
               'helpSupport',
               'reportIssue',
               'achievement',
+              'shareContent',
               'privacyPolicy',
               'termsOfUse',
               'dailyDigest',
@@ -995,6 +1000,7 @@ function App() {
               showTitleField
             />
           )}
+          {tab === 'shareContent' && <ShareContentTab apiClient={authedApi} />}
           {tab === 'privacyPolicy' && <SimpleContentSettingsTab apiClient={authedApi} title="Privacy Policy" settingsKey="privacyPolicyContent" />}
           {tab === 'termsOfUse' && <SimpleContentSettingsTab apiClient={authedApi} title="Terms of Use" settingsKey="termsOfUseContent" />}
           {tab === 'dailyDigest' && <DailyDigestTab apiClient={authedApi} />}
@@ -1074,6 +1080,10 @@ function LeaderboardTab() {
       pushToast('error', err?.response?.data?.error || 'Failed to load leaderboard');
     }
   }
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const filtered = items.filter((item) => {
     const q = query.trim().toLowerCase();
     if (!q) return true;
@@ -1850,6 +1860,18 @@ function TestsTab({
     if (!q) return true;
     return item.title.toLowerCase().includes(q) || item.slug.toLowerCase().includes(q);
   });
+  const subcategoryOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          items
+            .map((item) => String(item.subcategory || '').trim())
+            .filter(Boolean),
+        ),
+      ).sort((a, b) => a.localeCompare(b)),
+    [items],
+  );
+  const subcategoryListId = useId();
   const totalTestsPages = Math.max(1, Math.ceil(visibleItems.length / TESTS_PER_PAGE));
   const safeTestsPage = Math.min(testsPage, totalTestsPages);
   const pagedVisibleItems = useMemo(() => {
@@ -1912,7 +1934,17 @@ function TestsTab({
               <div className="all-tests-grid">
                 <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Test title" required />
                 <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="test-slug" required />
-                <input value={subcategory} onChange={(e) => setSubcategory(e.target.value)} placeholder="Subcategory" />
+                <input
+                  value={subcategory}
+                  onChange={(e) => setSubcategory(e.target.value)}
+                  placeholder="Subcategory"
+                  list={subcategoryListId}
+                />
+                <datalist id={subcategoryListId}>
+                  {subcategoryOptions.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
                 <select value={kind} onChange={(e) => setKind(e.target.value as TestKind)}>
                   <option value="mock">Mock</option>
                   <option value="quiz">Quiz</option>
@@ -2555,6 +2587,10 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
       pushToast('error', err?.response?.data?.error || 'Failed to load daily digest items');
     }
   }
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   async function saveDailySchedule() {
     try {
       await apiClient.patch('/admin/settings', {
@@ -2887,6 +2923,10 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
       pushToast('error', err?.response?.data?.error || 'Failed to load daily quiz items');
     }
   }
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function createDailyQuizItem(e: FormEvent) {
     e.preventDefault();
@@ -3143,7 +3183,9 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   const [linkUrl, setLinkUrl] = useState('');
   const [featureImageUrl, setFeatureImageUrl] = useState('');
   const [articleImageUploading, setArticleImageUploading] = useState(false);
+  const [articleCreating, setArticleCreating] = useState(false);
   const [isPublished, setIsPublished] = useState(true);
+  const [addToHomeSliderOnPublish, setAddToHomeSliderOnPublish] = useState(false);
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState('');
   const [showArticleForm, setShowArticleForm] = useState(false);
@@ -3355,11 +3397,43 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
     }
   }
 
+  async function appendArticleToHomeSlider(createdArticle: ArticleItem) {
+    const articleId = String(createdArticle.id || '').trim();
+    if (!articleId) return;
+    try {
+      const settingsRes = await apiClient.get('/admin/settings');
+      const currentHome = settingsRes.data?.settings?.homeContent;
+      const safeHome = currentHome && typeof currentHome === 'object' ? currentHome : {};
+      const currentSlides: HomeNewsSlideItem[] = Array.isArray(safeHome.newsSlides) ? safeHome.newsSlides : [];
+      if (currentSlides.some((x) => String(x?.articleId || '').trim() === articleId)) return;
+      const nextSlides: HomeNewsSlideItem[] = [
+        ...currentSlides,
+        {
+          id: `news-slide-${Date.now()}-${articleId.slice(0, 8)}`,
+          articleId,
+          headline: String(createdArticle.headline || '').trim(),
+          imageUrl: String(createdArticle.feature_image_url || '').trim(),
+          enabled: true,
+        },
+      ];
+      await apiClient.patch('/admin/settings', {
+        homeContent: {
+          ...safeHome,
+          newsSlides: nextSlides,
+        },
+      });
+    } catch (_err) {
+      pushToast('warning', 'Article created, but auto add to Home slider failed. Add it manually from Home Content.');
+    }
+  }
+
   async function createArticle(e: FormEvent) {
     e.preventDefault();
+    if (articleCreating) return;
     try {
       clearToasts();
-      await apiClient.post('/admin/articles', {
+      setArticleCreating(true);
+      const createRes = await apiClient.post('/admin/articles', {
         feedKind,
         headline,
         summary,
@@ -3369,6 +3443,10 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
         featureImageUrl: featureImageUrl.trim() || null,
         isPublished,
       });
+      const createdArticle = createRes.data?.item as ArticleItem | undefined;
+      if (createdArticle && isPublished && addToHomeSliderOnPublish) {
+        await appendArticleToHomeSlider(createdArticle);
+      }
       setHeadline('');
       setSummary('');
       setCategory('');
@@ -3376,11 +3454,14 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
       setLinkUrl('');
       setFeatureImageUrl('');
       setIsPublished(true);
+      setAddToHomeSliderOnPublish(false);
       setShowArticleForm(false);
       await load();
       pushToast('success','Article created successfully.');
     } catch (err: any) {
       pushToast('error',err?.response?.data?.error || 'Failed to create article');
+    } finally {
+      setArticleCreating(false);
     }
   }
 
@@ -3625,7 +3706,18 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
                   <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
                   published
                 </label>
-                <button type="submit">Add Article</button>
+                <label className="check-wrap">
+                  <input
+                    type="checkbox"
+                    checked={addToHomeSliderOnPublish}
+                    onChange={(e) => setAddToHomeSliderOnPublish(e.target.checked)}
+                    disabled={!isPublished}
+                  />
+                  add to home slider
+                </label>
+                <button type="submit" disabled={articleCreating || articleImageUploading}>
+                  {articleCreating ? 'Adding...' : 'Add Article'}
+                </button>
               </div>
             </div>
           </form>
@@ -4151,7 +4243,7 @@ function SimpleContentSettingsTab({
 }: {
   apiClient: typeof api;
   title: string;
-  settingsKey: 'helpSupportContent' | 'achievementContent' | 'privacyPolicyContent' | 'termsOfUseContent';
+  settingsKey: 'helpSupportContent' | 'achievementContent' | 'shareContent' | 'privacyPolicyContent' | 'termsOfUseContent';
   /** When set, load/save `title` from API and show a heading field (used for Achievement). */
   showTitleField?: boolean;
 }) {
@@ -4796,6 +4888,11 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   async function save() {
     await persistHomeContent(settings);
   }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!autoSaveReadyRef.current) {
@@ -5884,6 +5981,10 @@ function SubmitApplicationContentTab({ apiClient }: { apiClient: typeof api }) {
   return <SubmitApplicationContentTabImpl apiClient={apiClient} />;
 }
 
+function ShareContentTab({ apiClient }: { apiClient: typeof api }) {
+  return <ShareContentTabImpl apiClient={apiClient} />;
+}
+
 function InstructionContentTab({ apiClient }: { apiClient: typeof api }) {
   return <InstructionContentTabImpl apiClient={apiClient} />;
 }
@@ -5948,6 +6049,11 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <section className="panel-card">

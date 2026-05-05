@@ -43,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +55,9 @@ import androidx.compose.ui.unit.sp
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
+import coil.compose.AsyncImage
+
+private const val NO_EXAMS_MESSAGE = "Mock Test Exam Not Available"
 
 private data class ExamHierarchyNode(
     val label: String,
@@ -71,36 +75,6 @@ fun SeeAllCategoriesScreenNew(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
 
-    val fallbackHierarchy = listOf(
-        ExamHierarchyNode(
-            label = "State Exams",
-            children = listOf(
-                ExamHierarchyNode(
-                    label = "MP Govt",
-                    children = listOf(
-                        ExamHierarchyNode(label = "Patwari"),
-                        ExamHierarchyNode(label = "Police Constable"),
-                    ),
-                ),
-                ExamHierarchyNode(
-                    label = "UP Govt",
-                    children = listOf(ExamHierarchyNode(label = "Lekhpal")),
-                ),
-            ),
-        ),
-        ExamHierarchyNode(
-            label = "Central Exams",
-            children = listOf(
-                ExamHierarchyNode(
-                    label = "SSC",
-                    children = listOf(
-                        ExamHierarchyNode(label = "CHSL"),
-                        ExamHierarchyNode(label = "CGL"),
-                    ),
-                ),
-            ),
-        ),
-    )
     var hierarchy by remember { mutableStateOf<List<ExamHierarchyNode>>(emptyList()) }
     var hierarchyLoaded by remember { mutableStateOf(false) }
     var level1 by remember { mutableStateOf<String?>(null) }
@@ -129,10 +103,29 @@ fun SeeAllCategoriesScreenNew(
                 )
             }.sortedBy { it.label }
         } else {
-            hierarchy = fallbackHierarchy
+            hierarchy = emptyList()
         }
         hierarchyLoaded = true
     }
+
+    val navigateUp: () -> Unit = {
+        when {
+            level2 != null -> {
+                level2 = null
+            }
+            level1 != null -> {
+                level1 = null
+            }
+            else -> {
+                onBack()
+            }
+        }
+    }
+
+    BackHandler(onBack = navigateUp)
+
+    val showEmptyMessage = hierarchyLoaded && hierarchy.isEmpty() && level1 == null && level2 == null
+    val showBackInAppBar = showAppBarBack || level1 != null || level2 != null
 
     val shownItems = when {
         level1 == null -> hierarchy
@@ -159,9 +152,9 @@ fun SeeAllCategoriesScreenNew(
                 .padding(horizontal = 18.dp, vertical = 14.dp),
         ) {
             TopBar(
-                onBack = onBack,
+                onBack = navigateUp,
                 title = title,
-                showBack = showAppBarBack,
+                showBack = showBackInAppBar,
             )
             if (breadcrumb.isNotBlank()) {
                 Spacer(Modifier.height(8.dp))
@@ -183,9 +176,25 @@ fun SeeAllCategoriesScreenNew(
                 ) {
                     CircularProgressIndicator(color = p.accent)
                 }
+            } else if (showEmptyMessage) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = NO_EXAMS_MESSAGE,
+                        color = p.textSecondary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     itemsIndexed(rows) { _, rowCats ->
@@ -208,21 +217,6 @@ fun SeeAllCategoriesScreenNew(
                         )
                     }
                 }
-            }
-            if (level1 != null || level2 != null) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    text = "Back one level",
-                    color = p.accent,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable {
-                            if (level2 != null) level2 = null else level1 = null
-                        }
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                )
             }
         }
     }
@@ -290,6 +284,7 @@ private fun CategorySquare(
 ) {
     val p = mockTestPalette()
     val shape = RoundedCornerShape(14.dp)
+    val remoteIconUrl = remember(iconKey) { iconKey?.trim()?.takeIf { it.startsWith("http://") || it.startsWith("https://") } }
     val icon = remember(iconKey, text) { resolveCategoryIcon(iconKey = iconKey, label = text) }
     Card(
         modifier = modifier
@@ -318,12 +313,20 @@ private fun CategorySquare(
                     .border(1.dp, p.border.copy(alpha = 0.2f), RoundedCornerShape(999.dp)),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = p.accent,
-                    modifier = Modifier.size(18.dp),
-                )
+                if (remoteIconUrl != null) {
+                    AsyncImage(
+                        model = remoteIconUrl,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                } else {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = p.accent,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
             Spacer(Modifier.width(10.dp))
             Text(

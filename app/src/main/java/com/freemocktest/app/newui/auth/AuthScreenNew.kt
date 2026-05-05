@@ -86,7 +86,7 @@ fun AuthScreenNew(
     val scope = rememberCoroutineScope()
     val p = mockTestPalette()
     val profile by AppPreferencesRepository.editableProfile.collectAsState(
-        initial = AppPreferencesRepository.EditableProfileState("", "", "", ""),
+        initial = AppPreferencesRepository.EditableProfileState("", "", "", "", ""),
     )
     val emailVerified by AppPreferencesRepository.emailVerified.collectAsState(initial = false)
     var showEmailVerifyPopup by remember { mutableStateOf(false) }
@@ -682,37 +682,7 @@ private fun LoginForm(
                 ) { onForgotPassword() },
         )
     }
-    Spacer(Modifier.height(14.dp))
-    ContinueWithGoogleSection(
-        requireTermsAccepted = false,
-        termsAccepted = true,
-        onTermsNotAccepted = { },
-        enabled = !busy && !googlePicking && !googleSubmitting,
-        pickingAccount = googlePicking,
-        onPickingAccountChange = { googlePicking = it },
-        onGoogleIdToken = { idToken ->
-            scope.launch {
-                googleSubmitting = true
-                AuthRepository.signInWithGoogle(idToken)
-                    .onSuccess { user ->
-                        googleSubmitting = false
-                        if (user.needsProfileCompletion()) {
-                            Toast.makeText(context, "Signed in with Google", Toast.LENGTH_SHORT).show()
-                            onProfileIncomplete()
-                        } else {
-                            Toast.makeText(context, "Signed in with Google", Toast.LENGTH_SHORT).show()
-                            onAuthSuccess()
-                        }
-                    }
-                    .onFailure { e ->
-                        googleSubmitting = false
-                        onError(networkAwareError(e, "Google sign-in failed"))
-                    }
-            }
-        },
-        onPickerErrorMessage = { msg -> onError(msg) },
-    )
-    Spacer(Modifier.height(16.dp))
+    Spacer(Modifier.height(12.dp))
 
     // Ensure the login CTA stretches to the full card width (some parent constraints
     // can otherwise cause the background to appear narrower).
@@ -765,6 +735,36 @@ private fun LoginForm(
             },
         )
     }
+    Spacer(Modifier.height(16.dp))
+    ContinueWithGoogleSection(
+        requireTermsAccepted = false,
+        termsAccepted = true,
+        onTermsNotAccepted = { },
+        enabled = !busy && !googlePicking && !googleSubmitting,
+        pickingAccount = googlePicking,
+        onPickingAccountChange = { googlePicking = it },
+        onGoogleIdToken = { idToken ->
+            scope.launch {
+                googleSubmitting = true
+                AuthRepository.signInWithGoogle(idToken)
+                    .onSuccess { user ->
+                        googleSubmitting = false
+                        if (user.needsProfileCompletion()) {
+                            Toast.makeText(context, "Signed in with Google", Toast.LENGTH_SHORT).show()
+                            onProfileIncomplete()
+                        } else {
+                            Toast.makeText(context, "Signed in with Google", Toast.LENGTH_SHORT).show()
+                            onAuthSuccess()
+                        }
+                    }
+                    .onFailure { e ->
+                        googleSubmitting = false
+                        onError(networkAwareError(e, "Google sign-in failed"))
+                    }
+            }
+        },
+        onPickerErrorMessage = { msg -> onError(msg) },
+    )
     Spacer(Modifier.height(10.dp))
 
     Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
@@ -927,38 +927,7 @@ private fun SignupForm(
                 .padding(start = 8.dp),
         )
     }
-    Spacer(Modifier.height(14.dp))
-    ContinueWithGoogleSection(
-        requireTermsAccepted = true,
-        termsAccepted = agreedToTerms,
-        onTermsNotAccepted = {
-            termsError = "Please accept Terms & Condition"
-        },
-        enabled = !busy && !googlePicking && !googleSubmitting,
-        pickingAccount = googlePicking,
-        onPickingAccountChange = { googlePicking = it },
-        onGoogleIdToken = { idToken ->
-            scope.launch {
-                googleSubmitting = true
-                AuthRepository.signInWithGoogle(idToken)
-                    .onSuccess { user ->
-                        googleSubmitting = false
-                        Toast.makeText(context, "Signed up with Google", Toast.LENGTH_SHORT).show()
-                        if (user.needsProfileCompletion()) {
-                            onProfileIncomplete()
-                        } else {
-                            onSuccess()
-                        }
-                    }
-                    .onFailure { e ->
-                        googleSubmitting = false
-                        onError(networkAwareError(e, "Google sign-up failed"))
-                    }
-            }
-        },
-        onPickerErrorMessage = { msg -> onError(msg) },
-    )
-    Spacer(Modifier.height(16.dp))
+    Spacer(Modifier.height(12.dp))
 
     NeonButton(
         text = "Register",
@@ -1043,6 +1012,37 @@ private fun SignupForm(
                     }
             }
         },
+    )
+    Spacer(Modifier.height(16.dp))
+    ContinueWithGoogleSection(
+        requireTermsAccepted = true,
+        termsAccepted = agreedToTerms,
+        onTermsNotAccepted = {
+            termsError = "Please accept Terms & Condition"
+        },
+        enabled = !busy && !googlePicking && !googleSubmitting,
+        pickingAccount = googlePicking,
+        onPickingAccountChange = { googlePicking = it },
+        onGoogleIdToken = { idToken ->
+            scope.launch {
+                googleSubmitting = true
+                AuthRepository.signInWithGoogle(idToken)
+                    .onSuccess { user ->
+                        googleSubmitting = false
+                        Toast.makeText(context, "Signed up with Google", Toast.LENGTH_SHORT).show()
+                        if (user.needsProfileCompletion()) {
+                            onProfileIncomplete()
+                        } else {
+                            onSuccess()
+                        }
+                    }
+                    .onFailure { e ->
+                        googleSubmitting = false
+                        onError(networkAwareError(e, "Google sign-up failed"))
+                    }
+            }
+        },
+        onPickerErrorMessage = { msg -> onError(msg) },
     )
     Spacer(Modifier.height(10.dp))
 

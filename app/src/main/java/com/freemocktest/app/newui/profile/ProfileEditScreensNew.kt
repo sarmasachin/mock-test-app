@@ -2,6 +2,7 @@ package com.freemocktest.app.newui.profile
 
 import android.content.Context
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,7 +22,10 @@ import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -57,8 +61,28 @@ import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.ZoneOffset
+import java.time.format.DateTimeParseException
 
 private enum class InlineMessageType { Success, Error }
+
+private val profileBirthdayPattern = Regex("^\\d{4}-\\d{2}-\\d{2}$")
+
+/** @return Pair(serverValue, errorMessage) — serverValue `""` clears DOB; null = invalid. */
+private fun validateBirthdayForServer(raw: String): Pair<String?, String> {
+    val s = raw.trim()
+    if (s.isEmpty()) return "" to ""
+    if (!profileBirthdayPattern.matches(s)) return null to "Use YYYY-MM-DD (e.g. 1998-03-21)"
+    return try {
+        val d = LocalDate.parse(s)
+        val today = LocalDate.now(ZoneOffset.UTC)
+        if (d.isAfter(today)) return null to "Date cannot be in the future"
+        s to ""
+    } catch (_e: DateTimeParseException) {
+        null to "Invalid calendar date"
+    }
+}
 
 private fun normalizeProfileInlineMessage(raw: String?, fallback: String): String {
     val msg = raw?.trim().orEmpty()
@@ -97,7 +121,7 @@ fun ProfileEditUsernameScreen(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val profile by AppPreferencesRepository.editableProfile.collectAsState(
-        initial = AppPreferencesRepository.EditableProfileState("", "", "", ""),
+        initial = AppPreferencesRepository.EditableProfileState("", "", "", "", ""),
     )
     var name by remember { mutableStateOf("") }
     LaunchedEffect(profile.displayName) {
@@ -212,7 +236,7 @@ fun ProfileEditEmailScreen(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val profile by AppPreferencesRepository.editableProfile.collectAsState(
-        initial = AppPreferencesRepository.EditableProfileState("", "", "", ""),
+        initial = AppPreferencesRepository.EditableProfileState("", "", "", "", ""),
     )
     val emailOk by AppPreferencesRepository.emailVerified.collectAsState(initial = false)
     var email by remember { mutableStateOf("") }
@@ -352,7 +376,7 @@ fun ProfileEditMobileScreen(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val profile by AppPreferencesRepository.editableProfile.collectAsState(
-        initial = AppPreferencesRepository.EditableProfileState("", "", "", ""),
+        initial = AppPreferencesRepository.EditableProfileState("", "", "", "", ""),
     )
     var mobile by remember { mutableStateOf("") }
     LaunchedEffect(profile.mobile) {
@@ -468,7 +492,7 @@ fun ProfileEditGenderScreen(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val profile by AppPreferencesRepository.editableProfile.collectAsState(
-        initial = AppPreferencesRepository.EditableProfileState("", "", "", ""),
+        initial = AppPreferencesRepository.EditableProfileState("", "", "", "", ""),
     )
     var gender by remember { mutableStateOf("") }
     LaunchedEffect(profile.gender) {
@@ -478,6 +502,7 @@ fun ProfileEditGenderScreen(
     val scroll = rememberScrollState()
     val fieldShape = RoundedCornerShape(12.dp)
     val options = remember { listOf("Male", "Female", "Other") }
+    var genderMenuExpanded by remember { mutableStateOf(false) }
     var inlineMessage by remember { mutableStateOf("") }
     var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
     var submitted by remember { mutableStateOf(false) }
@@ -507,24 +532,33 @@ fun ProfileEditGenderScreen(
             }
             Spacer(Modifier.height(18.dp))
             if (!submitted) {
-                OutlinedTextField(
-                    value = gender,
-                    onValueChange = { value ->
-                        val v = value.trim()
-                        gender = when {
-                            v.equals("male", ignoreCase = true) -> "Male"
-                            v.equals("female", ignoreCase = true) -> "Female"
-                            v.equals("other", ignoreCase = true) -> "Other"
-                            else -> value
-                        }
-                        if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
-                    },
-                    label = { Text("Gender (Male / Female / Other)") },
-                    singleLine = true,
+                OutlinedButton(
+                    onClick = { genderMenuExpanded = true },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ProfileEditFieldColors(),
                     shape = fieldShape,
-                )
+                ) {
+                    Text(
+                        text = if (gender.trim().isBlank()) "Select Gender" else gender,
+                        color = p.textPrimary,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                DropdownMenu(
+                    expanded = genderMenuExpanded,
+                    onDismissRequest = { genderMenuExpanded = false },
+                    modifier = Modifier.fillMaxWidth(0.92f),
+                ) {
+                    options.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option) },
+                            onClick = {
+                                gender = option
+                                genderMenuExpanded = false
+                                if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
+                            },
+                        )
+                    }
+                }
                 if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
                     Spacer(Modifier.height(8.dp))
                     Text(
@@ -568,6 +602,175 @@ fun ProfileEditGenderScreen(
                             onFailure = { e ->
                                 inlineType = InlineMessageType.Error
                                 inlineMessage = normalizeProfileInlineMessage(e.message, "Could not save gender")
+                            },
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Text(if (submitted) "Edit again" else "Save", color = Color.White, fontWeight = FontWeight.SemiBold)
+            }
+            if (inlineType == InlineMessageType.Success && inlineMessage.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = inlineMessage,
+                    color = Color(0xFF16A34A),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ProfileEditBirthdayScreen(
+    onBack: () -> Unit,
+) {
+    val p = mockTestPalette()
+    val bg = Brush.verticalGradient(colors = p.gradientColors())
+    val profile by AppPreferencesRepository.editableProfile.collectAsState(
+        initial = AppPreferencesRepository.EditableProfileState("", "", "", "", ""),
+    )
+    var dateText by remember { mutableStateOf("") }
+    LaunchedEffect(profile.birthdayDate) {
+        dateText = profile.birthdayDate.trim()
+    }
+    val scope = rememberCoroutineScope()
+    val scroll = rememberScrollState()
+    val fieldShape = RoundedCornerShape(12.dp)
+    var inlineMessage by remember { mutableStateOf("") }
+    var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
+    var submitted by remember { mutableStateOf(false) }
+
+    Scaffold(
+        containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets(0),
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(bg)
+                .padding(padding)
+                .verticalScroll(scroll)
+                .padding(horizontal = 18.dp, vertical = 10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "Back",
+                        tint = p.textPrimary,
+                    )
+                }
+                Spacer(Modifier.size(4.dp))
+                Text("Date of birth", color = p.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Format: YYYY-MM-DD (UTC calendar). Must not be in the future.",
+                color = p.textSecondary,
+                fontSize = 14.sp,
+            )
+            Spacer(Modifier.height(14.dp))
+            if (!submitted) {
+                OutlinedTextField(
+                    value = dateText,
+                    onValueChange = { value ->
+                        dateText = value.filter { it.isDigit() || it == '-' }.take(10)
+                        if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
+                    },
+                    label = { Text("YYYY-MM-DD") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ProfileEditFieldColors(),
+                    shape = fieldShape,
+                )
+                if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = inlineMessage,
+                        color = p.error,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                TextButton(
+                    onClick = {
+                        if (submitted) return@TextButton
+                        dateText = ""
+                        inlineMessage = ""
+                    },
+                    enabled = !submitted && dateText.isNotBlank(),
+                ) {
+                    Text("Clear field", color = p.accent)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        if (submitted) return@OutlinedButton
+                        scope.launch {
+                            val r = AuthRepository.patchProfileRemote(birthdayDate = "")
+                            r.fold(
+                                onSuccess = {
+                                    inlineType = InlineMessageType.Success
+                                    inlineMessage = "Date of birth removed"
+                                    submitted = true
+                                },
+                                onFailure = { e ->
+                                    inlineType = InlineMessageType.Error
+                                    inlineMessage = normalizeProfileInlineMessage(e.message, "Could not clear date of birth")
+                                },
+                            )
+                        }
+                    },
+                    enabled = !submitted && profile.birthdayDate.isNotBlank(),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text("Remove from account", color = p.textPrimary)
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = {
+                    if (submitted) {
+                        submitted = false
+                        inlineMessage = ""
+                        dateText = profile.birthdayDate.trim()
+                        return@Button
+                    }
+                    val (serverVal, err) = validateBirthdayForServer(dateText)
+                    if (serverVal == null) {
+                        inlineType = InlineMessageType.Error
+                        inlineMessage = err.ifBlank { "Invalid date" }
+                        return@Button
+                    }
+                    scope.launch {
+                        val r = AuthRepository.patchProfileRemote(birthdayDate = serverVal)
+                        r.fold(
+                            onSuccess = {
+                                inlineType = InlineMessageType.Success
+                                inlineMessage =
+                                    if (serverVal.isEmpty()) {
+                                        "Date of birth cleared"
+                                    } else {
+                                        "Date of birth saved"
+                                    }
+                                submitted = true
+                            },
+                            onFailure = { e ->
+                                inlineType = InlineMessageType.Error
+                                inlineMessage = normalizeProfileInlineMessage(e.message, "Could not save date of birth")
                             },
                         )
                     }
@@ -795,7 +998,7 @@ fun ProfileEmailVerificationScreen(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val profile by AppPreferencesRepository.editableProfile.collectAsState(
-        initial = AppPreferencesRepository.EditableProfileState("", "", "", ""),
+        initial = AppPreferencesRepository.EditableProfileState("", "", "", "", ""),
     )
     val emailVerified by AppPreferencesRepository.emailVerified.collectAsState(initial = false)
     var email by remember { mutableStateOf("") }

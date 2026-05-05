@@ -106,7 +106,7 @@ router.get('/content', async (_req, res) => {
     const { rows } = await pool.query(
       `SELECT setting_key, setting_value
        FROM app_settings
-       WHERE setting_key IN ('homeContent', 'submitApplicationContent', 'instructionContent', 'profileMenuItems', 'examCategories', 'pollSettings', 'pushNotificationSettings', 'achievementContent')`,
+       WHERE setting_key IN ('homeContent', 'submitApplicationContent', 'instructionContent', 'profileMenuItems', 'examCategories', 'pollSettings', 'pushNotificationSettings', 'achievementContent', 'shareContent')`,
     );
     if (!rows.length) {
       return res.json({
@@ -118,6 +118,7 @@ router.get('/content', async (_req, res) => {
         pollSettings: { items: [] },
         pushNotificationSettings: { items: [] },
         achievementContent: null,
+        shareContent: null,
       });
     }
     const map = {};
@@ -182,6 +183,20 @@ router.get('/content', async (_req, res) => {
     } catch (_e) {
       parsedAchievementContent = null;
     }
+    /** Admin-managed app share text (same shape as admin normalizeSimpleContent). Public read-only. */
+    let parsedShareContent = null;
+    try {
+      const raw = JSON.parse(String(map.shareContent || '{}'));
+      if (raw && typeof raw === 'object') {
+        const title = String(raw.title || 'Share').trim().slice(0, 120);
+        const body = String(raw.body || '').trim().slice(0, 10000);
+        if (body) {
+          parsedShareContent = { title, body };
+        }
+      }
+    } catch (_e) {
+      parsedShareContent = null;
+    }
     return res.json({
       content: sanitizeHomeContent(parsedHome),
       submitApplicationContent: parsedSubmit,
@@ -191,6 +206,7 @@ router.get('/content', async (_req, res) => {
       pollSettings: parsedPollSettings,
       pushNotificationSettings: parsedPushNotificationSettings,
       achievementContent: parsedAchievementContent,
+      shareContent: parsedShareContent,
     });
   } catch (e) {
     if (e && e.code === '42P01') {
@@ -203,6 +219,7 @@ router.get('/content', async (_req, res) => {
         pollSettings: { items: [] },
         pushNotificationSettings: { items: [] },
         achievementContent: null,
+        shareContent: null,
       });
     }
     console.error(e);

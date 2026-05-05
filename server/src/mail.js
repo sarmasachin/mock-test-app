@@ -321,8 +321,15 @@ async function sendSupportJourneyEmail(opts) {
   const journeyStatus = String(opts?.status || 'received').trim().toLowerCase();
   const userMessage = String(opts?.userMessage || '').trim();
   const displayName = String(opts?.displayName || 'User').trim();
+  const eventKeyOverride = String(opts?.eventKeyOverride || '').trim().toLowerCase();
   const normalizedSubject = rawSubject.toLowerCase();
-  if (normalizedSubject.includes('feedback')) {
+  if (eventKeyOverride === EMAIL_EVENT_KEYS.feedbackAck) {
+    if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.feedbackAck))) return undefined;
+  } else if (eventKeyOverride === EMAIL_EVENT_KEYS.issueReportAck) {
+    if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.issueReportAck))) return undefined;
+  } else if (eventKeyOverride === EMAIL_EVENT_KEYS.helpSupportAck) {
+    if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.helpSupportAck))) return undefined;
+  } else if (normalizedSubject.includes('feedback')) {
     if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.feedbackAck))) return undefined;
   } else if (normalizedSubject.includes('issue')) {
     if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.issueReportAck))) return undefined;

@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useAdminDialog } from '../adminDialog';
 import { useAdminToast } from '../adminToast';
 
@@ -23,7 +23,11 @@ type PushItem = {
   title: string;
   message: string;
   target: 'all' | 'new_users' | 'active_users';
+  /** Canonical value sent to API / FCM (derived from preset + custom when saving). */
   deepLink: string;
+  /** Quick pick — must be empty if custom deep link is used (same rule as new row form). */
+  deepLinkPreset: string;
+  deepLinkCustom: string;
   scheduledAt: string;
   enabled: boolean;
   status: 'draft' | 'sent';
@@ -32,6 +36,50 @@ type PushItem = {
   createdAt: string;
 };
 type PushSettings = { items: PushItem[] };
+
+/** Values accepted by app `openByPushRoute` (Android MainBottomNavHost). */
+const PUSH_DEEP_LINK_PRESETS: { value: string; label: string }[] = [
+  { value: '', label: '— None —' },
+  { value: 'poll', label: 'Poll' },
+  { value: 'notifications', label: 'Notifications' },
+  { value: 'menu_quiz', label: 'Daily Quiz' },
+  { value: 'job_alert', label: 'Job alerts' },
+  { value: 'exam_alert', label: 'Exam alerts' },
+  { value: 'news', label: 'News tab' },
+  { value: 'tests', label: 'Tests tab' },
+  { value: 'home', label: 'Home tab' },
+];
+
+const PUSH_PRESET_VALUE_SET = new Set(PUSH_DEEP_LINK_PRESETS.map((o) => o.value).filter(Boolean));
+
+function splitSavedDeepLink(saved: string): { preset: string; custom: string } {
+  const s = String(saved || '').trim();
+  if (!s) return { preset: '', custom: '' };
+  if (PUSH_PRESET_VALUE_SET.has(s)) return { preset: s, custom: '' };
+  return { preset: '', custom: s };
+}
+
+/** Custom wins if non-empty; else preset. Both non-empty → conflict (caller shows warning). */
+function mergePushDeepLink(preset: string, custom: string): { ok: true; deepLink: string } | { ok: false } {
+  const p = preset.trim();
+  const c = custom.trim();
+  if (p && c) return { ok: false };
+  if (c) return { ok: true, deepLink: c };
+  if (p) return { ok: true, deepLink: p };
+  return { ok: true, deepLink: '' };
+}
+
+type PushItemApiRow = Omit<PushItem, 'deepLinkPreset' | 'deepLinkCustom'> & { deepLink: string };
+
+function stripPushItemForApi(item: PushItem): PushItemApiRow | null {
+  const merged = mergePushDeepLink(item.deepLinkPreset, item.deepLinkCustom);
+  if (!merged.ok) return null;
+  const { deepLinkPreset: _p, deepLinkCustom: _c, ...rest } = item;
+  return { ...rest, deepLink: merged.deepLink };
+}
+
+const PUSH_DEEPLINK_CONFLICT_MSG =
+  'Quick destination aur Custom deep link dono set hain — koi ek clear karein (sirf ek use ho sakta hai).';
 type SubmitApplicationContent = {
   title: string;
   benefitsTitle: string;
@@ -55,6 +103,10 @@ type InstructionContent = {
   postSubmitCardLines: string[];
   questionNavigationMode: 'sequential' | 'free';
   items: string[];
+};
+type ShareContentSettings = {
+  title: string;
+  body: string;
 };
 
 export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
@@ -86,21 +138,37 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
       pushToast('error', err?.response?.data?.error || 'Failed to load poll settings');
     }
   }
-  async function save() {
+
+  /** Single path to DB + local state (avoids “Add Poll” only updating React state with no PATCH). */
+  async function persistPollSettings(next: PollSettings, successText: string) {
     try {
       setSaving(true);
-      await apiClient.patch('/admin/settings', { pollSettings: settings });
-      pushToast('success', 'Poll settings saved.');
+      await apiClient.patch('/admin/settings', { pollSettings: next });
+      setSettings(next);
+      pushToast('success', successText);
+      return true;
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to save poll settings');
+      return false;
     } finally {
       setSaving(false);
     }
   }
+
+  async function save() {
+    await persistPollSettings(settings, 'Poll settings saved.');
+  }
+
+  /* Tab unmounts when leaving this menu (App.tsx); remount must reload from API or list looks empty. */
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when tab remounts only
+  }, []);
+
   function normalizeOptions(list: string[]) {
     return list.map((x) => x.trim()).filter(Boolean);
   }
-  function addPoll() {
+  async function addPoll() {
     const question = newItem.question.trim();
     if (!question) {
       pushToast('error', 'Poll question is required');
@@ -115,8 +183,25 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
       pushToast('error', 'Maximum 8 poll options are allowed');
       return;
     }
-    setSettings((p) => ({ ...p, items: [...p.items, { id: `poll-${Date.now()}`, question, options, allowMultiple: newItem.allowMultiple, durationMinutes: Number(newItem.durationMinutes || '1440'), enabled: true, createdAt: new Date().toISOString() }] }));
-    setNewItem({ question: '', options: ['', '', '', ''], allowMultiple: false, durationMinutes: '1440' });
+    const next: PollSettings = {
+      ...settings,
+      items: [
+        ...settings.items,
+        {
+          id: `poll-${Date.now()}`,
+          question,
+          options,
+          allowMultiple: newItem.allowMultiple,
+          durationMinutes: Number(newItem.durationMinutes || '1440'),
+          enabled: true,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    };
+    const ok = await persistPollSettings(next, 'Poll added and saved.');
+    if (ok) {
+      setNewItem({ question: '', options: ['', '', '', ''], allowMultiple: false, durationMinutes: '1440' });
+    }
   }
   function setNewOptionAt(index: number, value: string) {
     setNewItem((p) => ({ ...p, options: p.options.map((x, i) => (i === index ? value : x)) }));
@@ -168,16 +253,12 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
       ...settings,
       items: settings.items.map((x) => (x.id === item.id ? { ...x, options: normalized } : x)),
     };
-    setSettings(next);
-    try {
-      setSaving(true);
-      await apiClient.patch('/admin/settings', { pollSettings: next });
-      pushToast('success', 'Poll saved.');
-    } catch (err: any) {
-      pushToast('error', err?.response?.data?.error || 'Failed to save poll settings');
-    } finally {
-      setSaving(false);
-    }
+    await persistPollSettings(next, 'Poll saved.');
+  }
+
+  async function removePoll(itemId: string) {
+    const next = { ...settings, items: settings.items.filter((x) => x.id !== itemId) };
+    await persistPollSettings(next, 'Poll removed.');
   }
   const totalPages = Math.max(1, Math.ceil(settings.items.length / POLLS_PER_PAGE));
   const safePage = Math.min(page, totalPages);
@@ -228,7 +309,9 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
         </div>
         <div className="inline-form" style={{ marginTop: 8 }}>
         <label className="check-wrap"><input type="checkbox" checked={newItem.allowMultiple} onChange={(e) => setNewItem((p) => ({ ...p, allowMultiple: e.target.checked }))} />Multiple</label>
-          <button type="button" onClick={addPoll}>Add Poll</button>
+          <button type="button" onClick={() => void addPoll()} disabled={saving}>
+            Add Poll
+          </button>
         </div>
       </div>
       <div className="list table">
@@ -262,8 +345,10 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
               style={{ width: 100, minWidth: 100, justifySelf: 'start', alignSelf: 'center', height: 34, padding: '6px 8px' }}
             />
             <label className="check-wrap"><input type="checkbox" checked={item.allowMultiple} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, allowMultiple: e.target.checked } : x)) }))} />yes</label>
-            <button type="button" onClick={() => saveSinglePoll(item)}>Save</button>
-            <button type="button" className="danger" onClick={() => setSettings((p) => ({ ...p, items: p.items.filter((x) => x.id !== item.id) }))}>Delete</button>
+            <button type="button" onClick={() => void saveSinglePoll(item)} disabled={saving}>Save</button>
+            <button type="button" className="danger" onClick={() => void removePoll(item.id)} disabled={saving}>
+              Delete
+            </button>
           </div>
         ))}
       </div>
@@ -278,7 +363,15 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   const { confirm: adminConfirm } = useAdminDialog();
   const PUSH_PER_PAGE = 20;
   const [settings, setSettings] = useState<PushSettings>({ items: [] });
-  const [newItem, setNewItem] = useState({ title: '', message: '', target: 'all' as PushItem['target'], deepLink: '', scheduledAt: '', enabled: true });
+  const [newItem, setNewItem] = useState({
+    title: '',
+    message: '',
+    target: 'all' as PushItem['target'],
+    deepLinkPreset: '',
+    deepLinkCustom: '',
+    scheduledAt: '',
+    enabled: true,
+  });
   const [page, setPage] = useState(1);
   const [sendResult, setSendResult] = useState('');
   const [saving, setSaving] = useState(false);
@@ -298,22 +391,60 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       timeZone: 'Asia/Kolkata',
     });
   }
+
   async function load() {
     try {
       const res = await apiClient.get('/admin/settings');
       const s = res.data?.settings?.pushNotificationSettings || {};
       const itemsRaw = Array.isArray(s.items) ? s.items : s.title || s.message ? [s] : [];
-      setSettings({ items: itemsRaw.map((x: any, idx: number) => ({ id: String(x.id || `push-${idx + 1}`), title: String(x.title || ''), message: String(x.message || ''), target: ['all', 'new_users', 'active_users'].includes(String(x.target)) ? x.target : 'all', deepLink: String(x.deepLink || ''), scheduledAt: String(x.scheduledAt || ''), enabled: x.enabled !== false, status: x.status === 'sent' ? 'sent' : 'draft', resendCount: Number(x.resendCount || 0), lastSentAt: String(x.lastSentAt || ''), createdAt: String(x.createdAt || new Date().toISOString()) })) });
+      setSettings({
+        items: itemsRaw.map((x: any, idx: number) => {
+          const dl = String(x.deepLink || '').trim();
+          const sp = splitSavedDeepLink(dl);
+          return {
+            id: String(x.id || `push-${idx + 1}`),
+            title: String(x.title || ''),
+            message: String(x.message || ''),
+            target: ['all', 'new_users', 'active_users'].includes(String(x.target)) ? x.target : 'all',
+            deepLink: dl,
+            deepLinkPreset: sp.preset,
+            deepLinkCustom: sp.custom,
+            scheduledAt: String(x.scheduledAt || ''),
+            enabled: x.enabled !== false,
+            status: x.status === 'sent' ? 'sent' : 'draft',
+            resendCount: Number(x.resendCount || 0),
+            lastSentAt: String(x.lastSentAt || ''),
+            createdAt: String(x.createdAt || new Date().toISOString()),
+          };
+        }),
+      });
       setPage(1);
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to load push notification settings');
     }
   }
+
+  /* App.tsx renders this tab only when `tab === 'pushNotificationSettings'`, so switching menus unmounts
+   * this component → useState resets to `{ items: [] }`. Save still writes DB (PATCH); without load() on
+   * mount the UI stayed empty until "Load". */
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: reload when tab remounts, not every render
+  }, []);
   async function save(nextSettings?: PushSettings, successText?: string) {
     try {
       setSaving(true);
       const payload = nextSettings || settings;
-      await apiClient.patch('/admin/settings', { pushNotificationSettings: payload });
+      const apiItems: PushItemApiRow[] = [];
+      for (const it of payload.items) {
+        const row = stripPushItemForApi(it);
+        if (!row) {
+          pushToast('warning', PUSH_DEEPLINK_CONFLICT_MSG);
+          return false;
+        }
+        apiItems.push(row);
+      }
+      await apiClient.patch('/admin/settings', { pushNotificationSettings: { items: apiItems } });
       setSettings(payload);
       pushToast('success', successText || 'Push notification settings saved successfully.');
       return true;
@@ -331,8 +462,14 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       pushToast('error', 'Title and message are required.');
       return;
     }
+    const mergedNew = mergePushDeepLink(newItem.deepLinkPreset, newItem.deepLinkCustom);
+    if (!mergedNew.ok) {
+      pushToast('warning', PUSH_DEEPLINK_CONFLICT_MSG);
+      return;
+    }
     try {
       setAdding(true);
+      const sp = splitSavedDeepLink(mergedNew.deepLink);
       const next = {
         ...settings,
         items: [
@@ -342,7 +479,9 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
             title,
             message,
             target: newItem.target,
-            deepLink: newItem.deepLink.trim(),
+            deepLink: mergedNew.deepLink,
+            deepLinkPreset: sp.preset,
+            deepLinkCustom: sp.custom,
             scheduledAt: newItem.scheduledAt.trim(),
             enabled: newItem.enabled,
             status: 'draft' as const,
@@ -354,7 +493,15 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       };
       const ok = await save(next, 'Push item added and saved.');
       if (ok) {
-        setNewItem({ title: '', message: '', target: 'all', deepLink: '', scheduledAt: '', enabled: true });
+        setNewItem({
+          title: '',
+          message: '',
+          target: 'all',
+          deepLinkPreset: '',
+          deepLinkCustom: '',
+          scheduledAt: '',
+          enabled: true,
+        });
       }
     } finally {
       setAdding(false);
@@ -382,6 +529,11 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       pushToast('error', 'Title and message are required to send push');
       return;
     }
+    const mergedSend = mergePushDeepLink(item.deepLinkPreset, item.deepLinkCustom);
+    if (!mergedSend.ok) {
+      pushToast('warning', PUSH_DEEPLINK_CONFLICT_MSG);
+      return;
+    }
     try {
       setSendResult('');
       setSendingId(item.id);
@@ -389,7 +541,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
         title: item.title.trim(),
         message: item.message.trim(),
         target: item.target,
-        deepLink: item.deepLink.trim(),
+        deepLink: mergedSend.deepLink.trim(),
       });
       const sent = Number(res.data?.sent || 0);
       const failed = Number(res.data?.failed || 0);
@@ -420,20 +572,86 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   const safePage = Math.min(page, totalPages);
   const visibleItems = useMemo(() => settings.items.slice((safePage - 1) * PUSH_PER_PAGE, (safePage - 1) * PUSH_PER_PAGE + PUSH_PER_PAGE), [settings.items, safePage]);
   return (
-    <section className="panel-card">
+    <section className="panel-card push-notification-panel">
       <div className="panel-head"><h3>Push Notification Settings</h3></div>
-      <div className="inline-form">
+      <div className="inline-form push-settings-add-row">
         <input value={newItem.title} onChange={(e) => setNewItem((p) => ({ ...p, title: e.target.value }))} placeholder="Notification title" disabled={saving || adding} />
         <input value={newItem.message} onChange={(e) => setNewItem((p) => ({ ...p, message: e.target.value }))} placeholder="Notification message" disabled={saving || adding} />
         <select value={newItem.target} onChange={(e) => setNewItem((p) => ({ ...p, target: e.target.value as PushItem['target'] }))} disabled={saving || adding}><option value="all">All users</option><option value="new_users">New users</option><option value="active_users">Active users</option></select>
-        <input value={newItem.deepLink} onChange={(e) => setNewItem((p) => ({ ...p, deepLink: e.target.value }))} placeholder="Deep link (optional)" disabled={saving || adding} />
+        <select value={newItem.deepLinkPreset} onChange={(e) => setNewItem((p) => ({ ...p, deepLinkPreset: e.target.value }))} disabled={saving || adding} aria-label="Open screen preset">
+          {PUSH_DEEP_LINK_PRESETS.map((opt) => (
+            <option key={opt.value || '__none__'} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+        <input value={newItem.deepLinkCustom} onChange={(e) => setNewItem((p) => ({ ...p, deepLinkCustom: e.target.value }))} placeholder="Custom deep link (optional)" disabled={saving || adding} />
         <input type="datetime-local" value={newItem.scheduledAt} onChange={(e) => setNewItem((p) => ({ ...p, scheduledAt: e.target.value }))} placeholder="Schedule (optional)" disabled={saving || adding} />
         <label className="check-wrap"><input type="checkbox" checked={newItem.enabled} onChange={(e) => setNewItem((p) => ({ ...p, enabled: e.target.checked }))} disabled={saving || adding} />Enabled</label>
         <button type="button" onClick={addPush} disabled={saving || adding}>{adding ? 'Adding...' : 'Add Push'}</button>
       </div>
+      <p className="muted" style={{ margin: '8px 0 0', fontSize: '0.88rem' }}>
+        Quick screen aur Custom deep link dono optional hain. Dono ek saath bharenge to save/send par warning aayegi — sirf ek use karein.
+      </p>
       <div className="list table">
-        <div className="row row-head" style={{ gridTemplateColumns: '1fr 2fr 120px 120px 140px 90px 90px 90px 90px 110px' }}><span>Title</span><span>Message</span><span>Target</span><span>Status</span><span>Last Sent (IST)</span><span>Resend</span><span>Update</span><span>Delete</span><span>Resend Count</span><span>Send Now</span></div>
-        {visibleItems.map((item) => <div key={item.id} className="row" style={{ gridTemplateColumns: '1fr 2fr 120px 120px 140px 90px 90px 90px 90px 110px' }}><input value={item.title} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, title: e.target.value } : x)) }))} disabled={saving || !!sendingId || !!deletingId} /><input value={item.message} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, message: e.target.value } : x)) }))} disabled={saving || !!sendingId || !!deletingId} /><select value={item.target} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, target: e.target.value as PushItem['target'] } : x)) }))} disabled={saving || !!sendingId || !!deletingId}><option value="all">All users</option><option value="new_users">New users</option><option value="active_users">Active users</option></select><span>{item.status}</span><span>{formatDateTime(item.lastSentAt)}</span><button type="button" className="ghost" onClick={() => sendNow(item)} disabled={saving || !!deletingId || !!sendingId}>{sendingId === item.id ? 'Sending...' : 'Resend'}</button><button type="button" onClick={() => { void save(); }} disabled={saving || !!sendingId || !!deletingId}>{saving ? 'Saving...' : 'Save'}</button><button type="button" className="danger" onClick={() => removePush(item.id)} disabled={saving || !!sendingId || !!deletingId}>{deletingId === item.id ? 'Deleting...' : 'Delete'}</button><span>{item.resendCount || 0}</span><button type="button" onClick={() => sendNow(item)} disabled={saving || !!deletingId || !!sendingId}>{sendingId === item.id ? 'Sending...' : 'Send'}</button></div>)}
+        <div className="row row-head push-notification-grid-row">
+          <span>Title</span>
+          <span>Message</span>
+          <span>Target</span>
+          <span>Deep link</span>
+          <span>Status</span>
+          <span>Last Sent (IST)</span>
+          <span>Resend</span>
+          <span>Update</span>
+          <span>Delete</span>
+          <span>Resend Count</span>
+          <span>Send Now</span>
+        </div>
+        {visibleItems.map((item) => (
+          <div key={item.id} className="row push-notification-grid-row">
+            <input value={item.title} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, title: e.target.value } : x)) }))} disabled={saving || !!sendingId || !!deletingId} />
+            <input value={item.message} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, message: e.target.value } : x)) }))} disabled={saving || !!sendingId || !!deletingId} />
+            <select value={item.target} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, target: e.target.value as PushItem['target'] } : x)) }))} disabled={saving || !!sendingId || !!deletingId}>
+              <option value="all">All users</option>
+              <option value="new_users">New users</option>
+              <option value="active_users">Active users</option>
+            </select>
+            <span style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+              <select
+                value={item.deepLinkPreset}
+                onChange={(e) =>
+                  setSettings((p) => ({
+                    ...p,
+                    items: p.items.map((x) => (x.id === item.id ? { ...x, deepLinkPreset: e.target.value } : x)),
+                  }))
+                }
+                disabled={saving || !!sendingId || !!deletingId}
+                aria-label={`Deep link preset ${item.id}`}
+              >
+                {PUSH_DEEP_LINK_PRESETS.map((opt) => (
+                  <option key={opt.value || '__none__'} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              <input
+                value={item.deepLinkCustom}
+                placeholder="Custom"
+                onChange={(e) =>
+                  setSettings((p) => ({
+                    ...p,
+                    items: p.items.map((x) => (x.id === item.id ? { ...x, deepLinkCustom: e.target.value } : x)),
+                  }))
+                }
+                disabled={saving || !!sendingId || !!deletingId}
+                style={{ width: '100%', boxSizing: 'border-box' }}
+              />
+            </span>
+            <span>{item.status}</span>
+            <span>{formatDateTime(item.lastSentAt)}</span>
+            <button type="button" className="ghost" onClick={() => sendNow(item)} disabled={saving || !!deletingId || !!sendingId}>{sendingId === item.id ? 'Sending...' : 'Resend'}</button>
+            <button type="button" onClick={() => { void save(); }} disabled={saving || !!sendingId || !!deletingId}>{saving ? 'Saving...' : 'Save'}</button>
+            <button type="button" className="danger" onClick={() => removePush(item.id)} disabled={saving || !!sendingId || !!deletingId}>{deletingId === item.id ? 'Deleting...' : 'Delete'}</button>
+            <span>{item.resendCount || 0}</span>
+            <button type="button" onClick={() => sendNow(item)} disabled={saving || !!deletingId || !!sendingId}>{sendingId === item.id ? 'Sending...' : 'Send'}</button>
+          </div>
+        ))}
       </div>
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
       <div className="inline-form"><button type="button" className="ghost" onClick={load} disabled={saving || adding || !!sendingId || !!deletingId}>Load</button><button type="button" onClick={() => { void save(); }} disabled={saving || adding || !!sendingId || !!deletingId}>{saving ? 'Saving...' : 'Save Push Settings'}</button></div>
@@ -459,6 +677,10 @@ export function SubmitApplicationContentTabImpl({ apiClient }: { apiClient: ApiC
       pushToast('error', err?.response?.data?.error || 'Failed to load submit application content');
     }
   }
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   async function save() {
     try {
       setSaving(true);
@@ -545,6 +767,10 @@ export function InstructionContentTabImpl({ apiClient }: { apiClient: ApiClient 
       pushToast('error', err?.response?.data?.error || 'Failed to load instruction content');
     }
   }
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   async function save() {
     try {
       setSaving(true);
@@ -680,6 +906,84 @@ export function InstructionContentTabImpl({ apiClient }: { apiClient: ApiClient 
         </>
       )}
       <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button><button type="button" onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button></div>
+    </section>
+  );
+}
+
+export function ShareContentTabImpl({ apiClient }: { apiClient: ApiClient }) {
+  const { pushToast } = useAdminToast();
+  const [settings, setSettings] = useState<ShareContentSettings>({
+    title: 'Share',
+    body: 'Check out MockTestApp for practice tests and alerts.\n{storeUrl}',
+  });
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    try {
+      const res = await apiClient.get('/admin/settings');
+      const s = res.data?.settings?.shareContent || {};
+      setSettings({
+        title: String(s.title || 'Share').trim().slice(0, 120) || 'Share',
+        body:
+          String(s.body || '').trim() ||
+          'Check out MockTestApp for practice tests and alerts.\n{storeUrl}',
+      });
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to load share text');
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function save() {
+    try {
+      const body = String(settings.body || '').trim();
+      if (!body) {
+        pushToast('error', 'Share text is required.');
+        return;
+      }
+      setSaving(true);
+      await apiClient.patch('/admin/settings', {
+        shareContent: {
+          title: String(settings.title || 'Share').trim() || 'Share',
+          body,
+        },
+      });
+      pushToast('success', 'Share text saved.');
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to save share text');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="panel-card">
+      <div className="panel-head"><h3>Share Text</h3></div>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Is text ko app ke Share action me use kiya jayega. <b>{'{storeUrl}'}</b> placeholder auto Play Store link se replace hoga.
+      </p>
+      <div className="settings-form">
+        <input
+          value={settings.title}
+          onChange={(e) => setSettings((p) => ({ ...p, title: e.target.value }))}
+          placeholder="Title (optional)"
+          maxLength={120}
+        />
+      </div>
+      <textarea
+        value={settings.body}
+        onChange={(e) => setSettings((p) => ({ ...p, body: e.target.value }))}
+        placeholder="Share text"
+        rows={8}
+      />
+      <div className="inline-form">
+        <button type="button" className="ghost" onClick={load} disabled={saving}>Load</button>
+        <button type="button" onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save Share Text'}</button>
+      </div>
     </section>
   );
 }

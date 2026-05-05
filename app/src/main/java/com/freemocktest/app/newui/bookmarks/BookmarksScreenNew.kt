@@ -41,6 +41,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -50,6 +51,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,17 +66,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlin.math.abs
 
 private const val PdfToolTabName = "PDF Tools"
+private const val CalculatorTabName = "Calculator"
 private const val PdfToolUrl = "https://mypdffile.onrender.com/"
 
 @Composable
 fun BookmarksScreenNew(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
+    onOpenProfile: () -> Unit,
 ) {
     val context = LocalContext.current
     val p = mockTestPalette()
@@ -82,6 +87,9 @@ fun BookmarksScreenNew(
     val tabs = remember {
         listOf("Calculator", "Image Compress", "PDF Tools", "Unit Converter")
     }
+    val profile by AppPreferencesRepository.editableProfile.collectAsState(
+        initial = AppPreferencesRepository.EditableProfileState("", "", "", "", ""),
+    )
     var selectedTab by remember { mutableStateOf(tabs.first()) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var showPdfHeader by remember { mutableStateOf(true) }
@@ -107,7 +115,11 @@ fun BookmarksScreenNew(
                 exit = shrinkVertically() + fadeOut(),
             ) {
                 Column {
-                    TopBar(onBack = onBack, title = "Tool")
+                    TopBar(
+                        onBack = onBack,
+                        title = "Tool",
+                        onOpenProfile = onOpenProfile,
+                    )
                     Spacer(Modifier.height(14.dp))
                     ToolTabRow(
                         tabs = tabs,
@@ -131,6 +143,13 @@ fun BookmarksScreenNew(
                         showPdfHeader = showOnUp
                     },
                 )
+            } else if (selectedTab == CalculatorTabName) {
+                CalculatorToolSection(
+                    profileBirthdayIso = profile.birthdayDate,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                )
             } else {
                 ToolComingSoonCard(toolName = selectedTab)
             }
@@ -142,8 +161,10 @@ fun BookmarksScreenNew(
 private fun TopBar(
     onBack: () -> Unit,
     title: String,
+    onOpenProfile: () -> Unit,
 ) {
     val p = mockTestPalette()
+    val profileShape = RoundedCornerShape(10.dp)
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -161,7 +182,29 @@ private fun TopBar(
             color = p.textPrimary,
             fontSize = 18.sp,
             fontWeight = FontWeight.ExtraBold,
+            modifier = Modifier.weight(1f),
         )
+        Row(
+            modifier = Modifier
+                .clip(profileShape)
+                .clickable(onClick = onOpenProfile)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Person,
+                contentDescription = "Open profile",
+                tint = p.accent,
+                modifier = Modifier.size(20.dp),
+            )
+            Text(
+                text = "Profile",
+                color = p.accent,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
     }
 }
 

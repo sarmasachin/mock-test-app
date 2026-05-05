@@ -71,6 +71,7 @@ const SETTINGS_KEYS = [
   'reportIssueInbox',
   'helpSupportContent',
   'achievementContent',
+  'shareContent',
   'privacyPolicyContent',
   'termsOfUseContent',
   'testAdvancedConfigs',
@@ -1803,6 +1804,8 @@ router.patch('/settings', async (req, res) => {
     body.helpSupportContent === undefined ? null : normalizeSimpleContent(body.helpSupportContent, 'Help and Support');
   const normalizedAchievementContent =
     body.achievementContent === undefined ? null : normalizeSimpleContent(body.achievementContent, 'Achievement');
+  const normalizedShareContent =
+    body.shareContent === undefined ? null : normalizeSimpleContent(body.shareContent, 'Share');
   const normalizedPrivacyPolicyContent =
     body.privacyPolicyContent === undefined ? null : normalizeSimpleContent(body.privacyPolicyContent, 'Privacy Policy');
   const normalizedTermsOfUseContent =
@@ -1830,6 +1833,7 @@ router.patch('/settings', async (req, res) => {
     normalizedReportIssueInbox === null &&
     normalizedHelpSupportContent === null &&
     normalizedAchievementContent === null &&
+    normalizedShareContent === null &&
     normalizedPrivacyPolicyContent === null &&
     normalizedTermsOfUseContent === null
   ) {
@@ -1945,6 +1949,15 @@ router.patch('/settings', async (req, res) => {
            ON CONFLICT (setting_key)
            DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
           [JSON.stringify(normalizedInstructionContent.value), req.userId],
+        );
+      }
+      if (normalizedShareContent !== null) {
+        await client.query(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+           VALUES ('shareContent', $1, $2::uuid)
+           ON CONFLICT (setting_key)
+           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [JSON.stringify(normalizedShareContent.value), req.userId],
         );
       }
       if (normalizedExamCategories !== null) {
@@ -2095,11 +2108,12 @@ router.patch('/settings', async (req, res) => {
       reportIssueInboxUpdated: normalizedReportIssueInbox !== null,
       helpSupportContentUpdated: normalizedHelpSupportContent !== null,
       achievementContentUpdated: normalizedAchievementContent !== null,
+      shareContentUpdated: normalizedShareContent !== null,
       privacyPolicyContentUpdated: normalizedPrivacyPolicyContent !== null,
       termsOfUseContentUpdated: normalizedTermsOfUseContent !== null,
     });
     if (isMailConfigured()) {
-      const notifyStatusUpdate = async (beforePayload, afterPayload) => {
+      const notifyStatusUpdate = async (beforePayload, afterPayload, eventKeyOverride) => {
         const beforeItems = Array.isArray(beforePayload?.items) ? beforePayload.items : [];
         const afterItems = Array.isArray(afterPayload?.items) ? afterPayload.items : [];
         const beforeMap = new Map(beforeItems.map((x) => [String(x.id || ''), String(x.status || 'new')]));
@@ -2115,6 +2129,7 @@ router.patch('/settings', async (req, res) => {
               status: 'in_progress',
               subject: String(item.subject || 'Support Request'),
               message: 'Your request is now in progress. Our team is actively working on it, and we expect the next update within 24-48 hours.',
+              eventKeyOverride,
             }).catch((mailErr) => {
               console.error('support_in_progress_email_failed', id, mailErr && (mailErr.message || mailErr));
             });
@@ -2125,6 +2140,7 @@ router.patch('/settings', async (req, res) => {
               status: 'resolved',
               subject: String(item.subject || 'Support Request'),
               message: 'Your request has been marked resolved. If anything is still pending, reply with details.',
+              eventKeyOverride,
             }).catch((mailErr) => {
               console.error('support_resolved_email_failed', id, mailErr && (mailErr.message || mailErr));
             });
@@ -2132,13 +2148,13 @@ router.patch('/settings', async (req, res) => {
         }
       };
       if (normalizedFeedbackInbox !== null) {
-        await notifyStatusUpdate(previousFeedbackInbox, normalizedFeedbackInbox.value);
+        await notifyStatusUpdate(previousFeedbackInbox, normalizedFeedbackInbox.value, 'feedback_ack');
       }
       if (normalizedHelpSupportInbox !== null) {
-        await notifyStatusUpdate(previousHelpSupportInbox, normalizedHelpSupportInbox.value);
+        await notifyStatusUpdate(previousHelpSupportInbox, normalizedHelpSupportInbox.value, 'help_support_ack');
       }
       if (normalizedReportIssueInbox !== null) {
-        await notifyStatusUpdate(previousReportIssueInbox, normalizedReportIssueInbox.value);
+        await notifyStatusUpdate(previousReportIssueInbox, normalizedReportIssueInbox.value, 'issue_report_ack');
       }
     }
     if (normalizedDailyQuizSettings !== null) {
@@ -2959,8 +2975,33 @@ router.post('/articles', async (req, res) => {
       error: `feedKind is invalid or headline is missing. ${FEED_KIND_INVALID_HINT}`,
     });
   }
+  const summary = String(body.summary || '');
+  const category = String(body.category || '');
+  const articleBody = String(body.body || '');
+  const linkUrl = String(body.linkUrl || '');
   const featureImageUrl = String(body.featureImageUrl || '').trim() || null;
+  const isPublished = body.isPublished !== false;
   try {
+    // Guard against accidental double-submit of the exact same article payload.
+    const duplicate = await pool.query(
+      `SELECT id, feed_kind, headline, summary, category, body, link_url, feature_image_url, published_at, is_published
+       FROM news_articles
+       WHERE feed_kind = $1
+         AND headline = $2
+         AND summary = $3
+         AND category = $4
+         AND body = $5
+         AND link_url = $6
+         AND COALESCE(feature_image_url, '') = COALESCE($7, '')
+         AND is_published = $8
+         AND published_at >= (now() - interval '10 minutes')
+       ORDER BY published_at DESC
+       LIMIT 1`,
+      [feedKind, headline, summary, category, articleBody, linkUrl, featureImageUrl, isPublished],
+    );
+    if (duplicate.rows[0]) {
+      return res.status(200).json({ item: duplicate.rows[0], duplicate: true });
+    }
     const { rows } = await pool.query(
       `INSERT INTO news_articles (
          feed_kind, headline, summary, category, body, link_url, feature_image_url, published_at, is_published
@@ -2969,15 +3010,15 @@ router.post('/articles', async (req, res) => {
       [
         feedKind,
         headline,
-        String(body.summary || ''),
-        String(body.category || ''),
-        String(body.body || ''),
-        String(body.linkUrl || ''),
+        summary,
+        category,
+        articleBody,
+        linkUrl,
         featureImageUrl,
-        body.isPublished !== false,
+        isPublished,
       ],
     );
-    if (body.isPublished !== false) {
+    if (isPublished) {
       const announcementOn = (await getSettingsMap()).jobExamArticleAnnouncementEmail === true;
       await enqueueNotification(req.userId, {
         title: 'New Update',
@@ -2991,8 +3032,8 @@ router.post('/articles', async (req, res) => {
           await sendContentAnnouncementEmails({
             kind,
             title: headline,
-            message: String(body.summary || body.category || 'A new update is now available for you.'),
-            ctaUrl: String(body.linkUrl || process.env.MAIL_APP_URL || '').trim(),
+            message: String(summary || category || 'A new update is now available for you.'),
+            ctaUrl: String(linkUrl || process.env.MAIL_APP_URL || '').trim(),
             ctaLabel: kind === 'job' ? 'View Job Alert' : 'View Exam Alert',
           });
         }

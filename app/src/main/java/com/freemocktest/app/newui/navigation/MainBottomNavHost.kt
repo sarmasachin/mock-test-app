@@ -27,6 +27,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.ui.graphics.vector.ImageVector
 import android.widget.Toast
 import androidx.compose.ui.text.font.FontWeight
@@ -242,7 +244,8 @@ fun MainBottomNavHost(
                 } == true ||
                 currentDestination?.route == RoutesNew.ACHIEVEMENTS ||
                 currentDestination?.route == RoutesNew.PRIVACY ||
-                currentDestination?.route == RoutesNew.TERMS
+                currentDestination?.route == RoutesNew.TERMS ||
+                currentDestination?.route == RoutesNew.BOOKMARKS
             if (showBottomBar) {
                 NavigationBar(
                     containerColor = p.tabBarContainer,
@@ -302,6 +305,12 @@ fun MainBottomNavHost(
                 .fillMaxSize()
                 .background(p.surface)
                 .padding(innerPadding),
+            // Default cross-fade briefly shows the activity window (near-white in light theme) between
+            // destinations — especially noticeable after closing the drawer then navigating.
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
         ) {
             composable(MainTabRoutes.Home) {
                 HomeRouteNew(
@@ -378,7 +387,6 @@ fun MainBottomNavHost(
                 )
             }
             composable(MainTabRoutes.Tests) {
-                BackHandler { mainNavController.goToHomeTab() }
                 SeeAllCategoriesScreenNew(
                     showAppBarBack = false,
                     onBack = { mainNavController.goToHomeTab() },
@@ -649,6 +657,7 @@ fun MainBottomNavHost(
             composable(RoutesNew.BOOKMARKS) {
                 BookmarksScreenNew(
                     onBack = { mainNavController.popBackOrHome() },
+                    onOpenProfile = { mainNavController.navigateMainTab(MainTabRoutes.Profile) },
                 )
             }
 
@@ -774,8 +783,8 @@ fun MainBottomNavHost(
                 val title = entry.arguments?.getString("title").orEmpty()
                 ApplyForTestScreenNew(
                     title = title,
-                    onBack = { mainNavController.popBackOrHome() },
-                    onSubmit = { mainNavController.popBackOrHome() },
+                    onBack = { mainNavController.popBackStack() },
+                    onSubmit = { mainNavController.popBackStack() },
                 )
             }
         }

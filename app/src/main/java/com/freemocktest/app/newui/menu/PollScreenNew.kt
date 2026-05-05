@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -47,6 +48,37 @@ import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.launch
+
+private val PollOptionFillPalette: List<Color> = listOf(
+    Color(0xFF2563EB),
+    Color(0xFF7C3AED),
+    Color(0xFF059669),
+    Color(0xFFD97706),
+    Color(0xFFDC2626),
+    Color(0xFF0891B2),
+    Color(0xFFDB2777),
+    Color(0xFF4F46E5),
+)
+
+private fun pollOptionFillColor(optionIndex: Int): Color =
+    PollOptionFillPalette[optionIndex % PollOptionFillPalette.size]
+
+/** Original option indices, sorted by vote count (desc) when totals exist — API indexes unchanged. */
+private fun pollSortedOptionIndices(
+    optionCount: Int,
+    normalizedCounts: List<Int>,
+    countsLoaded: Boolean,
+): List<Int> {
+    if (optionCount <= 0) return emptyList()
+    val indices = (0 until optionCount).toList()
+    if (!countsLoaded) return indices
+    val total = normalizedCounts.sum()
+    if (total <= 0) return indices
+    return indices.sortedWith(
+        compareByDescending<Int> { normalizedCounts.getOrElse(it) { 0 } }
+            .thenBy { it },
+    )
+}
 
 @Composable
 fun PollScreenNew(
@@ -189,81 +221,70 @@ fun PollScreenNew(
                     Column {
                         Text(active.question, color = p.textPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(12.dp))
-                        active.options.forEachIndexed { idx, option ->
+                        val countsLoaded = resultCounts.isNotEmpty()
+                        val displayIndices =
+                            pollSortedOptionIndices(active.options.size, normalizedCounts, countsLoaded)
+                        for (idx in displayIndices) {
+                            val option = active.options[idx]
                             val checked = currentVotes.contains(idx)
                             val optionVotes = normalizedCounts.getOrElse(idx) { 0 }
                             val optionRatio = if (totalVotes > 0) optionVotes.toFloat() / totalVotes.toFloat() else 0f
                             val optionPercent = (optionRatio * 100f).toInt()
-                            Row(
+                            val fillColor = pollOptionFillColor(idx)
+                            val borderW = if (checked && !hasSubmitted) 2.dp else 1.dp
+                            val borderC =
+                                when {
+                                    checked && !hasSubmitted -> p.systemBlue
+                                    checked && hasSubmitted -> Color(0xFF22C55E).copy(alpha = 0.75f)
+                                    else -> p.border.copy(alpha = 0.2f)
+                                }
+                            Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .height(52.dp)
                                     .clip(RoundedCornerShape(14.dp))
-                                    .background(if (checked) p.systemBlue.copy(alpha = 0.16f) else p.surfaceElevated.copy(alpha = 0.55f))
-                                    .border(
-                                        1.dp,
-                                        if (checked) p.systemBlue.copy(alpha = 0.45f) else p.border.copy(alpha = 0.2f),
-                                        RoundedCornerShape(14.dp),
-                                    )
+                                    .border(borderW, borderC, RoundedCornerShape(14.dp))
                                     .clickable(enabled = !hasSubmitted) {
                                         voted[active.id] = if (active.allowMultiple) {
                                             if (checked) currentVotes - idx else currentVotes + idx
                                         } else {
                                             setOf(idx)
                                         }
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                                    },
                             ) {
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(18.dp)
-                                                .clip(RoundedCornerShape(9.dp))
-                                                .background(if (checked) p.systemBlue else p.surface)
-                                                .border(1.dp, p.border.copy(alpha = 0.3f), RoundedCornerShape(9.dp)),
-                                            contentAlignment = Alignment.Center,
-                                        ) {
-                                            if (checked) {
-                                                Text("✓", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                            }
-                                        }
-                                        Spacer(Modifier.size(10.dp))
-                                        Text(
-                                            option,
-                                            color = p.textPrimary,
-                                            fontSize = 15.sp,
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                        if (resultCounts.isNotEmpty()) {
-                                            Text(
-                                                "$optionPercent% • $optionVotes",
-                                                color = p.textSecondary,
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                            )
-                                        }
-                                    }
+                                Box(
+                                    Modifier
+                                        .fillMaxSize()
+                                        .background(p.surfaceElevated.copy(alpha = 0.55f)),
+                                )
+                                if (totalVotes > 0) {
+                                    Box(
+                                        Modifier
+                                            .fillMaxHeight()
+                                            .fillMaxWidth(optionRatio.coerceIn(0f, 1f))
+                                            .align(Alignment.CenterStart)
+                                            .background(fillColor.copy(alpha = 0.34f)),
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        option,
+                                        color = p.textPrimary,
+                                        fontSize = 15.sp,
+                                        modifier = Modifier.weight(1f),
+                                    )
                                     if (resultCounts.isNotEmpty()) {
-                                        Spacer(Modifier.height(8.dp))
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(8.dp)
-                                                .clip(RoundedCornerShape(999.dp))
-                                                .background(p.border.copy(alpha = 0.35f)),
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxWidth(optionRatio.coerceIn(0f, 1f))
-                                                    .height(8.dp)
-                                                    .clip(RoundedCornerShape(999.dp))
-                                                    .background(if (checked) p.systemBlue else p.systemBlue.copy(alpha = 0.65f)),
-                                            )
-                                        }
+                                        Text(
+                                            "$optionPercent% • $optionVotes",
+                                            color = p.textSecondary,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
                                     }
                                 }
                             }

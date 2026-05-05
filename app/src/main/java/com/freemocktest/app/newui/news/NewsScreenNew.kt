@@ -1,5 +1,8 @@
 package com.freemocktest.app.newui.news
 
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.LevelListDrawable
+import android.text.Html
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -44,7 +47,9 @@ import android.widget.TextView
 import android.text.method.LinkMovementMethod
 import androidx.core.text.HtmlCompat
 import coil.compose.AsyncImage
+import coil.imageLoader
 import coil.request.ImageRequest
+import coil.target.Target
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 
@@ -60,7 +65,7 @@ fun NewsScreenNew(
     var newsMenuCategories by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedCategory by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
-        articles = ContentRepository.loadNewsFeed("news")
+        articles = ContentRepository.loadNewsFeed("all")
         newsMenuCategories = ContentRepository.loadHomeContent()
             ?.newsCategoryMenu
             ?.filter { it.isNotBlank() }
@@ -187,6 +192,8 @@ fun NewsArticleDetailScreen(
                     tv.text = HtmlCompat.fromHtml(
                         item.body.ifBlank { " " },
                         HtmlCompat.FROM_HTML_MODE_COMPACT,
+                        CoilTextViewImageGetter(tv),
+                        null,
                     )
                     tv.setTextColor(p.textPrimary.toArgb())
                     tv.setLinkTextColor(p.accent.toArgb())
@@ -194,6 +201,47 @@ fun NewsArticleDetailScreen(
             )
             Spacer(Modifier.height(32.dp))
         }
+    }
+}
+
+private class CoilTextViewImageGetter(
+    private val textView: TextView,
+) : Html.ImageGetter {
+    override fun getDrawable(source: String?): Drawable {
+        val placeholder = LevelListDrawable().apply {
+            // Keep temporary 1x1 bounds so layout can proceed before image load.
+            setBounds(0, 0, 1, 1)
+        }
+        val url = source?.trim().orEmpty()
+        if (url.isBlank()) return placeholder
+        val request = ImageRequest.Builder(textView.context)
+            .data(url)
+            .target(
+                object : Target {
+                    override fun onSuccess(result: Drawable) {
+                        val intrinsicWidth = result.intrinsicWidth.coerceAtLeast(1)
+                        val intrinsicHeight = result.intrinsicHeight.coerceAtLeast(1)
+                        val maxWidth = (textView.width - textView.paddingLeft - textView.paddingRight).coerceAtLeast(1)
+                        val finalWidth = if (maxWidth > 1) maxWidth else intrinsicWidth
+                        val finalHeight = (intrinsicHeight * (finalWidth.toFloat() / intrinsicWidth.toFloat()))
+                            .toInt()
+                            .coerceAtLeast(1)
+                        result.setBounds(0, 0, finalWidth, finalHeight)
+                        placeholder.addLevel(1, 1, result)
+                        placeholder.setBounds(0, 0, finalWidth, finalHeight)
+                        placeholder.level = 1
+                        // Re-assigning text forces TextView to redraw updated image spans.
+                        textView.text = textView.text
+                    }
+
+                    override fun onError(error: Drawable?) {
+                        placeholder.level = 0
+                    }
+                },
+            )
+            .build()
+        textView.context.imageLoader.enqueue(request)
+        return placeholder
     }
 }
 

@@ -164,6 +164,10 @@ object ContentRepository {
         val deepLink: String?,
         val createdAt: String?,
     )
+    data class ShareContentRemote(
+        val title: String?,
+        val body: String?,
+    )
     data class LeaderboardItemRemote(
         val rank: Int,
         val userId: String,
@@ -594,6 +598,21 @@ object ContentRepository {
         }
     }
 
+    suspend fun loadShareContent(): ShareContentRemote? = withContext(Dispatchers.IO) {
+        try {
+            val content = RetrofitProvider.publicApi.getHomeContent().shareContent ?: return@withContext null
+            val body = content.body?.trim().orEmpty()
+            if (body.isBlank()) return@withContext null
+            ShareContentRemote(
+                title = content.title?.trim(),
+                body = body,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "loadShareContent", e)
+            null
+        }
+    }
+
     suspend fun loadLeaderboardFilters(): LeaderboardFiltersRemote = withContext(Dispatchers.IO) {
         try {
             val data = RetrofitProvider.publicApi.getLeaderboardFilters()
@@ -699,6 +718,7 @@ object ContentRepository {
     private fun manualFallback(kind: String): List<ManualNewsItem> = when (kind) {
         "job" -> ManualJobAlertContent.items
         "exam" -> ManualExamAlertContent.items
+        "all" -> ManualNewsContent.items + ManualJobAlertContent.items + ManualExamAlertContent.items
         else -> ManualNewsContent.items
     }
 

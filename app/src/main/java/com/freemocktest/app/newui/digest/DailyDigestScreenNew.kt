@@ -1,5 +1,8 @@
 package com.freemocktest.app.newui.digest
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -60,6 +63,32 @@ import com.freemocktest.app.data.ContentRepository
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
+import java.util.Locale
+
+private fun playStoreLink(context: Context): String {
+    val pkg = context.packageName
+    return "https://play.google.com/store/apps/details?id=$pkg"
+}
+
+private fun truncateForShare(text: String, maxLen: Int = 220): String {
+    val t = text.trim()
+    if (t.length <= maxLen) return t
+    return t.take(maxLen - 1).trimEnd() + "…"
+}
+
+private fun sharePlainText(context: Context, subject: String, body: String, chooserTitle: String) {
+    try {
+        val send =
+            Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, subject)
+                putExtra(Intent.EXTRA_TEXT, body)
+            }
+        context.startActivity(Intent.createChooser(send, chooserTitle))
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(context, "No app available to share.", Toast.LENGTH_SHORT).show()
+    }
+}
 
 @Composable
 fun DailyDigestScreenNew(
@@ -118,6 +147,22 @@ fun DailyDigestScreenNew(
             isTakeTestEnabled = !quizLoading && quizItem != null,
             quizStatusMessage = quizStatusMessage,
             onBack = onBack,
+            onShare = {
+                val dateStr = selectedDate.format(DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.US))
+                val prompt = truncateForShare(quizItem?.questionPrompt.orEmpty())
+                val body =
+                    buildString {
+                        appendLine("Try the Daily Quiz on Mock Test App!")
+                        appendLine("Date: $dateStr")
+                        if (prompt.isNotBlank()) {
+                            appendLine()
+                            appendLine(prompt)
+                        }
+                        appendLine()
+                        appendLine("Download: ${playStoreLink(context)}")
+                    }
+                sharePlainText(context, "Daily Quiz — Mock Test App", body, "Share Daily Quiz")
+            },
             onSelectDate = { selectedDate = it },
             onTakeTest = {
                 if (quizItem == null) {
@@ -152,6 +197,7 @@ fun DailyDigestScreenNew(
     } else {
         DailyQuizResultScreen(
             modifier = modifier,
+            quizShareDay = selectedDate,
             question = quizItem,
             selectedOptionIndex = submittedOptionIndex,
             scoreVisible = scoreVisible,
@@ -361,6 +407,7 @@ private fun DailyQuizDatePickerScreen(
     isTakeTestEnabled: Boolean,
     quizStatusMessage: String?,
     onBack: () -> Unit,
+    onShare: () -> Unit,
     onSelectDate: (LocalDate) -> Unit,
     onTakeTest: () -> Unit,
     onRetryLoad: () -> Unit,
@@ -397,7 +444,7 @@ private fun DailyQuizDatePickerScreen(
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = { }) {
+                IconButton(onClick = onShare) {
                     Icon(Icons.Rounded.Share, contentDescription = "Share", tint = Color(0xFF3D3D3D))
                 }
             }
@@ -572,6 +619,7 @@ private fun LegendRow(label: String, color: Color) {
 @Composable
 private fun DailyQuizResultScreen(
     modifier: Modifier,
+    quizShareDay: LocalDate,
     question: ContentRepository.DailyQuizRemote?,
     selectedOptionIndex: Int?,
     scoreVisible: Boolean,
@@ -583,6 +631,7 @@ private fun DailyQuizResultScreen(
     onReAttempt: () -> Unit,
     onSolution: () -> Unit,
 ) {
+    val context = LocalContext.current
     val correctIndex = question?.correctIndex ?: -1
     val isAnswered = selectedOptionIndex != null
     val isCorrect = isAnswered && selectedOptionIndex == correctIndex
@@ -646,7 +695,31 @@ private fun DailyQuizResultScreen(
                 ) {
                     Text("WA", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                 }
-                IconButton(onClick = { }) {
+                IconButton(
+                    onClick = {
+                        val dateStr = quizShareDay.format(DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.US))
+                        val prompt = truncateForShare(question?.questionPrompt.orEmpty())
+                        val body =
+                            buildString {
+                                appendLine("My Daily Quiz result — Mock Test App")
+                                appendLine("Date: $dateStr")
+                                if (prompt.isNotBlank()) {
+                                    appendLine()
+                                    appendLine(prompt)
+                                }
+                                appendLine()
+                                if (scoreVisible) {
+                                    appendLine("Score: $correctCount / $totalQuestions · Time: ${minutes}m ${seconds}s")
+                                    appendLine("Correct: $correctCount · Wrong: $wrongCount · Skipped: $skippedCount")
+                                } else {
+                                    appendLine("Completed the quiz (score hidden in app settings).")
+                                }
+                                appendLine()
+                                appendLine("Download: ${playStoreLink(context)}")
+                            }
+                        sharePlainText(context, "Daily Quiz result — Mock Test App", body, "Share result")
+                    },
+                ) {
                     Icon(Icons.Rounded.Share, contentDescription = "Share", tint = Color(0xFF555555))
                 }
             }

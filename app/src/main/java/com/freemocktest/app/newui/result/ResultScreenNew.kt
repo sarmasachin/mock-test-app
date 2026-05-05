@@ -327,7 +327,7 @@ fun ResultScreenNew(
                             try {
                                 val now = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a").format(LocalDateTime.now())
                                 val userName = profile.displayName.ifBlank { "Guest User" }
-                                val userId = profile.userIdFormatted ?: "00000000"
+                                val userId = profile.userIdFormatted ?: "000000"
                                 val cardBitmap = createResultShareCardBitmap(
                                     userName = userName,
                                     userId = userId,

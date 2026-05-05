@@ -96,7 +96,10 @@ fun ContinueWithGoogleSection(
                     return@OutlinedButton
                 }
                 onPickingAccountChange(true)
-                launcher.launch(signInClient.signInIntent)
+                // Clear cached default account so the system account picker opens (not silent re-auth).
+                signInClient.signOut().addOnCompleteListener {
+                    launcher.launch(signInClient.signInIntent)
+                }
             },
             enabled = enabled && !pickingAccount,
             modifier = Modifier.fillMaxWidth(),

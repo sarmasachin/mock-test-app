@@ -97,6 +97,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import com.freemocktest.app.BuildConfig
 import com.freemocktest.app.MockTestApp
 import com.freemocktest.app.data.AppPreferencesRepository
@@ -234,6 +235,7 @@ fun HomeScreenNew(
     }
     var homeWelcomeTemplate by remember { mutableStateOf("Welcome {name}") }
     var homeQuickActionsTitle by remember { mutableStateOf("Quick actions") }
+    var shareAppTemplate by remember { mutableStateOf("Check out MockTestApp for practice tests and alerts.\n{storeUrl}") }
     var quickActionSections by remember {
         mutableStateOf(
             defaultHomeQuickActionSections,
@@ -391,6 +393,13 @@ fun HomeScreenNew(
         bannerSlides = mixedSlides
     }
     LaunchedEffect(Unit) {
+        val share = ContentRepository.loadShareContent() ?: return@LaunchedEffect
+        val text = share.body?.trim().orEmpty()
+        if (text.isNotBlank()) {
+            shareAppTemplate = text
+        }
+    }
+    LaunchedEffect(Unit) {
         val pollSettings = ContentRepository.loadPollModalSettings()
         homePollPopupEnabled = pollSettings.showHomePopup
         val activePoll = pollSettings.items.firstOrNull()
@@ -481,7 +490,10 @@ fun HomeScreenNew(
                             drawerState.close()
                             val packageName = context.packageName
                             val storeUrl = "https://play.google.com/store/apps/details?id=$packageName"
-                            val shareMessage = "Check out MockTestApp for practice tests and alerts.\n$storeUrl"
+                            val shareMessage = resolveShareAppMessage(
+                                template = shareAppTemplate,
+                                storeUrl = storeUrl,
+                            )
                             try {
                                 val send = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
@@ -1019,6 +1031,36 @@ private fun PendingResultCard(
     }
 }
 
+private val HomePollOptionFillPalette: List<Color> = listOf(
+    Color(0xFF2563EB),
+    Color(0xFF7C3AED),
+    Color(0xFF059669),
+    Color(0xFFD97706),
+    Color(0xFFDC2626),
+    Color(0xFF0891B2),
+    Color(0xFFDB2777),
+    Color(0xFF4F46E5),
+)
+
+private fun homePollOptionFillColor(optionIndex: Int): Color =
+    HomePollOptionFillPalette[optionIndex % HomePollOptionFillPalette.size]
+
+private fun homePollSortedOptionIndices(
+    optionCount: Int,
+    normalizedCounts: List<Int>,
+    countsLoaded: Boolean,
+): List<Int> {
+    if (optionCount <= 0) return emptyList()
+    val indices = (0 until optionCount).toList()
+    if (!countsLoaded) return indices
+    val total = normalizedCounts.sum()
+    if (total <= 0) return indices
+    return indices.sortedWith(
+        compareByDescending<Int> { normalizedCounts.getOrElse(it) { 0 } }
+            .thenBy { it },
+    )
+}
+
 @Composable
 private fun HomePollPopupModal(
     poll: ContentRepository.PollItemRemote,
@@ -1083,63 +1125,65 @@ private fun HomePollPopupModal(
                     fontSize = 15.sp,
                 )
                 Spacer(Modifier.height(12.dp))
-                poll.options.forEachIndexed { idx, option ->
+                val countsLoaded = counts.isNotEmpty()
+                val displayIndices =
+                    homePollSortedOptionIndices(poll.options.size, normalizedCounts, countsLoaded)
+                for (idx in displayIndices) {
+                    val option = poll.options[idx]
                     val checked = selectedIndexes.contains(idx)
                     val votes = normalizedCounts.getOrElse(idx) { 0 }
                     val ratio = if (totalVotes > 0) votes.toFloat() / totalVotes.toFloat() else 0f
                     val pct = (ratio * 100f).toInt()
-                    Column(
+                    val fillColor = homePollOptionFillColor(idx)
+                    val borderW = if (checked && !hasSubmitted) 2.dp else 1.dp
+                    val borderC =
+                        when {
+                            checked && !hasSubmitted -> p.systemBlue
+                            checked && hasSubmitted -> Color(0xFF22C55E).copy(alpha = 0.75f)
+                            else -> p.border.copy(alpha = 0.22f)
+                        }
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .height(50.dp)
                             .clip(RoundedCornerShape(14.dp))
-                            .background(if (checked) p.systemBlue.copy(alpha = 0.14f) else p.surface)
-                            .border(1.dp, p.border.copy(alpha = 0.22f), RoundedCornerShape(14.dp))
+                            .border(borderW, borderC, RoundedCornerShape(14.dp))
                             .clickable(enabled = !hasSubmitted) {
                                 onSelectOption(poll.id, idx, poll.allowMultiple)
-                            }
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                            },
                     ) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(Color(0xFFF8FAFC)),
+                        )
+                        if (totalVotes > 0) {
+                            Box(
+                                Modifier
+                                    .fillMaxHeight()
+                                    .fillMaxWidth(ratio.coerceIn(0f, 1f))
+                                    .align(Alignment.CenterStart)
+                                    .background(fillColor.copy(alpha = 0.34f)),
+                            )
+                        }
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(16.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (checked) p.systemBlue else p.surfaceElevated),
-                            )
-                            Spacer(Modifier.width(9.dp))
                             Text(
                                 text = option,
-                                color = p.textPrimary,
+                                color = Color(0xFF0F172A),
                                 fontSize = 14.sp,
                                 modifier = Modifier.weight(1f),
                             )
                             if (counts.isNotEmpty()) {
                                 Text(
                                     text = "$pct% • $votes",
-                                    color = p.textSecondary,
+                                    color = Color(0xFF64748B),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                )
-                            }
-                        }
-                        if (counts.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(7.dp)
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(p.border.copy(alpha = 0.35f)),
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth(ratio.coerceIn(0f, 1f))
-                                        .height(7.dp)
-                                        .clip(RoundedCornerShape(999.dp))
-                                        .background(if (checked) p.systemBlue else p.systemBlue.copy(alpha = 0.65f)),
                                 )
                             }
                         }
@@ -1212,7 +1256,10 @@ private fun ShareAppDialog(
         "https://play.google.com/store/apps/details?id=$packageName"
     }
     val shareMessage = remember(storeUrl) {
-        "Check out MockTestApp for practice tests and alerts.\n$storeUrl"
+        resolveShareAppMessage(
+            template = "Check out MockTestApp for practice tests and alerts.\n{storeUrl}",
+            storeUrl = storeUrl,
+        )
     }
 
     AlertDialog(
@@ -1269,6 +1316,13 @@ private fun ShareAppDialog(
             }
         },
     )
+}
+
+private fun resolveShareAppMessage(template: String, storeUrl: String): String {
+    val raw = template.trim()
+    if (raw.isBlank()) return "Check out MockTestApp for practice tests and alerts.\n$storeUrl"
+    val withLink = if (raw.contains("{storeUrl}")) raw.replace("{storeUrl}", storeUrl) else "$raw\n$storeUrl"
+    return withLink.trim()
 }
 
 @Composable
@@ -1705,6 +1759,14 @@ private fun AppDrawer(
     val context = LocalContext.current
     val p = mockTestPalette()
     var showLogoutConfirm by remember { mutableStateOf(false) }
+    /** Close drawer, yield one frame (lets the sheet finish composing away), then navigate — reduces white flashes. */
+    fun postDrawerNavigation(navigate: () -> Unit) {
+        scope.launch {
+            runCatching { drawerState.close() }
+            yield()
+            navigate()
+        }
+    }
     // Keep drawer distinct from the page background to avoid a "white blank screen" feel.
     val sheetBg = p.surfaceElevated
     val border = p.border.copy(alpha = 0.22f)
@@ -1734,92 +1796,47 @@ private fun AppDrawer(
                 DrawerItem(
                     icon = Icons.Outlined.Person,
                     label = "Profile",
-                    onClick = {
-                        scope.launch {
-                            drawerState.close()
-                            onOpenProfile()
-                        }
-                    },
+                    onClick = { postDrawerNavigation { onOpenProfile() } },
                 )
                 DrawerItem(
                     icon = Icons.Outlined.History,
                     label = "History",
-                    onClick = {
-                        scope.launch {
-                            drawerState.close()
-                            onOpenHistory()
-                        }
-                    },
+                    onClick = { postDrawerNavigation { onOpenHistory() } },
                 )
                 DrawerItem(
                     icon = Icons.Outlined.PieChart,
                     label = "Activity",
-                    onClick = {
-                        scope.launch {
-                            drawerState.close()
-                            onOpenActivity()
-                        }
-                    },
+                    onClick = { postDrawerNavigation { onOpenActivity() } },
                 )
                 DrawerItem(
                     icon = Icons.Outlined.BarChart,
                     label = "Progress report",
-                    onClick = {
-                        scope.launch {
-                            drawerState.close()
-                            onOpenProgressReport()
-                        }
-                    },
+                    onClick = { postDrawerNavigation { onOpenProgressReport() } },
                 )
                 DrawerItem(
                     icon = Icons.Outlined.WorkOutline,
                     label = "Job alert",
-                    onClick = {
-                        scope.launch {
-                            drawerState.close()
-                            onOpenJobAlert()
-                        }
-                    },
+                    onClick = { postDrawerNavigation { onOpenJobAlert() } },
                 )
                 DrawerItem(
                     icon = Icons.Outlined.School,
                     label = "Exam alert",
-                    onClick = {
-                        scope.launch {
-                            drawerState.close()
-                            onOpenExamAlert()
-                        }
-                    },
+                    onClick = { postDrawerNavigation { onOpenExamAlert() } },
                 )
                 DrawerItem(
                     icon = Icons.Outlined.Article,
                     label = "News",
-                    onClick = {
-                        scope.launch {
-                            drawerState.close()
-                            onOpenNews()
-                        }
-                    },
+                    onClick = { postDrawerNavigation { onOpenNews() } },
                 )
                 DrawerItem(
                     icon = Icons.Outlined.Today,
                     label = "Daily Digest",
-                    onClick = {
-                        scope.launch {
-                            drawerState.close()
-                            onOpenDaily()
-                        }
-                    },
+                    onClick = { postDrawerNavigation { onOpenDaily() } },
                 )
                 DrawerItem(
                     icon = Icons.Outlined.Quiz,
                     label = "Daily Quiz",
-                    onClick = {
-                        scope.launch {
-                            drawerState.close()
-                            onOpenMenuQuiz()
-                        }
-                    },
+                    onClick = { postDrawerNavigation { onOpenMenuQuiz() } },
                 )
                 DrawerItem(
                     icon = Icons.Outlined.Share,
@@ -1937,7 +1954,7 @@ private fun DrawerHeader() {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "User Id - ${profile.userIdFormatted ?: "00000000"}",
+                text = "User Id - ${profile.userIdFormatted ?: "000000"}",
                 color = if (profile.userIdFormatted != null) p.textPrimary else p.textSecondary.copy(alpha = 0.55f),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -1945,7 +1962,7 @@ private fun DrawerHeader() {
             )
             IconButton(
                 onClick = {
-                    val userId = profile.userIdFormatted ?: "00000000"
+                    val userId = profile.userIdFormatted ?: "000000"
                     clipboard.setText(AnnotatedString(userId))
                     Toast.makeText(context, "User ID copied", Toast.LENGTH_SHORT).show()
                 },

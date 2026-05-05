@@ -12,6 +12,8 @@ data class AuthUserDto(
     @SerializedName("signupDistrict") val signupDistrict: String? = null,
     @SerializedName("emailVerifiedAt") val emailVerifiedAt: String? = null,
     @SerializedName("phoneVerifiedAt") val phoneVerifiedAt: String? = null,
+    /** Server: `birthdayDate` (YYYY-MM-DD) from `users.date_of_birth`. */
+    @SerializedName("birthdayDate") val birthdayDate: String? = null,
 )
 
 data class LoginRequest(
@@ -75,6 +77,8 @@ data class PatchProfileRequest(
     val phone: String? = null,
     val state: String? = null,
     val district: String? = null,
+    /** Set to empty string to clear on server. Omit (null) to leave unchanged. */
+    @SerializedName("birthdayDate") val birthdayDate: String? = null,
 )
 
 data class PatchPasswordRequest(
@@ -325,6 +329,11 @@ data class AchievementContentDto(
     val body: String? = null,
 )
 
+data class ShareContentDto(
+    val title: String? = null,
+    val body: String? = null,
+)
+
 data class HomeContentResponse(
     val content: HomeContentDto? = null,
     @SerializedName("submitApplicationContent") val submitApplicationContent: SubmitApplicationContentDto? = null,
@@ -334,6 +343,7 @@ data class HomeContentResponse(
     @SerializedName("pollSettings") val pollSettings: PollSettingsDto? = null,
     @SerializedName("pushNotificationSettings") val pushNotificationSettings: PushNotificationSettingsDto? = null,
     @SerializedName("achievementContent") val achievementContent: AchievementContentDto? = null,
+    @SerializedName("shareContent") val shareContent: ShareContentDto? = null,
 )
 
 data class PollItemDto(
