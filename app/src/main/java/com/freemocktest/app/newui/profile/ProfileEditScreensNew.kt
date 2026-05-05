@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freemocktest.app.data.AppPreferencesRepository
@@ -546,6 +547,8 @@ fun ProfileEditGenderScreen(
                 DropdownMenu(
                     expanded = genderMenuExpanded,
                     onDismissRequest = { genderMenuExpanded = false },
+                    // Keep this menu above the field (user requested upward open behavior).
+                    offset = DpOffset(x = 0.dp, y = (-172).dp),
                     modifier = Modifier.fillMaxWidth(0.92f),
                 ) {
                     options.forEach { option ->
