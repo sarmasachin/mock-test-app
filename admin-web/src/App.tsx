@@ -51,6 +51,7 @@ type Tab =
   | 'reportIssue'
   | 'achievement'
   | 'shareContent'
+  | 'signupRegions'
   | 'privacyPolicy'
   | 'termsOfUse'
   | 'dailyDigest'
@@ -301,6 +302,10 @@ type SupportInboxItem = {
   createdAt: string;
   status: 'new' | 'in_progress' | 'resolved';
 };
+type SignupRegionItem = {
+  state: string;
+  districts: string[];
+};
 type HomeContentSection = {
   id: string;
   title: string;
@@ -413,6 +418,7 @@ const TAB_LABELS: Record<Tab, string> = {
   reportIssue: 'Report Issue',
   achievement: 'Achievement',
   shareContent: 'Share Text',
+  signupRegions: 'State & Distt',
   privacyPolicy: 'Privacy Policy',
   termsOfUse: 'Terms of Use',
   dailyDigest: 'Daily Digest',
@@ -443,6 +449,7 @@ const TAB_ICONS: Record<Tab, string> = {
   reportIssue: 'RI',
   achievement: 'AC',
   shareContent: 'SH',
+  signupRegions: 'SD',
   privacyPolicy: 'PP',
   termsOfUse: 'TU',
   dailyDigest: 'DD',
@@ -919,6 +926,7 @@ function App() {
               'reportIssue',
               'achievement',
               'shareContent',
+              'signupRegions',
               'privacyPolicy',
               'termsOfUse',
               'dailyDigest',
@@ -1001,6 +1009,7 @@ function App() {
             />
           )}
           {tab === 'shareContent' && <ShareContentTab apiClient={authedApi} />}
+          {tab === 'signupRegions' && <SignupRegionsSettingsTab apiClient={authedApi} />}
           {tab === 'privacyPolicy' && <SimpleContentSettingsTab apiClient={authedApi} title="Privacy Policy" settingsKey="privacyPolicyContent" />}
           {tab === 'termsOfUse' && <SimpleContentSettingsTab apiClient={authedApi} title="Terms of Use" settingsKey="termsOfUseContent" />}
           {tab === 'dailyDigest' && <DailyDigestTab apiClient={authedApi} />}
@@ -2565,6 +2574,15 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
   const [dailyReleaseHour, setDailyReleaseHour] = useState('10');
   const [dailyReleaseMinute, setDailyReleaseMinute] = useState('0');
   const [dailyTimezoneOffset, setDailyTimezoneOffset] = useState('330');
+  const [dailyDigestShareTitle, setDailyDigestShareTitle] = useState('Daily Digest');
+  const [dailyDigestShareBody, setDailyDigestShareBody] = useState(
+    'Try today\'s Daily Digest on Mock Test App!\nDate: {date}\n\n{question}\n\nDownload: {storeUrl}',
+  );
+  const [dailyQuizShareTitle, setDailyQuizShareTitle] = useState('Daily Quiz Result');
+  const [dailyQuizShareBody, setDailyQuizShareBody] = useState(
+    'My Daily Quiz result on {date}\n\n{question}\nScore: {score}\n\nDownload: {storeUrl}',
+  );
+  const [savingDailyShareText, setSavingDailyShareText] = useState(false);
   const DIGEST_LIST_PER_PAGE = 15;
   const [digestListPage, setDigestListPage] = useState(1);
 
@@ -2580,9 +2598,19 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
       ]);
       setItems(digestRes.data?.items || []);
       const schedule = settingsRes.data?.settings?.dailyQuizSettings || {};
+      const digestShare = settingsRes.data?.settings?.dailyDigestShareContent || {};
+      const quizShare = settingsRes.data?.settings?.dailyQuizShareContent || {};
       setDailyReleaseHour(String(Math.max(0, Math.min(23, Number(schedule.releaseHour ?? 10)))));
       setDailyReleaseMinute(String(Math.max(0, Math.min(59, Number(schedule.releaseMinute ?? 0)))));
       setDailyTimezoneOffset(String(Math.max(-720, Math.min(840, Number(schedule.timezoneOffsetMinutes ?? 330)))));
+      setDailyDigestShareTitle(String(digestShare.title || 'Daily Digest'));
+      setDailyDigestShareBody(
+        String(digestShare.body || 'Try today\'s Daily Digest on Mock Test App!\nDate: {date}\n\n{question}\n\nDownload: {storeUrl}'),
+      );
+      setDailyQuizShareTitle(String(quizShare.title || 'Daily Quiz Result'));
+      setDailyQuizShareBody(
+        String(quizShare.body || 'My Daily Quiz result on {date}\n\n{question}\nScore: {score}\n\nDownload: {storeUrl}'),
+      );
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to load daily digest items');
     }
@@ -2604,6 +2632,26 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
       pushToast('success', 'Daily quiz schedule saved.');
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to save daily quiz schedule');
+    }
+  }
+  async function saveDailyShareTextSettings() {
+    try {
+      setSavingDailyShareText(true);
+      await apiClient.patch('/admin/settings', {
+        dailyDigestShareContent: {
+          title: String(dailyDigestShareTitle || 'Daily Digest').trim(),
+          body: String(dailyDigestShareBody || '').trim(),
+        },
+        dailyQuizShareContent: {
+          title: String(dailyQuizShareTitle || 'Daily Quiz Result').trim(),
+          body: String(dailyQuizShareBody || '').trim(),
+        },
+      });
+      pushToast('success', 'Daily digest/quiz share text saved.');
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to save daily share text');
+    } finally {
+      setSavingDailyShareText(false);
     }
   }
   async function createDigestItem(e: FormEvent) {
@@ -2745,6 +2793,51 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
         />
         <button type="button" onClick={saveDailySchedule}>Save Daily Quiz Time</button>
       </div>
+      <section className="panel-card" style={{ marginBottom: 10 }}>
+        <div className="panel-head">
+          <h3>Daily Digest & Daily Quiz Share Text</h3>
+        </div>
+        <p className="muted">
+          Placeholders: <b>{'{date}'}</b>, <b>{'{question}'}</b>, <b>{'{storeUrl}'}</b>, <b>{'{score}'}</b>,{' '}
+          <b>{'{result}'}</b>
+        </p>
+        <div className="settings-form">
+          <input
+            value={dailyDigestShareTitle}
+            onChange={(e) => setDailyDigestShareTitle(e.target.value)}
+            placeholder="Daily Digest share subject/title"
+            maxLength={120}
+          />
+        </div>
+        <textarea
+          value={dailyDigestShareBody}
+          onChange={(e) => setDailyDigestShareBody(e.target.value)}
+          placeholder="Daily Digest share text"
+          rows={5}
+        />
+        <div className="settings-form" style={{ marginTop: 10 }}>
+          <input
+            value={dailyQuizShareTitle}
+            onChange={(e) => setDailyQuizShareTitle(e.target.value)}
+            placeholder="Daily Quiz result share subject/title"
+            maxLength={120}
+          />
+        </div>
+        <textarea
+          value={dailyQuizShareBody}
+          onChange={(e) => setDailyQuizShareBody(e.target.value)}
+          placeholder="Daily Quiz result share text"
+          rows={5}
+        />
+        <div className="inline-form">
+          <button type="button" className="ghost" onClick={() => void load()} disabled={savingDailyShareText}>
+            Reload
+          </button>
+          <button type="button" onClick={saveDailyShareTextSettings} disabled={savingDailyShareText}>
+            {savingDailyShareText ? 'Saving...' : 'Save Share Text'}
+          </button>
+        </div>
+      </section>
       <button onClick={load}>Refresh Digest Items</button>
       <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search digest items" />
       <div className="list table questions-table">
@@ -4351,6 +4444,191 @@ function SimpleContentSettingsTab({
           </div>
         </>
       )}
+    </section>
+  );
+}
+
+function SignupRegionsSettingsTab({ apiClient }: { apiClient: typeof api }) {
+  const { pushToast } = useAdminToast();
+  const [items, setItems] = useState<SignupRegionItem[]>([]);
+  const [stateInput, setStateInput] = useState('');
+  const [districtInput, setDistrictInput] = useState('');
+  const [selectedState, setSelectedState] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    try {
+      setLoading(true);
+      const res = await apiClient.get('/admin/settings');
+      const raw = res.data?.settings?.signupRegions?.items;
+      const mapped: SignupRegionItem[] = Array.isArray(raw)
+        ? raw
+            .map((row: any) => ({
+              state: String(row?.state || '').trim(),
+              districts: (Array.isArray(row?.districts) ? row.districts : [])
+                .map((x: any) => String(x || '').trim())
+                .filter(Boolean),
+            }))
+            .filter((row) => row.state)
+        : [];
+      setItems(mapped);
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to load signup regions');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function save(nextItems: SignupRegionItem[], successMessage: string) {
+    try {
+      setSaving(true);
+      const payload = nextItems
+        .map((row) => ({
+          state: String(row.state || '').trim(),
+          districts: (Array.isArray(row.districts) ? row.districts : [])
+            .map((x) => String(x || '').trim())
+            .filter(Boolean),
+        }))
+        .filter((row) => row.state);
+      await apiClient.patch('/admin/settings', { signupRegions: { items: payload } });
+      setItems(payload);
+      pushToast('success', successMessage);
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to save signup regions');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addState() {
+    const cleanState = stateInput.trim();
+    if (!cleanState) {
+      pushToast('error', 'State is required');
+      return;
+    }
+    if (items.some((row) => row.state.toLowerCase() === cleanState.toLowerCase())) {
+      pushToast('warning', 'State already exists');
+      return;
+    }
+    const next = [...items, { state: cleanState, districts: ['Other / Not listed'] }];
+    await save(next, `State "${cleanState}" added.`);
+    setStateInput('');
+    setSelectedState(cleanState);
+  }
+
+  async function addDistrict() {
+    const state = selectedState.trim();
+    const district = districtInput.trim();
+    if (!state) {
+      pushToast('error', 'Select state first');
+      return;
+    }
+    if (!district) {
+      pushToast('error', 'District is required');
+      return;
+    }
+    const next = items.map((row) => {
+      if (row.state !== state) return row;
+      const exists = row.districts.some((d) => d.toLowerCase() === district.toLowerCase());
+      if (exists) return row;
+      return { ...row, districts: [...row.districts, district] };
+    });
+    await save(next, `District "${district}" added in ${state}.`);
+    setDistrictInput('');
+  }
+
+  async function removeState(state: string) {
+    const next = items.filter((row) => row.state !== state);
+    await save(next, `State "${state}" removed.`);
+    if (selectedState === state) setSelectedState('');
+  }
+
+  async function removeDistrict(state: string, district: string) {
+    const next = items.map((row) => {
+      if (row.state !== state) return row;
+      const remaining = row.districts.filter((d) => d !== district);
+      return { ...row, districts: remaining.length ? remaining : ['Other / Not listed'] };
+    });
+    await save(next, `District "${district}" removed from ${state}.`);
+  }
+
+  return (
+    <section className="panel-card">
+      <div className="panel-head">
+        <h3>State & Distt (Signup Form)</h3>
+      </div>
+      <p className="muted">Yahan se signup ke State aur District list manage karein. App form me ye list use hogi.</p>
+      <div className="inline-form">
+        <input
+          value={stateInput}
+          onChange={(e) => setStateInput(e.target.value)}
+          placeholder="Add new State"
+          disabled={saving}
+        />
+        <button type="button" onClick={() => void addState()} disabled={saving}>
+          Add State
+        </button>
+      </div>
+      <div className="inline-form">
+        <select value={selectedState} onChange={(e) => setSelectedState(e.target.value)} disabled={saving || !items.length}>
+          <option value="">Select state</option>
+          {items.map((row) => (
+            <option key={row.state} value={row.state}>
+              {row.state}
+            </option>
+          ))}
+        </select>
+        <input
+          value={districtInput}
+          onChange={(e) => setDistrictInput(e.target.value)}
+          placeholder="Add new District"
+          disabled={saving || !selectedState}
+        />
+        <button type="button" onClick={() => void addDistrict()} disabled={saving || !selectedState}>
+          Add Distt
+        </button>
+      </div>
+      <div className="inline-form">
+        <button type="button" className="ghost" onClick={() => void load()} disabled={saving || loading}>
+          {loading ? 'Loading...' : 'Reload'}
+        </button>
+      </div>
+      <div className="list table">
+        <div className="row row-head" style={{ gridTemplateColumns: '1fr 2fr 120px' }}>
+          <span>State</span>
+          <span>Districts</span>
+          <span>Action</span>
+        </div>
+        {items.map((row) => (
+          <div key={row.state} className="row" style={{ gridTemplateColumns: '1fr 2fr 120px' }}>
+            <span>{row.state}</span>
+            <span>
+              {row.districts.map((d) => (
+                <button
+                  key={`${row.state}-${d}`}
+                  type="button"
+                  className="ghost"
+                  style={{ marginRight: 6, marginBottom: 6 }}
+                  onClick={() => void removeDistrict(row.state, d)}
+                  disabled={saving}
+                  title="Remove district"
+                >
+                  {d} ×
+                </button>
+              ))}
+            </span>
+            <button type="button" className="danger" onClick={() => void removeState(row.state)} disabled={saving}>
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }

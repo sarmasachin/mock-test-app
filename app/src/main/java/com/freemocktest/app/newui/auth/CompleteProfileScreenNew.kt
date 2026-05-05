@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freemocktest.app.data.AuthRepository
+import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.data.needsProfileCompletion
 import com.freemocktest.app.data.remote.RetrofitProvider
 import com.freemocktest.app.newui.components.AuthScreenFeedback
@@ -74,6 +75,10 @@ fun CompleteProfileScreenNew(
     var districtError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
+        runCatching { ContentRepository.loadSignupRegions() }
+            .onSuccess { rows ->
+                SignupRegionData.replaceFromAdmin(rows.map { it.state to it.districts })
+            }
         runCatching { RetrofitProvider.appApi.me() }
             .onSuccess { accountEmail = it.user.email }
     }

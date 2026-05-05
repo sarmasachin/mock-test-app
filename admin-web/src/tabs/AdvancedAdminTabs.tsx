@@ -176,6 +176,7 @@ export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiCli
   const [repeatUntil, setRepeatUntil] = useState('');
   const [page, setPage] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [sendingId, setSendingId] = useState('');
 
   async function load() {
     try {
@@ -264,6 +265,41 @@ export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiCli
     saveAll(next);
   }
 
+  async function sendNow(item: NotificationScheduleItem) {
+    try {
+      setSendingId(item.id);
+      const res = await apiClient.post('/admin/notifications/send', {
+        title: item.title,
+        message: item.message,
+        target: item.target,
+      });
+      const sent = Number(res.data?.sent || 0);
+      const failed = Number(res.data?.failed || 0);
+      const total = Number(res.data?.total || 0);
+      const nextStatus: NotificationScheduleItem['status'] = sent > 0 ? 'sent' : 'failed';
+      const next = items.map((x) =>
+        x.id === item.id
+          ? {
+              ...x,
+              status: nextStatus,
+              sentAt: sent > 0 ? new Date().toISOString() : x.sentAt,
+            }
+          : x,
+      );
+      setItems(next);
+      await saveAll(next);
+      if (sent > 0) {
+        pushToast('success', `Push sent to ${sent}/${total} devices${failed > 0 ? ` (${failed} failed)` : ''}.`);
+      } else {
+        pushToast('error', total > 0 ? `Push failed for ${failed}/${total} devices.` : 'No active device tokens found.');
+      }
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to send push notification');
+    } finally {
+      setSendingId('');
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(items.length / ITEMS_PER_PAGE));
   const safePage = Math.min(page, totalPages);
   const pagedItems = useMemo(() => items.slice((safePage - 1) * ITEMS_PER_PAGE, (safePage - 1) * ITEMS_PER_PAGE + ITEMS_PER_PAGE), [items, safePage]);
@@ -322,8 +358,8 @@ export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiCli
                     : 'Daily'}
             </span>
             <span>{item.status}</span>
-            <button type="button" className="ghost" onClick={() => markStatus(item, 'sent')}>
-              Send
+            <button type="button" className="ghost" onClick={() => void sendNow(item)} disabled={sendingId === item.id}>
+              {sendingId === item.id ? 'Sending...' : 'Send'}
             </button>
             <button type="button" className="ghost" onClick={() => markStatus(item, 'scheduled')}>
               Retry

@@ -90,6 +90,22 @@ private fun sharePlainText(context: Context, subject: String, body: String, choo
     }
 }
 
+private fun resolveDailyShareTemplate(
+    template: String,
+    date: String,
+    question: String,
+    storeUrl: String,
+    score: String = "",
+    result: String = "",
+): String {
+    return template
+        .replace("{date}", date)
+        .replace("{question}", question)
+        .replace("{storeUrl}", storeUrl)
+        .replace("{score}", score)
+        .replace("{result}", result)
+}
+
 @Composable
 fun DailyDigestScreenNew(
     modifier: Modifier = Modifier,
@@ -113,6 +129,14 @@ fun DailyDigestScreenNew(
     var quizStartedAtMillis by remember { mutableStateOf<Long?>(null) }
     var submittedAtMillis by remember { mutableStateOf<Long?>(null) }
     var showSolution by remember { mutableStateOf(false) }
+    var dailyDigestShareSubject by remember { mutableStateOf("Daily Quiz — Mock Test App") }
+    var dailyDigestShareTemplate by remember {
+        mutableStateOf("Try today's Daily Digest on Mock Test App!\nDate: {date}\n\n{question}\n\nDownload: {storeUrl}")
+    }
+    var dailyQuizResultShareSubject by remember { mutableStateOf("Daily Quiz result — Mock Test App") }
+    var dailyQuizResultShareTemplate by remember {
+        mutableStateOf("My Daily Quiz result on {date}\n\n{question}\nScore: {score}\n\nDownload: {storeUrl}")
+    }
 
     LaunchedEffect(quizReloadTick) {
         quizLoading = true
@@ -135,6 +159,20 @@ fun DailyDigestScreenNew(
                 quizLoading = false
             }
     }
+    LaunchedEffect(Unit) {
+        val digestShare = ContentRepository.loadDailyDigestShareContent()
+        if (digestShare?.body?.isNotBlank() == true) {
+            dailyDigestShareTemplate = digestShare.body
+            val t = digestShare.title?.trim().orEmpty()
+            if (t.isNotBlank()) dailyDigestShareSubject = t
+        }
+        val quizShare = ContentRepository.loadDailyQuizShareContent()
+        if (quizShare?.body?.isNotBlank() == true) {
+            dailyQuizResultShareTemplate = quizShare.body
+            val t = quizShare.title?.trim().orEmpty()
+            if (t.isNotBlank()) dailyQuizResultShareSubject = t
+        }
+    }
 
     if (!showQuiz && !showResult) {
         DailyQuizDatePickerScreen(
@@ -150,9 +188,9 @@ fun DailyDigestScreenNew(
             onShare = {
                 val dateStr = selectedDate.format(DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.US))
                 val prompt = truncateForShare(quizItem?.questionPrompt.orEmpty())
-                val body =
+                val fallback =
                     buildString {
-                        appendLine("Try the Daily Quiz on Mock Test App!")
+                        appendLine("Try today's Daily Digest on Mock Test App!")
                         appendLine("Date: $dateStr")
                         if (prompt.isNotBlank()) {
                             appendLine()
@@ -161,7 +199,13 @@ fun DailyDigestScreenNew(
                         appendLine()
                         appendLine("Download: ${playStoreLink(context)}")
                     }
-                sharePlainText(context, "Daily Quiz — Mock Test App", body, "Share Daily Quiz")
+                val body = resolveDailyShareTemplate(
+                    template = dailyDigestShareTemplate,
+                    date = dateStr,
+                    question = prompt,
+                    storeUrl = playStoreLink(context),
+                ).ifBlank { fallback }
+                sharePlainText(context, dailyDigestShareSubject, body, "Share Daily Quiz")
             },
             onSelectDate = { selectedDate = it },
             onTakeTest = {
@@ -229,6 +273,8 @@ fun DailyDigestScreenNew(
                     showSolution = !showSolution
                 }
             },
+            shareSubject = dailyQuizResultShareSubject,
+            shareTemplate = dailyQuizResultShareTemplate,
         )
     }
 }
@@ -630,6 +676,8 @@ private fun DailyQuizResultScreen(
     onLeaderboard: () -> Unit,
     onReAttempt: () -> Unit,
     onSolution: () -> Unit,
+    shareSubject: String,
+    shareTemplate: String,
 ) {
     val context = LocalContext.current
     val correctIndex = question?.correctIndex ?: -1
@@ -699,7 +747,13 @@ private fun DailyQuizResultScreen(
                     onClick = {
                         val dateStr = quizShareDay.format(DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.US))
                         val prompt = truncateForShare(question?.questionPrompt.orEmpty())
-                        val body =
+                        val scoreSummary = if (scoreVisible) {
+                            "$correctCount / $totalQuestions · Time: ${minutes}m ${seconds}s"
+                        } else {
+                            "Completed (score hidden)"
+                        }
+                        val resultSummary = "Correct: $correctCount · Wrong: $wrongCount · Skipped: $skippedCount"
+                        val fallback =
                             buildString {
                                 appendLine("My Daily Quiz result — Mock Test App")
                                 appendLine("Date: $dateStr")
@@ -708,16 +762,20 @@ private fun DailyQuizResultScreen(
                                     appendLine(prompt)
                                 }
                                 appendLine()
-                                if (scoreVisible) {
-                                    appendLine("Score: $correctCount / $totalQuestions · Time: ${minutes}m ${seconds}s")
-                                    appendLine("Correct: $correctCount · Wrong: $wrongCount · Skipped: $skippedCount")
-                                } else {
-                                    appendLine("Completed the quiz (score hidden in app settings).")
-                                }
+                                appendLine("Score: $scoreSummary")
+                                appendLine(resultSummary)
                                 appendLine()
                                 appendLine("Download: ${playStoreLink(context)}")
                             }
-                        sharePlainText(context, "Daily Quiz result — Mock Test App", body, "Share result")
+                        val body = resolveDailyShareTemplate(
+                            template = shareTemplate,
+                            date = dateStr,
+                            question = prompt,
+                            storeUrl = playStoreLink(context),
+                            score = scoreSummary,
+                            result = resultSummary,
+                        ).ifBlank { fallback }
+                        sharePlainText(context, shareSubject, body, "Share result")
                     },
                 ) {
                     Icon(Icons.Rounded.Share, contentDescription = "Share", tint = Color(0xFF555555))

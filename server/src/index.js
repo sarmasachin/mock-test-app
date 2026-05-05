@@ -20,6 +20,7 @@ const adminRouter = require('./routes/admin');
 const pollsRouter = require('./routes/polls');
 const { pool } = require('./db');
 const { clampMcqCorrectIndex } = require('./mcqShuffle');
+const { sendPushToToken } = require('./notificationDispatch');
 const {
   isMailConfigured,
   sendCompleteProfileReminderEmail,
@@ -924,6 +925,220 @@ async function setSettingJson(settingKey, value) {
   );
 }
 
+async function sendPushToAudience({ title, message, target, deepLink }) {
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS user_device_tokens (
+       id BIGSERIAL PRIMARY KEY,
+       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       device_token TEXT NOT NULL,
+       platform VARCHAR(20) NOT NULL DEFAULT 'android',
+       app_version VARCHAR(40) NOT NULL DEFAULT '',
+       device_model VARCHAR(120) NOT NULL DEFAULT '',
+       is_active BOOLEAN NOT NULL DEFAULT true,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+       last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+       UNIQUE (device_token)
+     )`,
+  );
+  let whereClause = 'TRUE';
+  if (target === 'new_users') {
+    whereClause = `u.created_at >= now() - interval '7 days'`;
+  } else if (target === 'active_users') {
+    whereClause = `EXISTS (
+      SELECT 1 FROM test_attempts ta
+      WHERE ta.user_id = u.id AND ta.completed_at >= now() - interval '30 days'
+    )`;
+  }
+  const tableColsRes = await pool.query(
+    `SELECT table_name, column_name
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name IN ('user_device_tokens', 'user_devices')`,
+  );
+  const tableCols = {};
+  for (const row of tableColsRes.rows || []) {
+    const table = String(row.table_name || '');
+    const col = String(row.column_name || '');
+    if (!table || !col) continue;
+    if (!tableCols[table]) tableCols[table] = new Set();
+    tableCols[table].add(col);
+  }
+  const hasUdt = tableCols.user_device_tokens && tableCols.user_device_tokens.size > 0;
+  const hasUd = tableCols.user_devices && tableCols.user_devices.size > 0;
+  if (!hasUdt && !hasUd) return { total: 0, sent: 0, failed: 0, deactivated: 0 };
+  const sourceTable = hasUdt ? 'user_device_tokens' : 'user_devices';
+  const cols = tableCols[sourceTable];
+  const tokenColumn = cols.has('device_token')
+    ? 'device_token'
+    : cols.has('token')
+      ? 'token'
+      : cols.has('fcm_token')
+        ? 'fcm_token'
+        : null;
+  if (!tokenColumn) return { total: 0, sent: 0, failed: 0, deactivated: 0 };
+  const activeColumn = cols.has('is_active')
+    ? 'is_active'
+    : cols.has('active')
+      ? 'active'
+      : cols.has('enabled')
+        ? 'enabled'
+        : null;
+  const orderColumn = cols.has('updated_at')
+    ? 'updated_at'
+    : cols.has('last_seen_at')
+      ? 'last_seen_at'
+      : cols.has('created_at')
+        ? 'created_at'
+        : null;
+  const activeClause = activeColumn ? `src.${activeColumn} = true AND ` : '';
+  const orderClause = orderColumn ? `ORDER BY src.${orderColumn} DESC` : '';
+  const tokenRows = await pool.query(
+    `SELECT src.${tokenColumn} AS token
+     FROM ${sourceTable} src
+     INNER JOIN users u ON u.id = src.user_id
+     WHERE ${activeClause}${whereClause}
+     ${orderClause}
+     LIMIT 10000`,
+  );
+  const rows = tokenRows.rows || [];
+  let sent = 0;
+  let failed = 0;
+  let deactivated = 0;
+  for (const row of rows) {
+    const currentToken = String(row.token || '').trim();
+    if (!currentToken) {
+      failed += 1;
+      continue;
+    }
+    try {
+      const result = await sendPushToToken(currentToken, { title, message, deepLink });
+      if (result.ok) {
+        sent += 1;
+      } else {
+        failed += 1;
+        if (result.code === 'UNREGISTERED') {
+          if (activeColumn) {
+            const updateTs = cols.has('updated_at') ? ', updated_at = now()' : '';
+            await pool.query(
+              `UPDATE ${sourceTable}
+               SET ${activeColumn} = false${updateTs}
+               WHERE ${tokenColumn} = $1`,
+              [currentToken],
+            );
+          } else {
+            await pool.query(`DELETE FROM ${sourceTable} WHERE ${tokenColumn} = $1`, [currentToken]);
+          }
+          deactivated += 1;
+        }
+      }
+    } catch (e) {
+      failed += 1;
+      console.error('notification_scheduler_token_send_failed', e && (e.message || e));
+    }
+  }
+  return { total: rows.length, sent, failed, deactivated };
+}
+
+function computeNextNotificationSchedule(item, baseIso) {
+  const repeatType = String(item.repeatType || 'none').trim().toLowerCase();
+  if (!['daily', 'weekly', 'monthly'].includes(repeatType)) return null;
+  const baseMs = Date.parse(String(baseIso || ''));
+  if (!Number.isFinite(baseMs)) return null;
+  const d = new Date(baseMs);
+  if (repeatType === 'daily') {
+    d.setUTCDate(d.getUTCDate() + 1);
+  } else if (repeatType === 'weekly') {
+    const targetDow = Math.max(0, Math.min(6, Number(item.dayOfWeek || 1)));
+    const currentDow = d.getUTCDay();
+    let addDays = (targetDow - currentDow + 7) % 7;
+    if (addDays === 0) addDays = 7;
+    d.setUTCDate(d.getUTCDate() + addDays);
+  } else if (repeatType === 'monthly') {
+    const targetDom = Math.max(1, Math.min(31, Number(item.dayOfMonth || 1)));
+    const monthProbe = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1, d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), 0));
+    const lastDay = new Date(Date.UTC(monthProbe.getUTCFullYear(), monthProbe.getUTCMonth() + 1, 0)).getUTCDate();
+    monthProbe.setUTCDate(Math.min(targetDom, lastDay));
+    return monthProbe.toISOString();
+  }
+  return d.toISOString();
+}
+
+async function processNotificationSchedules() {
+  try {
+    const payload = await getSettingJson('notificationScheduling', { items: [] });
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    if (!items.length) return;
+    const nowMs = Date.now();
+    let changed = false;
+    const nextItems = [];
+    for (const raw of items) {
+      const item = raw || {};
+      const status = String(item.status || '').trim().toLowerCase();
+      if (status !== 'scheduled') {
+        nextItems.push(item);
+        continue;
+      }
+      const scheduleAt = String(item.scheduleAt || '').trim();
+      const scheduleMs = Date.parse(scheduleAt);
+      if (!Number.isFinite(scheduleMs) || scheduleMs > nowMs) {
+        nextItems.push(item);
+        continue;
+      }
+      const title = String(item.title || '').trim();
+      const message = String(item.message || '').trim();
+      const target = ['all', 'new_users', 'active_users'].includes(String(item.target || '').trim().toLowerCase())
+        ? String(item.target).trim().toLowerCase()
+        : 'all';
+      const deepLink = String(item.deepLink || '').trim();
+      if (!title || !message) {
+        nextItems.push({
+          ...item,
+          status: 'failed',
+          failedAt: new Date().toISOString(),
+          lastError: 'missing_title_or_message',
+        });
+        changed = true;
+        continue;
+      }
+      const result = await sendPushToAudience({ title, message, target, deepLink });
+      const runSucceeded = result.sent > 0 && result.failed === 0;
+      const nextScheduleAt = computeNextNotificationSchedule(item, scheduleAt);
+      const repeatUntilMs = Date.parse(String(item.repeatUntil || '').trim());
+      const hasValidRepeatUntil = Number.isFinite(repeatUntilMs);
+      const nextScheduleMs = Date.parse(String(nextScheduleAt || ''));
+      const canRepeat = Number.isFinite(nextScheduleMs) && (!hasValidRepeatUntil || nextScheduleMs <= repeatUntilMs);
+      if (nextScheduleAt && canRepeat) {
+        nextItems.push({
+          ...item,
+          scheduleAt: nextScheduleAt,
+          status: 'scheduled',
+          sentAt: runSucceeded ? new Date().toISOString() : String(item.sentAt || ''),
+          lastRunAt: new Date().toISOString(),
+          lastRunSent: result.sent,
+          lastRunFailed: result.failed,
+        });
+      } else {
+        nextItems.push({
+          ...item,
+          status: runSucceeded ? 'sent' : 'failed',
+          sentAt: runSucceeded ? new Date().toISOString() : String(item.sentAt || ''),
+          failedAt: runSucceeded ? String(item.failedAt || '') : new Date().toISOString(),
+          lastRunSent: result.sent,
+          lastRunFailed: result.failed,
+        });
+      }
+      changed = true;
+    }
+    if (changed) {
+      await setSettingJson('notificationScheduling', { items: nextItems });
+    }
+  } catch (e) {
+    if (e && e.code === '42P01') return;
+    console.error('notification_scheduler_error', e);
+  }
+}
+
 async function processMissedTestFollowupEmails() {
   if (!isMailConfigured()) return;
   try {
@@ -1273,6 +1488,9 @@ async function processBirthdayEmails() {
 
 setInterval(() => {
   processPublishSchedules();
+}, 60000);
+setInterval(() => {
+  processNotificationSchedules();
 }, 60000);
 setInterval(() => {
   processTestCycleAutoReschedule();

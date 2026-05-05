@@ -29,6 +29,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -533,33 +534,36 @@ fun ProfileEditGenderScreen(
             }
             Spacer(Modifier.height(18.dp))
             if (!submitted) {
-                OutlinedButton(
-                    onClick = { genderMenuExpanded = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = fieldShape,
-                ) {
-                    Text(
-                        text = if (gender.trim().isBlank()) "Select Gender" else gender,
-                        color = p.textPrimary,
+                androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = { genderMenuExpanded = true },
                         modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                DropdownMenu(
-                    expanded = genderMenuExpanded,
-                    onDismissRequest = { genderMenuExpanded = false },
-                    // Keep this menu above the field (user requested upward open behavior).
-                    offset = DpOffset(x = 0.dp, y = (-172).dp),
-                    modifier = Modifier.fillMaxWidth(0.92f),
-                ) {
-                    options.forEach { option ->
-                        DropdownMenuItem(
-                            text = { Text(option) },
-                            onClick = {
-                                gender = option
-                                genderMenuExpanded = false
-                                if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
-                            },
+                        shape = fieldShape,
+                    ) {
+                        Text(
+                            text = if (gender.trim().isBlank()) "Select Gender" else gender,
+                            color = p.textPrimary,
+                            modifier = Modifier.fillMaxWidth(),
                         )
+                    }
+                    DropdownMenu(
+                        expanded = genderMenuExpanded,
+                        onDismissRequest = { genderMenuExpanded = false },
+                        // Force popup above the anchor button.
+                        offset = DpOffset(x = 0.dp, y = (-176).dp),
+                        properties = PopupProperties(clippingEnabled = false),
+                        modifier = Modifier.fillMaxWidth(0.92f),
+                    ) {
+                        options.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option) },
+                                onClick = {
+                                    gender = option
+                                    genderMenuExpanded = false
+                                    if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
+                                },
+                            )
+                        }
                     }
                 }
                 if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {

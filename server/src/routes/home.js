@@ -106,7 +106,7 @@ router.get('/content', async (_req, res) => {
     const { rows } = await pool.query(
       `SELECT setting_key, setting_value
        FROM app_settings
-       WHERE setting_key IN ('homeContent', 'submitApplicationContent', 'instructionContent', 'profileMenuItems', 'examCategories', 'pollSettings', 'pushNotificationSettings', 'achievementContent', 'shareContent')`,
+       WHERE setting_key IN ('homeContent', 'submitApplicationContent', 'instructionContent', 'profileMenuItems', 'examCategories', 'signupRegions', 'pollSettings', 'pushNotificationSettings', 'achievementContent', 'shareContent', 'dailyDigestShareContent', 'dailyQuizShareContent')`,
     );
     if (!rows.length) {
       return res.json({
@@ -115,10 +115,13 @@ router.get('/content', async (_req, res) => {
         instructionContent: null,
         profileMenuItems: [],
         examCategories: { items: [] },
+        signupRegions: { items: [] },
         pollSettings: { items: [] },
         pushNotificationSettings: { items: [] },
         achievementContent: null,
         shareContent: null,
+        dailyDigestShareContent: null,
+        dailyQuizShareContent: null,
       });
     }
     const map = {};
@@ -128,6 +131,7 @@ router.get('/content', async (_req, res) => {
     let parsedInstruction = null;
     let parsedProfileMenuItems = [];
     let parsedExamCategories = { items: [] };
+    let parsedSignupRegions = { items: [] };
     let parsedPollSettings = { items: [] };
     let parsedPushNotificationSettings = { items: [] };
     try {
@@ -156,6 +160,12 @@ router.get('/content', async (_req, res) => {
       parsedExamCategories = parsed && typeof parsed === 'object' ? parsed : { items: [] };
     } catch (_e) {
       parsedExamCategories = { items: [] };
+    }
+    try {
+      const parsed = JSON.parse(String(map.signupRegions || '{}'));
+      parsedSignupRegions = parsed && typeof parsed === 'object' ? parsed : { items: [] };
+    } catch (_e) {
+      parsedSignupRegions = { items: [] };
     }
     try {
       const parsed = JSON.parse(String(map.pollSettings || '{}'));
@@ -197,16 +207,45 @@ router.get('/content', async (_req, res) => {
     } catch (_e) {
       parsedShareContent = null;
     }
+    let parsedDailyDigestShare = null;
+    try {
+      const raw = JSON.parse(String(map.dailyDigestShareContent || '{}'));
+      if (raw && typeof raw === 'object') {
+        const title = String(raw.title || 'Daily Digest Share').trim().slice(0, 120);
+        const body = String(raw.body || '').trim().slice(0, 10000);
+        if (body) {
+          parsedDailyDigestShare = { title, body };
+        }
+      }
+    } catch (_e) {
+      parsedDailyDigestShare = null;
+    }
+    let parsedDailyQuizShare = null;
+    try {
+      const raw = JSON.parse(String(map.dailyQuizShareContent || '{}'));
+      if (raw && typeof raw === 'object') {
+        const title = String(raw.title || 'Daily Quiz Share').trim().slice(0, 120);
+        const body = String(raw.body || '').trim().slice(0, 10000);
+        if (body) {
+          parsedDailyQuizShare = { title, body };
+        }
+      }
+    } catch (_e) {
+      parsedDailyQuizShare = null;
+    }
     return res.json({
       content: sanitizeHomeContent(parsedHome),
       submitApplicationContent: parsedSubmit,
       instructionContent: parsedInstruction,
       profileMenuItems: parsedProfileMenuItems,
       examCategories: parsedExamCategories,
+      signupRegions: parsedSignupRegions,
       pollSettings: parsedPollSettings,
       pushNotificationSettings: parsedPushNotificationSettings,
       achievementContent: parsedAchievementContent,
       shareContent: parsedShareContent,
+      dailyDigestShareContent: parsedDailyDigestShare,
+      dailyQuizShareContent: parsedDailyQuizShare,
     });
   } catch (e) {
     if (e && e.code === '42P01') {
@@ -216,10 +255,13 @@ router.get('/content', async (_req, res) => {
         instructionContent: null,
         profileMenuItems: [],
         examCategories: { items: [] },
+        signupRegions: { items: [] },
         pollSettings: { items: [] },
         pushNotificationSettings: { items: [] },
         achievementContent: null,
         shareContent: null,
+        dailyDigestShareContent: null,
+        dailyQuizShareContent: null,
       });
     }
     console.error(e);

@@ -58,6 +58,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
+import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.data.needsProfileCompletion
 import com.freemocktest.app.newui.components.AppSnackbarHostNew
 import com.freemocktest.app.newui.components.rememberAppSnackbarHostStateNew
@@ -815,6 +816,13 @@ private fun SignupForm(
     var busy by remember { mutableStateOf(false) }
     var googlePicking by remember { mutableStateOf(false) }
     var googleSubmitting by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        runCatching { ContentRepository.loadSignupRegions() }
+            .onSuccess { rows ->
+                SignupRegionData.replaceFromAdmin(rows.map { it.state to it.districts })
+            }
+    }
 
     val stateMatched = remember(state) {
         SignupRegionData.indianStates.any { it.equals(state, ignoreCase = true) }

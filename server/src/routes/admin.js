@@ -63,6 +63,7 @@ const SETTINGS_KEYS = [
   'submitApplicationContent',
   'instructionContent',
   'examCategories',
+  'signupRegions',
   'examCategoryIconOptions',
   'notificationScheduling',
   'publishScheduling',
@@ -72,6 +73,8 @@ const SETTINGS_KEYS = [
   'helpSupportContent',
   'achievementContent',
   'shareContent',
+  'dailyDigestShareContent',
+  'dailyQuizShareContent',
   'privacyPolicyContent',
   'termsOfUseContent',
   'testAdvancedConfigs',
@@ -493,6 +496,41 @@ function normalizeExamCategories(value) {
       };
     })
     .filter((x) => x.level1 && x.level2 && x.level3);
+  return { value: { items } };
+}
+
+function normalizeSignupRegions(value) {
+  const safe = value || {};
+  const rawItems = Array.isArray(safe.items) ? safe.items : [];
+  const normalizedByState = new Map();
+  for (let index = 0; index < rawItems.length; index += 1) {
+    const x = rawItems[index] || {};
+    const state = String(x.state || '').trim().slice(0, 80);
+    if (!state) continue;
+    const rawDistricts = Array.isArray(x.districts) ? x.districts : [];
+    const districtSet = new Set(
+      rawDistricts.map((d) => String(d || '').trim().slice(0, 80)).filter(Boolean),
+    );
+    if (!districtSet.size) {
+      districtSet.add('Other / Not listed');
+    }
+    const existing = normalizedByState.get(state.toLowerCase());
+    if (existing) {
+      for (const d of districtSet) existing.districts.add(d);
+    } else {
+      normalizedByState.set(state.toLowerCase(), {
+        state,
+        districts: districtSet,
+      });
+    }
+  }
+  const items = Array.from(normalizedByState.values())
+    .map((row) => ({
+      state: row.state,
+      districts: Array.from(row.districts).sort((a, b) => a.localeCompare(b)),
+    }))
+    .sort((a, b) => a.state.localeCompare(b.state))
+    .slice(0, 200);
   return { value: { items } };
 }
 
@@ -991,6 +1029,14 @@ async function getSettingsMap() {
         return {};
       }
     })(),
+    signupRegions: (() => {
+      try {
+        const parsed = JSON.parse(String(map.signupRegions || '{}'));
+        return parsed && typeof parsed === 'object' ? parsed : { items: [] };
+      } catch (_e) {
+        return { items: [] };
+      }
+    })(),
     examCategoryIconOptions: (() => {
       try {
         const parsed = JSON.parse(String(map.examCategoryIconOptions || '{}'));
@@ -1075,6 +1121,30 @@ async function getSettingsMap() {
         return parsed && typeof parsed === 'object' ? parsed : { title: 'Achievement', body: '' };
       } catch (_e) {
         return { title: 'Achievement', body: '' };
+      }
+    })(),
+    shareContent: (() => {
+      try {
+        const parsed = JSON.parse(String(map.shareContent || '{}'));
+        return parsed && typeof parsed === 'object' ? parsed : { title: 'Share', body: '' };
+      } catch (_e) {
+        return { title: 'Share', body: '' };
+      }
+    })(),
+    dailyDigestShareContent: (() => {
+      try {
+        const parsed = JSON.parse(String(map.dailyDigestShareContent || '{}'));
+        return parsed && typeof parsed === 'object' ? parsed : { title: 'Daily Digest Share', body: '' };
+      } catch (_e) {
+        return { title: 'Daily Digest Share', body: '' };
+      }
+    })(),
+    dailyQuizShareContent: (() => {
+      try {
+        const parsed = JSON.parse(String(map.dailyQuizShareContent || '{}'));
+        return parsed && typeof parsed === 'object' ? parsed : { title: 'Daily Quiz Share', body: '' };
+      } catch (_e) {
+        return { title: 'Daily Quiz Share', body: '' };
       }
     })(),
     privacyPolicyContent: (() => {
@@ -1781,6 +1851,8 @@ router.patch('/settings', async (req, res) => {
     body.instructionContent === undefined ? null : normalizeInstructionContent(body.instructionContent);
   const normalizedExamCategories =
     body.examCategories === undefined ? null : normalizeExamCategories(body.examCategories);
+  const normalizedSignupRegions =
+    body.signupRegions === undefined ? null : normalizeSignupRegions(body.signupRegions);
   const normalizedExamCategoryIconOptions =
     body.examCategoryIconOptions === undefined ? null : normalizeExamCategoryIconOptions(body.examCategoryIconOptions);
   const normalizedNotificationScheduling =
@@ -1806,6 +1878,10 @@ router.patch('/settings', async (req, res) => {
     body.achievementContent === undefined ? null : normalizeSimpleContent(body.achievementContent, 'Achievement');
   const normalizedShareContent =
     body.shareContent === undefined ? null : normalizeSimpleContent(body.shareContent, 'Share');
+  const normalizedDailyDigestShareContent =
+    body.dailyDigestShareContent === undefined ? null : normalizeSimpleContent(body.dailyDigestShareContent, 'Daily Digest Share');
+  const normalizedDailyQuizShareContent =
+    body.dailyQuizShareContent === undefined ? null : normalizeSimpleContent(body.dailyQuizShareContent, 'Daily Quiz Share');
   const normalizedPrivacyPolicyContent =
     body.privacyPolicyContent === undefined ? null : normalizeSimpleContent(body.privacyPolicyContent, 'Privacy Policy');
   const normalizedTermsOfUseContent =
@@ -1823,6 +1899,7 @@ router.patch('/settings', async (req, res) => {
     normalizedSubmitApplicationContent === null &&
     normalizedInstructionContent === null &&
     normalizedExamCategories === null &&
+    normalizedSignupRegions === null &&
     normalizedExamCategoryIconOptions === null &&
     normalizedNotificationScheduling === null &&
     normalizedResultUnlockEmailSettings === null &&
@@ -1834,6 +1911,8 @@ router.patch('/settings', async (req, res) => {
     normalizedHelpSupportContent === null &&
     normalizedAchievementContent === null &&
     normalizedShareContent === null &&
+    normalizedDailyDigestShareContent === null &&
+    normalizedDailyQuizShareContent === null &&
     normalizedPrivacyPolicyContent === null &&
     normalizedTermsOfUseContent === null
   ) {
@@ -1960,6 +2039,24 @@ router.patch('/settings', async (req, res) => {
           [JSON.stringify(normalizedShareContent.value), req.userId],
         );
       }
+      if (normalizedDailyDigestShareContent !== null) {
+        await client.query(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+           VALUES ('dailyDigestShareContent', $1, $2::uuid)
+           ON CONFLICT (setting_key)
+           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [JSON.stringify(normalizedDailyDigestShareContent.value), req.userId],
+        );
+      }
+      if (normalizedDailyQuizShareContent !== null) {
+        await client.query(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+           VALUES ('dailyQuizShareContent', $1, $2::uuid)
+           ON CONFLICT (setting_key)
+           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [JSON.stringify(normalizedDailyQuizShareContent.value), req.userId],
+        );
+      }
       if (normalizedExamCategories !== null) {
         await client.query(
           `INSERT INTO app_settings (setting_key, setting_value, updated_by)
@@ -1967,6 +2064,15 @@ router.patch('/settings', async (req, res) => {
            ON CONFLICT (setting_key)
            DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
           [JSON.stringify(normalizedExamCategories.value), req.userId],
+        );
+      }
+      if (normalizedSignupRegions !== null) {
+        await client.query(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+           VALUES ('signupRegions', $1, $2::uuid)
+           ON CONFLICT (setting_key)
+           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [JSON.stringify(normalizedSignupRegions.value), req.userId],
         );
       }
       if (normalizedExamCategoryIconOptions !== null) {
@@ -2098,6 +2204,7 @@ router.patch('/settings', async (req, res) => {
       submitApplicationContentUpdated: normalizedSubmitApplicationContent !== null,
       instructionContentUpdated: normalizedInstructionContent !== null,
       examCategoriesUpdated: normalizedExamCategories !== null,
+      signupRegionsUpdated: normalizedSignupRegions !== null,
       examCategoryIconOptionsUpdated: normalizedExamCategoryIconOptions !== null,
       notificationSchedulingUpdated: normalizedNotificationScheduling !== null,
       resultUnlockEmailSettingsUpdated: normalizedResultUnlockEmailSettings !== null,
@@ -2109,6 +2216,8 @@ router.patch('/settings', async (req, res) => {
       helpSupportContentUpdated: normalizedHelpSupportContent !== null,
       achievementContentUpdated: normalizedAchievementContent !== null,
       shareContentUpdated: normalizedShareContent !== null,
+      dailyDigestShareContentUpdated: normalizedDailyDigestShareContent !== null,
+      dailyQuizShareContentUpdated: normalizedDailyQuizShareContent !== null,
       privacyPolicyContentUpdated: normalizedPrivacyPolicyContent !== null,
       termsOfUseContentUpdated: normalizedTermsOfUseContent !== null,
     });

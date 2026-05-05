@@ -4,7 +4,7 @@ package com.freemocktest.app.newui.auth
  * Demo lists for signup autocomplete. Replace with API / room DB for production.
  */
 object SignupRegionData {
-    val indianStates: List<String> = listOf(
+    private val builtinStates: List<String> = listOf(
         "Andhra Pradesh",
         "Arunachal Pradesh",
         "Assam",
@@ -36,10 +36,35 @@ object SignupRegionData {
         "West Bengal",
     ).sorted()
 
+    @Volatile
+    private var adminRegionMap: Map<String, List<String>> = emptyMap()
+
+    val indianStates: List<String>
+        get() = (builtinStates + adminRegionMap.keys.toList())
+            .distinctBy { it.lowercase() }
+            .sortedBy { it.lowercase() }
+
+    fun replaceFromAdmin(items: List<Pair<String, List<String>>>) {
+        if (items.isEmpty()) {
+            adminRegionMap = emptyMap()
+            return
+        }
+        val next = linkedMapOf<String, List<String>>()
+        for ((stateRaw, districtsRaw) in items) {
+            val state = stateRaw.trim()
+            if (state.isBlank()) continue
+            val districts = districtsRaw.map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
+            next[state] = if (districts.isNotEmpty()) districts else listOf("Other / Not listed")
+        }
+        adminRegionMap = next
+    }
+
     fun districtsForState(state: String): List<String> {
         if (state.isBlank()) return emptyList()
         val key = indianStates.firstOrNull { it.equals(state, ignoreCase = true) } ?: return emptyList()
-        return (districtSamples[key] ?: listOf("Other / Not listed")).sorted()
+        val adminDistricts = adminRegionMap.entries.firstOrNull { it.key.equals(key, ignoreCase = true) }?.value.orEmpty()
+        val base = (districtSamples[key] ?: listOf("Other / Not listed"))
+        return (base + adminDistricts).distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
     }
 
     private val districtSamples: Map<String, List<String>> = mapOf(

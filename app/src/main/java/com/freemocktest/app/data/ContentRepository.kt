@@ -168,6 +168,10 @@ object ContentRepository {
         val title: String?,
         val body: String?,
     )
+    data class SignupRegionRemote(
+        val state: String,
+        val districts: List<String>,
+    )
     data class LeaderboardItemRemote(
         val rank: Int,
         val userId: String,
@@ -609,6 +613,51 @@ object ContentRepository {
             )
         } catch (e: Exception) {
             Log.w(TAG, "loadShareContent", e)
+            null
+        }
+    }
+
+    suspend fun loadSignupRegions(): List<SignupRegionRemote> = withContext(Dispatchers.IO) {
+        try {
+            val rows = RetrofitProvider.publicApi.getHomeContent().signupRegions?.items ?: emptyList()
+            rows.mapNotNull { row ->
+                val state = row.state.trim()
+                val districts = row.districts.map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase(Locale.US) }
+                if (state.isBlank()) null else SignupRegionRemote(state = state, districts = districts)
+            }.distinctBy { it.state.lowercase(Locale.US) }
+                .sortedBy { it.state.lowercase(Locale.US) }
+        } catch (e: Exception) {
+            Log.w(TAG, "loadSignupRegions", e)
+            emptyList()
+        }
+    }
+
+    suspend fun loadDailyDigestShareContent(): ShareContentRemote? = withContext(Dispatchers.IO) {
+        try {
+            val content = RetrofitProvider.publicApi.getHomeContent().dailyDigestShareContent ?: return@withContext null
+            val body = content.body?.trim().orEmpty()
+            if (body.isBlank()) return@withContext null
+            ShareContentRemote(
+                title = content.title?.trim(),
+                body = body,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "loadDailyDigestShareContent", e)
+            null
+        }
+    }
+
+    suspend fun loadDailyQuizShareContent(): ShareContentRemote? = withContext(Dispatchers.IO) {
+        try {
+            val content = RetrofitProvider.publicApi.getHomeContent().dailyQuizShareContent ?: return@withContext null
+            val body = content.body?.trim().orEmpty()
+            if (body.isBlank()) return@withContext null
+            ShareContentRemote(
+                title = content.title?.trim(),
+                body = body,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "loadDailyQuizShareContent", e)
             null
         }
     }

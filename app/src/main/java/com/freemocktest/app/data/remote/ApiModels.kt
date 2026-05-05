@@ -323,6 +323,15 @@ data class ExamCategoriesDto(
     val items: List<ExamCategoryItemDto> = emptyList(),
 )
 
+data class SignupRegionItemDto(
+    val state: String,
+    val districts: List<String> = emptyList(),
+)
+
+data class SignupRegionsDto(
+    val items: List<SignupRegionItemDto> = emptyList(),
+)
+
 /** Admin `achievementContent` (public GET /v1/home/content) — same keys as server admin settings. */
 data class AchievementContentDto(
     val title: String? = null,
@@ -340,10 +349,13 @@ data class HomeContentResponse(
     @SerializedName("instructionContent") val instructionContent: InstructionContentDto? = null,
     @SerializedName("profileMenuItems") val profileMenuItems: List<ProfileMenuItemDto> = emptyList(),
     @SerializedName("examCategories") val examCategories: ExamCategoriesDto? = null,
+    @SerializedName("signupRegions") val signupRegions: SignupRegionsDto? = null,
     @SerializedName("pollSettings") val pollSettings: PollSettingsDto? = null,
     @SerializedName("pushNotificationSettings") val pushNotificationSettings: PushNotificationSettingsDto? = null,
     @SerializedName("achievementContent") val achievementContent: AchievementContentDto? = null,
     @SerializedName("shareContent") val shareContent: ShareContentDto? = null,
+    @SerializedName("dailyDigestShareContent") val dailyDigestShareContent: ShareContentDto? = null,
+    @SerializedName("dailyQuizShareContent") val dailyQuizShareContent: ShareContentDto? = null,
 )
 
 data class PollItemDto(
