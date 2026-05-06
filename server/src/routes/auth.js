@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { pool } = require('../db');
@@ -15,11 +16,18 @@ const {
   isMailConfigured,
   mapSmtpSendErrorToClientMessage,
   sendPasswordResetOtp,
+  sendAdminLoginOtp,
   sendWelcomeEmail,
   sendSecurityAccountAlertEmail,
 } = require('../mail');
 const { postGoogleSignIn } = require('../auth/googleSignInPost');
-const { checkPasswordResetIp, checkPasswordResetEmail } = require('../lib/otpSendRateLimit');
+const {
+  checkPasswordResetIp,
+  checkPasswordResetEmail,
+  checkAdminLoginRequestIp,
+  checkAdminLoginRequestUser,
+  checkAdminLoginVerifyIp,
+} = require('../lib/otpSendRateLimit');
 
 const router = express.Router();
 
@@ -30,12 +38,83 @@ function pickSixDigit() {
 const PASSWORD_RESET_OTP_MINUTES = () =>
   parseInt(process.env.PASSWORD_RESET_OTP_MINUTES || '15', 10);
 
+const ADMIN_LOGIN_OTP_MINUTES = () => {
+  const raw = process.env.ADMIN_LOGIN_OTP_MINUTES;
+  if (raw !== undefined && String(raw).trim() !== '') {
+    const n = parseInt(String(raw), 10);
+    return Number.isFinite(n) ? Math.max(5, Math.min(60, n)) : 15;
+  }
+  return Math.max(5, Math.min(60, PASSWORD_RESET_OTP_MINUTES()));
+};
+
+/** Shared lookup for password login and admin OTP flows */
+async function loadUserByLoginIdentifier(idRaw) {
+  const raw = String(idRaw || '').trim();
+  if (!raw) return { kind: 'empty' };
+  if (raw.includes('@')) {
+    const { rows } = await pool.query(
+      `SELECT * FROM users WHERE email_normalized = lower(trim($1)) LIMIT 1`,
+      [raw],
+    );
+    return { kind: 'ok', row: rows[0] || null };
+  }
+  const digits = raw.replace(/\D/g, '').slice(0, 10);
+  if (!isValidPhone(digits)) return { kind: 'bad_phone' };
+  const { rows } = await pool.query(`SELECT * FROM users WHERE phone = $1 LIMIT 1`, [digits]);
+  return { kind: 'ok', row: rows[0] || null };
+}
+
 function isValidPhone(input) {
   const digits = String(input || '').replace(/\D/g, '').slice(0, 10);
   if (digits.length !== 10) return false;
   const allSameDigit = new Set(digits.split('')).size === 1;
   const firstFiveSame = new Set(digits.slice(0, 5).split('')).size === 1;
   return !allSameDigit && !firstFiveSame;
+}
+
+/** Stable id from app (e.g. ANDROID_ID); else weak hash of UA+IP for legacy clients. */
+function computeLoginDeviceFingerprint(req, body) {
+  const raw = String((body && (body.deviceFingerprint || body.deviceId)) || '')
+    .trim()
+    .slice(0, 128);
+  if (raw) return raw;
+  const ua = String(req.headers['user-agent'] || '').slice(0, 400);
+  const ip = String(req.ip || req.socket?.remoteAddress || '').trim();
+  return crypto.createHash('sha256').update(`${ua}|${ip}`, 'utf8').digest('hex');
+}
+
+/**
+ * Remembers this device for the user. Returns whether to send "new device" security email.
+ * Suppresses mail for accounts younger than NEW_ACCOUNT_LOGIN_ALERT_GRACE_HOURS (default 48).
+ */
+async function recordPasswordLoginDevice({ userId, createdAt, fingerprint }) {
+  const graceHoursRaw = Number(process.env.NEW_ACCOUNT_LOGIN_ALERT_GRACE_HOURS || 48);
+  const graceHours = Number.isFinite(graceHoursRaw)
+    ? Math.max(0, Math.min(168, graceHoursRaw))
+    : 48;
+  const graceMs = graceHours * 3600 * 1000;
+  const createdMs = createdAt ? new Date(createdAt).getTime() : NaN;
+  const accountAgeMs = Number.isFinite(createdMs) ? Date.now() - createdMs : Infinity;
+  const withinGrace = accountAgeMs >= 0 && accountAgeMs < graceMs;
+
+  const existing = await pool.query(
+    `SELECT 1 AS ok FROM user_login_devices WHERE user_id = $1::uuid AND fingerprint = $2 LIMIT 1`,
+    [userId, fingerprint],
+  );
+  if (existing.rows[0]) {
+    await pool.query(
+      `UPDATE user_login_devices SET last_seen_at = now()
+       WHERE user_id = $1::uuid AND fingerprint = $2`,
+      [userId, fingerprint],
+    );
+    return { shouldAlert: false };
+  }
+  await pool.query(
+    `INSERT INTO user_login_devices (user_id, fingerprint, first_seen_at, last_seen_at)
+     VALUES ($1::uuid, $2, now(), now())`,
+    [userId, fingerprint],
+  );
+  return { shouldAlert: !withinGrace };
 }
 
 router.post('/register', async (req, res) => {
@@ -126,35 +205,36 @@ router.post('/login', async (req, res) => {
   const pw = String(password || '');
   if (!idRaw || !pw) return res.status(400).json({ error: 'identifier and password required' });
 
-  let q;
-  let params;
-  if (idRaw.includes('@')) {
-    q = `SELECT * FROM users WHERE email_normalized = lower(trim($1)) LIMIT 1`;
-    params = [idRaw];
-  } else {
-    const digits = idRaw.replace(/\D/g, '').slice(0, 10);
-    if (!isValidPhone(digits)) {
+  try {
+    const loaded = await loadUserByLoginIdentifier(idRaw);
+    if (loaded.kind === 'bad_phone') {
       return res.status(400).json({ error: 'Enter valid email or 10-digit mobile' });
     }
-    q = `SELECT * FROM users WHERE phone = $1 LIMIT 1`;
-    params = [digits];
-  }
-
-  try {
-    const { rows } = await pool.query(q, params);
-    const row = rows[0];
+    const row = loaded.kind === 'ok' ? loaded.row : null;
     if (!row) return res.status(401).json({ error: 'Invalid credentials' });
     if (row.is_banned) return res.status(403).json({ error: row.ban_reason || 'Account is blocked by admin' });
     const ok = await bcrypt.compare(pw, row.password_hash);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
     const tokens = await issueTokens(row.id);
-    if (isMailConfigured() && row.email) {
+    let shouldSendNewDeviceAlert = false;
+    try {
+      const fingerprint = computeLoginDeviceFingerprint(req, req.body || {});
+      const rec = await recordPasswordLoginDevice({
+        userId: row.id,
+        createdAt: row.created_at,
+        fingerprint,
+      });
+      shouldSendNewDeviceAlert = rec.shouldAlert === true;
+    } catch (devErr) {
+      console.error('login_device_record_failed', devErr && (devErr.message || devErr));
+    }
+    if (shouldSendNewDeviceAlert && isMailConfigured() && row.email) {
       sendSecurityAccountAlertEmail({
         to: String(row.email || '').trim(),
         displayName: String(row.display_name || '').trim(),
         subject: 'Security Alert: New login on your account',
         eventType: 'New Login',
-        eventDetail: `A new login was detected from IP ${String(req.ip || '')} using ${String(req.headers['user-agent'] || '').slice(0, 120)}.`,
+        eventDetail: `A new login was detected on a device we have not seen on this account before. IP ${String(req.ip || '')}. ${String(req.headers['user-agent'] || '').slice(0, 120)}`,
       }).catch((mailErr) => {
         console.error('security_login_alert_failed', mailErr && (mailErr.message || mailErr));
       });
@@ -167,6 +247,161 @@ router.post('/login', async (req, res) => {
     });
   } catch (e) {
     console.error(e);
+    return res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+/**
+ * POST /v1/auth/admin-login/request-otp
+ * Body: { identifier, password } — verify password + admin flag, then email 6-digit code.
+ * Does not return tokens (admin panel only; mobile app unchanged).
+ */
+router.post('/admin-login/request-otp', async (req, res) => {
+  const idRaw = String((req.body || {}).identifier || '').trim();
+  const pw = String((req.body || {}).password || '');
+  if (!idRaw || !pw) return res.status(400).json({ error: 'identifier and password required' });
+
+  const rlIp = checkAdminLoginRequestIp(req);
+  if (!rlIp.ok) {
+    res.setHeader('Retry-After', String(rlIp.retryAfterSec));
+    return res.status(429).json({
+      error: `Too many attempts from this network. Try again in ${rlIp.retryAfterSec}s.`,
+    });
+  }
+
+  try {
+    const loaded = await loadUserByLoginIdentifier(idRaw);
+    if (loaded.kind === 'bad_phone') {
+      return res.status(400).json({ error: 'Enter valid email or 10-digit mobile' });
+    }
+    const row = loaded.kind === 'ok' ? loaded.row : null;
+    if (!row) return res.status(401).json({ error: 'Invalid credentials' });
+    if (row.is_banned) return res.status(403).json({ error: row.ban_reason || 'Account is blocked by admin' });
+    const ok = await bcrypt.compare(pw, row.password_hash);
+    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!row.is_admin) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const emailTo = String(row.email || '').trim();
+    if (!emailTo || !emailTo.includes('@')) {
+      return res.status(400).json({
+        error: 'Admin OTP login requires an email address on this account. Contact support.',
+      });
+    }
+
+    const rlUid = checkAdminLoginRequestUser(row.id);
+    if (!rlUid.ok) {
+      res.setHeader('Retry-After', String(rlUid.retryAfterSec));
+      return res.status(429).json({
+        error: `Too many code requests for this account. Try again in ${rlUid.retryAfterSec}s.`,
+      });
+    }
+
+    if (!isMailConfigured()) {
+      return res.status(503).json({
+        error: 'Email is not configured on the server. Cannot send login code.',
+      });
+    }
+
+    const otp = String(pickSixDigit());
+    const tokenHash = sha256Hex(otp);
+    const expires = new Date();
+    expires.setMinutes(expires.getMinutes() + ADMIN_LOGIN_OTP_MINUTES());
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE user_one_time_tokens SET used_at = now()
+         WHERE user_id = $1::uuid AND purpose = 'admin_login' AND used_at IS NULL`,
+        [row.id],
+      );
+      await client.query(
+        `INSERT INTO user_one_time_tokens (user_id, purpose, token_hash, expires_at)
+         VALUES ($1::uuid, 'admin_login', $2, $3)`,
+        [row.id, tokenHash, expires.toISOString()],
+      );
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    await sendAdminLoginOtp({ to: emailTo, otp });
+    const mins = ADMIN_LOGIN_OTP_MINUTES();
+    return res.status(200).json({
+      ok: true,
+      message: `We sent a login code to your email. It expires in ${mins} minutes.`,
+    });
+  } catch (e) {
+    console.error('admin_login_request_otp_failed', e);
+    return res.status(500).json({ error: mapSmtpSendErrorToClientMessage(e) });
+  }
+});
+
+/**
+ * POST /v1/auth/admin-login/verify-otp
+ * Body: { identifier, otp } — same tokens shape as POST /login.
+ */
+router.post('/admin-login/verify-otp', async (req, res) => {
+  const idRaw = String((req.body || {}).identifier || '').trim();
+  const otpRaw = String((req.body || {}).otp || '').replace(/\D/g, '');
+  if (!idRaw || otpRaw.length !== 6) {
+    return res.status(400).json({ error: 'identifier and 6-digit code required' });
+  }
+
+  const rlIp = checkAdminLoginVerifyIp(req);
+  if (!rlIp.ok) {
+    res.setHeader('Retry-After', String(rlIp.retryAfterSec));
+    return res.status(429).json({
+      error: `Too many attempts from this network. Try again in ${rlIp.retryAfterSec}s.`,
+    });
+  }
+
+  try {
+    const loaded = await loadUserByLoginIdentifier(idRaw);
+    if (loaded.kind === 'bad_phone') {
+      return res.status(400).json({ error: 'Enter valid email or 10-digit mobile' });
+    }
+    const row = loaded.kind === 'ok' ? loaded.row : null;
+    if (!row) return res.status(401).json({ error: 'Invalid or expired code' });
+    if (row.is_banned) return res.status(403).json({ error: row.ban_reason || 'Account is blocked by admin' });
+    if (!row.is_admin) return res.status(401).json({ error: 'Invalid or expired code' });
+
+    const tokenHash = sha256Hex(otpRaw);
+    const tok = await pool.query(
+      `SELECT id FROM user_one_time_tokens
+       WHERE user_id = $1::uuid
+         AND purpose = 'admin_login'
+         AND token_hash = $2
+         AND used_at IS NULL
+         AND expires_at > now()
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [row.id, tokenHash],
+    );
+    const tokenRow = tok.rows[0];
+    if (!tokenRow) {
+      return res.status(401).json({ error: 'Invalid or expired code' });
+    }
+
+    await pool.query(`UPDATE user_one_time_tokens SET used_at = now() WHERE id = $1`, [tokenRow.id]);
+    await pool.query(
+      `UPDATE user_one_time_tokens SET used_at = now()
+       WHERE user_id = $1::uuid AND purpose = 'admin_login' AND used_at IS NULL AND id <> $2`,
+      [row.id, tokenRow.id],
+    );
+
+    const tokens = await issueTokens(row.id);
+    return res.json({
+      user: mapUserRow(row),
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresInSeconds: tokens.expiresInSeconds,
+    });
+  } catch (e) {
+    console.error('admin_login_verify_otp_failed', e);
     return res.status(500).json({ error: 'Login failed' });
   }
 });

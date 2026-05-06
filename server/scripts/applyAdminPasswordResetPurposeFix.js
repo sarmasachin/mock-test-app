@@ -14,7 +14,8 @@ CHECK (
     'email_verify',
     'password_reset',
     'phone_verify',
-    'admin_password_reset'
+    'admin_password_reset',
+    'admin_login'
   )
 );
 `;

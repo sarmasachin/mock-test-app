@@ -10,6 +10,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.freemocktest.app.data.ContentRepository
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import androidx.compose.ui.Modifier
 import com.freemocktest.app.newui.feeds.WebFeedDefaults
 import com.freemocktest.app.newui.news.FeedBrowseScreenNew
@@ -39,13 +41,25 @@ fun JobAlertScreenNew(
     var items by remember { mutableStateOf(ManualJobAlertContent.items) }
     var menuCategories by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedCategory by remember { mutableStateOf<String?>(null) }
+    var feedLoading by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
-        items = ContentRepository.loadNewsFeed("job")
-        menuCategories = ContentRepository.loadHomeContent()
-            ?.jobCategoryMenu
-            ?.filter { it.isNotBlank() }
-            .orEmpty()
-            .distinctBy { it.lowercase() }
+        feedLoading = true
+        try {
+            coroutineScope {
+                val feedDeferred = async { ContentRepository.loadNewsFeed("job") }
+                val menuDeferred = async {
+                    ContentRepository.loadHomeContent()
+                        ?.jobCategoryMenu
+                        ?.filter { it.isNotBlank() }
+                        .orEmpty()
+                        .distinctBy { it.lowercase() }
+                }
+                items = feedDeferred.await()
+                menuCategories = menuDeferred.await()
+            }
+        } finally {
+            feedLoading = false
+        }
     }
     val derivedCategories = remember(items) {
         items.map { it.category.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
@@ -65,6 +79,7 @@ fun JobAlertScreenNew(
         feedIcon = Icons.Rounded.WorkOutline,
         items = visibleItems,
         imageSeedPrefix = JobAlertFeedImageSeedPrefix,
+        loading = feedLoading && items.isEmpty(),
         onBack = onBack,
         onOpenItem = onOpenListing,
         categoryMenu = allCategories,
@@ -83,13 +98,25 @@ fun ExamAlertScreenNew(
     var items by remember { mutableStateOf(ManualExamAlertContent.items) }
     var menuCategories by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedCategory by remember { mutableStateOf<String?>(null) }
+    var feedLoading by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
-        items = ContentRepository.loadNewsFeed("exam")
-        menuCategories = ContentRepository.loadHomeContent()
-            ?.examCategoryMenu
-            ?.filter { it.isNotBlank() }
-            .orEmpty()
-            .distinctBy { it.lowercase() }
+        feedLoading = true
+        try {
+            coroutineScope {
+                val feedDeferred = async { ContentRepository.loadNewsFeed("exam") }
+                val menuDeferred = async {
+                    ContentRepository.loadHomeContent()
+                        ?.examCategoryMenu
+                        ?.filter { it.isNotBlank() }
+                        .orEmpty()
+                        .distinctBy { it.lowercase() }
+                }
+                items = feedDeferred.await()
+                menuCategories = menuDeferred.await()
+            }
+        } finally {
+            feedLoading = false
+        }
     }
     val derivedCategories = remember(items) {
         items.map { it.category.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
@@ -109,6 +136,7 @@ fun ExamAlertScreenNew(
         feedIcon = Icons.Rounded.CalendarMonth,
         items = visibleItems,
         imageSeedPrefix = ExamAlertFeedImageSeedPrefix,
+        loading = feedLoading && items.isEmpty(),
         onBack = onBack,
         onOpenItem = onOpenListing,
         categoryMenu = allCategories,

@@ -2,6 +2,8 @@ package com.freemocktest.app.newui.profile
 
 import android.content.Context
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Visibility
@@ -24,12 +27,15 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.ui.window.PopupProperties
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -43,6 +49,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import android.widget.Toast
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -52,9 +59,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.rememberDatePickerState
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.newui.auth.isValidEmail
@@ -63,8 +70,9 @@ import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneOffset
+import java.time.ZoneId
 import java.time.format.DateTimeParseException
 
 private enum class InlineMessageType { Success, Error }
@@ -78,7 +86,7 @@ private fun validateBirthdayForServer(raw: String): Pair<String?, String> {
     if (!profileBirthdayPattern.matches(s)) return null to "Use YYYY-MM-DD (e.g. 1998-03-21)"
     return try {
         val d = LocalDate.parse(s)
-        val today = LocalDate.now(ZoneOffset.UTC)
+        val today = LocalDate.now(ZoneId.systemDefault())
         if (d.isAfter(today)) return null to "Date cannot be in the future"
         s to ""
     } catch (_e: DateTimeParseException) {
@@ -504,7 +512,6 @@ fun ProfileEditGenderScreen(
     val scroll = rememberScrollState()
     val fieldShape = RoundedCornerShape(12.dp)
     val options = remember { listOf("Male", "Female", "Other") }
-    var genderMenuExpanded by remember { mutableStateOf(false) }
     var inlineMessage by remember { mutableStateOf("") }
     var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
     var submitted by remember { mutableStateOf(false) }
@@ -534,32 +541,37 @@ fun ProfileEditGenderScreen(
             }
             Spacer(Modifier.height(18.dp))
             if (!submitted) {
-                androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(
-                        onClick = { genderMenuExpanded = true },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = fieldShape,
-                    ) {
-                        Text(
-                            text = if (gender.trim().isBlank()) "Select Gender" else gender,
-                            color = p.textPrimary,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = genderMenuExpanded,
-                        onDismissRequest = { genderMenuExpanded = false },
-                        // Force popup above the anchor button.
-                        offset = DpOffset(x = 0.dp, y = (-176).dp),
-                        properties = PopupProperties(clippingEnabled = false),
-                        modifier = Modifier.fillMaxWidth(0.92f),
-                    ) {
-                        options.forEach { option ->
-                            DropdownMenuItem(
-                                text = { Text(option) },
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    options.forEach { option ->
+                        val selected = gender.trim().equals(option, ignoreCase = true)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(fieldShape)
+                                .border(1.dp, p.border.copy(alpha = 0.22f), fieldShape)
+                                .background(p.surface.copy(alpha = 0.55f))
+                                .clickable {
+                                    gender = option
+                                    if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
+                                }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                text = option,
+                                color = p.textPrimary,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f),
+                            )
+                            RadioButton(
+                                selected = selected,
                                 onClick = {
                                     gender = option
-                                    genderMenuExpanded = false
                                     if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
                                 },
                             )
@@ -651,6 +663,7 @@ fun ProfileEditBirthdayScreen(
     var inlineMessage by remember { mutableStateOf("") }
     var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
     var submitted by remember { mutableStateOf(false) }
+    var showDobPicker by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -677,7 +690,7 @@ fun ProfileEditBirthdayScreen(
             }
             Spacer(Modifier.height(10.dp))
             Text(
-                "Format: YYYY-MM-DD (UTC calendar). Must not be in the future.",
+                "Format: YYYY-MM-DD (device calendar). Cannot be in the future.",
                 color = p.textSecondary,
                 fontSize = 14.sp,
             )
@@ -695,6 +708,15 @@ fun ProfileEditBirthdayScreen(
                     colors = ProfileEditFieldColors(),
                     shape = fieldShape,
                 )
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = { showDobPicker = true },
+                    enabled = !submitted,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = fieldShape,
+                ) {
+                    Text("Pick date (calendar)", color = p.textPrimary, fontWeight = FontWeight.SemiBold)
+                }
                 if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
                     Spacer(Modifier.height(8.dp))
                     Text(
@@ -798,6 +820,96 @@ fun ProfileEditBirthdayScreen(
                 )
             }
         }
+    }
+
+    if (showDobPicker) {
+        DobPickerDialog(
+            initialIso = dateText,
+            onDismiss = { showDobPicker = false },
+            onPickIso = { iso ->
+                dateText = iso
+                if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
+                showDobPicker = false
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DobPickerDialog(
+    initialIso: String,
+    onDismiss: () -> Unit,
+    onPickIso: (String) -> Unit,
+) {
+    val p = mockTestPalette()
+    val ctx = LocalContext.current
+
+    fun millisToIso(millis: Long): String =
+        Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalDate().toString()
+
+    val selectableDates = remember {
+        object : SelectableDates {
+            override fun isSelectableDate(utcTimeMillis: Long): Boolean =
+                runCatching {
+                    val d = Instant.ofEpochMilli(utcTimeMillis).atZone(ZoneId.systemDefault()).toLocalDate()
+                    !d.isAfter(LocalDate.now())
+                }.getOrDefault(false)
+
+            override fun isSelectableYear(year: Int): Boolean =
+                year in 1900..LocalDate.now().year
+        }
+    }
+
+    val initialMillis = remember(initialIso) {
+        val trimmed = initialIso.trim()
+        val fromExisting =
+            if (profileBirthdayPattern.matches(trimmed)) {
+                runCatching { LocalDate.parse(trimmed).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() }.getOrNull()
+            } else {
+                null
+            }
+        fromExisting ?: run {
+            val todayIso = LocalDate.now().toString()
+            LocalDate.parse(todayIso).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        }
+    }
+
+    val state = rememberDatePickerState(
+        initialSelectedDateMillis = initialMillis,
+        selectableDates = selectableDates,
+    )
+
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val millis = state.selectedDateMillis
+                    if (millis == null) {
+                        onDismiss()
+                        return@TextButton
+                    }
+                    val iso = millisToIso(millis)
+                    val (serverVal, errMsg) = validateBirthdayForServer(iso)
+                    if (serverVal != null) {
+                        onPickIso(iso)
+                    } else {
+                        Toast.makeText(
+                            ctx,
+                            errMsg.ifBlank { "Invalid date" },
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                },
+            ) { Text("OK", color = p.accent) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = p.textSecondary) }
+        },
+        colors = DatePickerDefaults.colors(),
+    ) {
+        DatePicker(state = state)
     }
 }
 

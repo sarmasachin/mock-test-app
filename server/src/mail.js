@@ -271,6 +271,25 @@ async function sendPasswordResetOtp(opts) {
   });
 }
 
+async function sendAdminLoginOtp(opts) {
+  const to = String(opts?.to || '').trim();
+  const otp = String(opts?.otp || '').trim();
+  const subject = String(process.env.MAIL_SUBJECT_ADMIN_LOGIN || 'Your admin panel login code').trim();
+  const brand = String(process.env.MAIL_BRAND_NAME || 'MockTestApp').trim();
+  const tpl = buildOtpEmailTemplate({
+    title: 'Admin panel login code',
+    subtitle: 'Enter this code in the admin website to finish signing in. If you did not try to log in, change your password.',
+    otp,
+    brandName: brand,
+  });
+  await sendMail({
+    to,
+    subject,
+    text: tpl.text,
+    html: tpl.html,
+  });
+}
+
 async function sendEmailVerificationOtp(opts) {
   const to = String(opts?.to || '').trim();
   const otp = String(opts?.otp || '').trim();
@@ -432,6 +451,7 @@ module.exports = {
   isMailConfigured,
   mapSmtpSendErrorToClientMessage,
   sendPasswordResetOtp,
+  sendAdminLoginOtp,
   sendEmailVerificationOtp,
   sendWelcomeEmail,
   sendCompleteProfileReminderEmail,

@@ -357,8 +357,16 @@ object ContentRepository {
         }
     }
 
-    suspend fun loadHomeContent(): HomeContentRemote? = withContext(Dispatchers.IO) {
-        homeContentMemory?.let { return@withContext it }
+    /**
+     * Loads CMS home payload (banners, news slider, sections). Cached in-memory after first success
+     * unless [forceRefresh] clears the cache — use when Home must reflect server updates (slider, etc.).
+     */
+    suspend fun loadHomeContent(forceRefresh: Boolean = false): HomeContentRemote? = withContext(Dispatchers.IO) {
+        if (!forceRefresh) {
+            homeContentMemory?.let { return@withContext it }
+        } else {
+            homeContentMemory = null
+        }
         try {
             val content = RetrofitProvider.publicApi.getHomeContent().content ?: return@withContext null
             val sanitizedSections = content.sections

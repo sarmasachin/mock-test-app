@@ -10,13 +10,15 @@
     "e2e:auth-health": "node scripts/e2eAuthHealth.js",
     "e2e:google-auth": "node scripts/e2eGoogleAuth.js",
     "e2e:mail-live": "node scripts/e2eMailLive.js",
-    "e2e:mail-otp": "node scripts/e2eMailOtpOnly.js"
+    "e2e:mail-otp": "node scripts/e2eMailOtpOnly.js",
+    "e2e:shuffle-subjects": "node scripts/e2eShuffleSubjectWise.js"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
+    "bull": "^4.16.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",

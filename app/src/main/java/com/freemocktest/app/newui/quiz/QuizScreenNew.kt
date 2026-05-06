@@ -1,4 +1,7 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    kotlinx.coroutines.FlowPreview::class,
+)
 
 package com.freemocktest.app.newui.quiz
 
@@ -49,11 +52,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,19 +69,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freemocktest.app.BuildConfig
+import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.launch
 import java.time.Instant
 
 @Composable
 fun QuizScreenNew(
     modifier: Modifier = Modifier,
     testName: String,
+    /** Same key as attempt sync ([drawer email][user id]); resume only when this matches saved session. */
+    attemptsUserKey: String,
     onBack: () -> Unit,
     onSubmit: (Int, Int, Int, Int, Long) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     val defaultResultReleaseAtMs = remember {
         System.currentTimeMillis() + BuildConfig.RESULT_RELEASE_DELAY_HOURS * 60L * 60L * 1000L
     }
@@ -124,22 +137,115 @@ fun QuizScreenNew(
         configuredDurationSeconds = parseDurationSeconds(testCard?.durationLabel).coerceAtLeast(60)
     }
 
-    var remainingSeconds by remember(testName) { mutableIntStateOf(12 * 60) }
-    LaunchedEffect(testName, configuredDurationSeconds) {
-        remainingSeconds = configuredDurationSeconds.coerceAtLeast(60)
+    var testCatalogId by remember(testName) { mutableStateOf("") }
+    LaunchedEffect(testName) {
+        val card = ContentRepository.loadTestByTitle(testName)
+        testCatalogId = card?.id?.trim().orEmpty()
     }
+
+    var remainingSeconds by remember(testName) { mutableIntStateOf(12 * 60) }
+    var deadlineAtMillis by remember(testName) { mutableLongStateOf(0L) }
+    var quizSessionReady by remember(testName) { mutableStateOf(false) }
+    var quizSessionInitialized by remember(testName) { mutableStateOf(false) }
+
+    fun finishQuizExplicitExit() {
+        scope.launch {
+            AppPreferencesRepository.clearInProgressQuizNow()
+            onBack()
+        }
+    }
+
     val displayQuestions = remember(questions) { questions }
     val totalQuestions = displayQuestions.size
-    LaunchedEffect(testName, questionsLoaded, questions.size) {
+
+    LaunchedEffect(testName, attemptsUserKey, questionsLoaded, questions.size, configuredDurationSeconds) {
         if (!questionsLoaded || displayQuestions.isEmpty()) return@LaunchedEffect
-        while (remainingSeconds > 0) {
-            delay(1000)
-            remainingSeconds -= 1
+        if (quizSessionInitialized) return@LaunchedEffect
+        quizSessionInitialized = true
+        val trimmedName = testName.trim().ifBlank { "Test" }
+        val owner = attemptsUserKey.trim().ifBlank { "guest" }
+        val saved = AppPreferencesRepository.getResumableQuizSession(owner, trimmedName)
+        val now = System.currentTimeMillis()
+        if (saved != null) {
+            deadlineAtMillis = saved.deadlineAtMillis
+            questionNavigationMode = saved.questionNavigationMode
+            saved.resultReleaseAtMillis?.let { resultReleaseAtMs = it }
+            val maxIdx = (displayQuestions.size - 1).coerceAtLeast(0)
+            current = saved.currentQuestionIndex.coerceIn(0, maxIdx)
+            answers.clear()
+            saved.answers.forEach { (qi, ai) ->
+                if (qi >= 0 && qi < displayQuestions.size) answers[qi] = ai
+            }
+        } else {
+            val durSec = configuredDurationSeconds.coerceAtLeast(60)
+            deadlineAtMillis = now + durSec * 1000L
         }
+        quizSessionReady = true
+        runCatching {
+            AppPreferencesRepository.saveInProgressQuizNow(
+                AppPreferencesRepository.InProgressQuizState(
+                    ownerUserKey = owner,
+                    testName = trimmedName,
+                    testCatalogId = testCatalogId.trim(),
+                    deadlineAtMillis = deadlineAtMillis,
+                    currentQuestionIndex = current,
+                    answers = answers.toMap(),
+                    questionNavigationMode = questionNavigationMode,
+                    resultReleaseAtMillis = resultReleaseAtMs,
+                    configuredDurationSeconds = configuredDurationSeconds.coerceAtLeast(60),
+                ),
+            )
+        }
+    }
+
+    LaunchedEffect(quizSessionReady, deadlineAtMillis, questionsLoaded, questions.size, testName) {
+        if (!quizSessionReady || deadlineAtMillis <= 0L || !questionsLoaded || displayQuestions.isEmpty()) {
+            return@LaunchedEffect
+        }
+        while (true) {
+            val now = System.currentTimeMillis()
+            val rem = ((deadlineAtMillis - now) / 1000L).toInt().coerceAtLeast(0)
+            remainingSeconds = rem
+            if (rem <= 0) break
+            delay(1000)
+        }
+        AppPreferencesRepository.clearInProgressQuizNow()
         val correct = answers.count { (q, ans) -> displayQuestions.getOrNull(q)?.correctIndex == ans }
         val answered = answers.size
         val wrong = (answered - correct).coerceAtLeast(0)
         onSubmit(answered, correct, wrong, totalQuestions, resultReleaseAtMs ?: defaultResultReleaseAtMs)
+    }
+
+    LaunchedEffect(
+        quizSessionReady,
+        testName,
+        attemptsUserKey,
+        deadlineAtMillis,
+        questionNavigationMode,
+        resultReleaseAtMs,
+        configuredDurationSeconds,
+        testCatalogId,
+    ) {
+        if (!quizSessionReady || deadlineAtMillis <= 0L) return@LaunchedEffect
+        val trimmedName = testName.trim().ifBlank { "Test" }
+        val owner = attemptsUserKey.trim().ifBlank { "guest" }
+        snapshotFlow { current to answers.toMap() }
+            .debounce(400L)
+            .collectLatest { (idx, ans) ->
+                AppPreferencesRepository.saveInProgressQuizNow(
+                    AppPreferencesRepository.InProgressQuizState(
+                        ownerUserKey = owner,
+                        testName = trimmedName,
+                        testCatalogId = testCatalogId.trim(),
+                        deadlineAtMillis = deadlineAtMillis,
+                        currentQuestionIndex = idx,
+                        answers = ans,
+                        questionNavigationMode = questionNavigationMode,
+                        resultReleaseAtMillis = resultReleaseAtMs,
+                        configuredDurationSeconds = configuredDurationSeconds.coerceAtLeast(60),
+                    ),
+                )
+            }
     }
 
     val answeredCount = answers.size
@@ -181,7 +287,7 @@ fun QuizScreenNew(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { finishQuizExplicitExit() }) {
                         Icon(
                             imageVector = Icons.Rounded.ArrowBack,
                             contentDescription = "Back",
@@ -238,7 +344,7 @@ fun QuizScreenNew(
                         GhostButton(
                             text = "Back",
                             enabled = true,
-                            onClick = onBack,
+                            onClick = { finishQuizExplicitExit() },
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -364,7 +470,7 @@ fun QuizScreenNew(
                 Button(
                     onClick = {
                         showExitConfirm = false
-                        onBack()
+                        finishQuizExplicitExit()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = p.primaryButton),
                 ) {
@@ -396,10 +502,13 @@ fun QuizScreenNew(
             onCancel = { showSubmitConfirm = false },
             onSubmit = {
                 showSubmitConfirm = false
-                val correct = answers.count { (q, ans) -> displayQuestions.getOrNull(q)?.correctIndex == ans }
-                val answered = answers.size
-                val wrong = (answered - correct).coerceAtLeast(0)
-                onSubmit(answered, correct, wrong, totalQuestions, resultReleaseAtMs ?: defaultResultReleaseAtMs)
+                scope.launch {
+                    AppPreferencesRepository.clearInProgressQuizNow()
+                    val correct = answers.count { (q, ans) -> displayQuestions.getOrNull(q)?.correctIndex == ans }
+                    val answered = answers.size
+                    val wrong = (answered - correct).coerceAtLeast(0)
+                    onSubmit(answered, correct, wrong, totalQuestions, resultReleaseAtMs ?: defaultResultReleaseAtMs)
+                }
             },
         )
     }

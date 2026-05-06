@@ -1,6 +1,8 @@
 package com.freemocktest.app.newui.navigation
 
 import android.app.Activity
+import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
@@ -85,6 +87,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.launch
+import java.nio.charset.StandardCharsets
 
 private object MainTabRoutes {
     const val Home = "main/home"
@@ -191,6 +194,26 @@ fun MainBottomNavHost(
         }
     }
 
+    LaunchedEffect(attemptsUserKey, pendingResult?.publishAtMillis, navBackStackEntry?.destination?.id) {
+        if (pendingResult != null) return@LaunchedEffect
+        val snap = AppPreferencesRepository.peekValidInProgressQuiz(attemptsUserKey) ?: return@LaunchedEffect
+        val route = navBackStackEntry?.destination?.route.orEmpty()
+        val argName = navBackStackEntry?.arguments?.getString("name").orEmpty()
+        val quizRoutePattern = "${RoutesNew.QUIZ}/{name}"
+        if (route == quizRoutePattern && argName.isNotBlank()) {
+            val decoded = runCatching { Uri.decode(argName) }.getOrDefault(argName)
+            if (decoded.equals(snap.testName.trim(), ignoreCase = true)) return@LaunchedEffect
+        }
+        val encoded = Uri.encode(snap.testName.trim(), StandardCharsets.UTF_8.name())
+        runCatching {
+            mainNavController.navigate("${RoutesNew.QUIZ}/$encoded") {
+                launchSingleTop = true
+            }
+        }.onFailure { e ->
+            Log.w("MainBottomNavHost", "resume_quiz_navigate_failed", e)
+        }
+    }
+
     val tabs = remember {
         listOf(
             MainTabItem(MainTabRoutes.Home, "Home", Icons.Outlined.Home),
@@ -211,15 +234,38 @@ fun MainBottomNavHost(
 
     val openByPushRoute: (String) -> Unit = { rawRoute ->
         val route = rawRoute.trim()
-        when (route.lowercase()) {
-            "poll" -> mainNavController.navigate(RoutesNew.POLL) { launchSingleTop = true }
-            "notifications", "notification" -> mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
-            "menu_quiz", "daily", "daily_quiz" -> mainNavController.navigate(RoutesNew.MENU_QUIZ) { launchSingleTop = true }
-            "job_alert", "jobs" -> mainNavController.navigate(RoutesNew.JOB_ALERT) { launchSingleTop = true }
-            "exam_alert", "exams" -> mainNavController.navigate(RoutesNew.EXAM_ALERT) { launchSingleTop = true }
-            MainTabRoutes.News, "news" -> mainNavController.navigateMainTab(MainTabRoutes.News)
-            MainTabRoutes.Tests, "tests" -> mainNavController.navigateMainTab(MainTabRoutes.Tests)
-            MainTabRoutes.Home, "home" -> mainNavController.goToHomeTab()
+        val lower = route.lowercase()
+
+        fun navigateIfKnownDestination(target: String) {
+            val dest = target.trim()
+            if (dest.isBlank()) return
+            runCatching {
+                mainNavController.navigate(dest) { launchSingleTop = true }
+            }.onFailure {
+                // If route isn't registered, fall back to notifications inbox (legacy behavior).
+                mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
+            }
+        }
+
+        when {
+            lower == "poll" -> mainNavController.navigate(RoutesNew.POLL) { launchSingleTop = true }
+            lower == "notifications" || lower == "notification" ->
+                mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
+            lower == "menu_quiz" || lower == "daily" || lower == "daily_quiz" ->
+                mainNavController.navigate(RoutesNew.MENU_QUIZ) { launchSingleTop = true }
+            lower == "job_alert" || lower == "jobs" -> mainNavController.navigate(RoutesNew.JOB_ALERT) { launchSingleTop = true }
+            lower == "exam_alert" || lower == "exams" -> mainNavController.navigate(RoutesNew.EXAM_ALERT) { launchSingleTop = true }
+
+            // Tab routes (support both shorthand + actual NavHost routes).
+            lower == MainTabRoutes.News.lowercase() || lower == "news" -> mainNavController.navigateMainTab(MainTabRoutes.News)
+            lower == MainTabRoutes.Tests.lowercase() || lower == "tests" -> mainNavController.navigateMainTab(MainTabRoutes.Tests)
+            lower == MainTabRoutes.Home.lowercase() || lower == "home" -> mainNavController.goToHomeTab()
+
+            // Deep links to article/detail screens (send these from FCM `data.deepLink`).
+            lower.startsWith("${RoutesNew.NEWS_DETAIL.lowercase()}/") -> navigateIfKnownDestination(route)
+            lower.startsWith("${RoutesNew.JOB_ALERT_DETAIL.lowercase()}/") -> navigateIfKnownDestination(route)
+            lower.startsWith("${RoutesNew.EXAM_ALERT_DETAIL.lowercase()}/") -> navigateIfKnownDestination(route)
+
             else -> mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
         }
     }
@@ -502,6 +548,7 @@ fun MainBottomNavHost(
                 }
                 QuizScreenNew(
                     testName = name.ifBlank { "Test" },
+                    attemptsUserKey = attemptsUserKey,
                     onBack = { mainNavController.popBackOrHome() },
                     onSubmit = { answered, correct, wrong, total, publishAt ->
                         val attemptsUserKey = drawerProfile.emailLine.ifBlank {

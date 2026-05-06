@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.freemocktest.app.data.AppPreferencesRepository
+import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlin.math.abs
@@ -93,6 +94,11 @@ fun BookmarksScreenNew(
     var selectedTab by remember { mutableStateOf(tabs.first()) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var showPdfHeader by remember { mutableStateOf(true) }
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == CalculatorTabName) {
+            AuthRepository.syncProfileFromServer()
+        }
+    }
     BackHandler(enabled = selectedTab == PdfToolTabName && (webViewRef?.canGoBack() == true)) {
         webViewRef?.goBack()
     }

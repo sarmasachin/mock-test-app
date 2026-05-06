@@ -20,6 +20,7 @@ const adminRouter = require('./routes/admin');
 const pollsRouter = require('./routes/polls');
 const { pool } = require('./db');
 const { clampMcqCorrectIndex } = require('./mcqShuffle');
+const { selectQuestionsFromSubcategoryPool } = require('./lib/subcategoryPoolSelection');
 const { sendPushToToken } = require('./notificationDispatch');
 const {
   isMailConfigured,
@@ -197,6 +198,10 @@ async function ensureOptionalColumns() {
        ADD COLUMN IF NOT EXISTS is_published BOOLEAN NOT NULL DEFAULT true`,
     );
     await pool.query(
+      `ALTER TABLE questions
+       ADD COLUMN IF NOT EXISTS subject_key VARCHAR(64) NOT NULL DEFAULT ''`,
+    );
+    await pool.query(
       `ALTER TABLE users
        ADD COLUMN IF NOT EXISTS date_of_birth DATE`,
     );
@@ -214,6 +219,32 @@ async function ensureOptionalColumns() {
       `ALTER TABLE news_articles
        DROP CONSTRAINT IF EXISTS news_articles_feed_kind_check`,
     );
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS user_login_devices (
+         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         fingerprint VARCHAR(128) NOT NULL,
+         first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+         last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+         PRIMARY KEY (user_id, fingerprint)
+       )`,
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_user_login_devices_user ON user_login_devices (user_id)`,
+    );
+    await pool.query(`ALTER TABLE user_one_time_tokens DROP CONSTRAINT IF EXISTS user_one_time_tokens_purpose_check`);
+    await pool.query(`
+      ALTER TABLE user_one_time_tokens
+      ADD CONSTRAINT user_one_time_tokens_purpose_check
+      CHECK (
+        purpose IN (
+          'email_verify',
+          'password_reset',
+          'phone_verify',
+          'admin_password_reset',
+          'admin_login'
+        )
+      )
+    `);
   } catch (e) {
     if (e && e.code === '42P01') return;
     console.error('optional_columns_init_error', e);
@@ -276,7 +307,8 @@ async function regenerateTestFromSubcategoryPool(testId) {
   if (!String(base.subcategory || '').trim()) return;
   const needed = Math.max(1, Number(base.question_count || 0));
   const poolRes = await pool.query(
-    `SELECT q.id, q.stem, q.choice_a, q.choice_b, q.choice_c, q.choice_d, q.correct_index, q.explanation
+    `SELECT q.id, q.stem, q.choice_a, q.choice_b, q.choice_c, q.choice_d, q.correct_index, q.explanation, q.created_at,
+            COALESCE(q.subject_key, '') AS subject_key
      FROM questions q
      INNER JOIN tests t ON t.id = q.test_id
      WHERE t.subcategory = $1
@@ -285,7 +317,10 @@ async function regenerateTestFromSubcategoryPool(testId) {
   );
   const poolRows = poolRes.rows || [];
   if (!poolRows.length) return;
-  const selected = shuffleArray(poolRows).slice(0, Math.min(needed, poolRows.length));
+  const selected = selectQuestionsFromSubcategoryPool(poolRows, needed, {
+    newRatio: 0.8,
+    newWindowDays: 7,
+  });
   if (!selected.length) return;
   const client = await pool.connect();
   try {
@@ -294,10 +329,13 @@ async function regenerateTestFromSubcategoryPool(testId) {
     let position = 1;
     for (const row of selected) {
       const randomized = shuffleQuestionOptions(row);
+      const subjectKey = String(row.subject_key || '')
+        .trim()
+        .slice(0, 64);
       await client.query(
         `INSERT INTO questions (
-           test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation
-         ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9)`,
+           test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published, subject_key
+         ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           testId,
           position,
@@ -308,6 +346,8 @@ async function regenerateTestFromSubcategoryPool(testId) {
           randomized.choice_d,
           randomized.correct_index,
           randomized.explanation,
+          true,
+          subjectKey,
         ],
       );
       position += 1;
@@ -1533,8 +1573,65 @@ app.use((err, _req, res, _next) => {
 });
 
 const port = parseInt(process.env.PORT || '3000', 10);
+
+/** Set by app.listen — used for graceful SIGTERM/SIGINT shutdown. */
+let httpServer = null;
+let shutdownStarted = false;
+
+function gracefulShutdown(signal) {
+  if (shutdownStarted) {
+    console.error(`Received ${signal} again; forcing exit`);
+    process.exit(1);
+  }
+  shutdownStarted = true;
+  console.log(`Received ${signal}, shutting down gracefully...`);
+
+  const timeoutMs = Math.max(5000, Number(process.env.SHUTDOWN_TIMEOUT_MS || 30000));
+  const forceExit = setTimeout(() => {
+    console.error('Graceful shutdown timed out; exiting with code 1');
+    process.exit(1);
+  }, timeoutMs);
+
+  const cleanup = async () => {
+    const { closeAttemptSubmitQueue } = require('./queues/attemptSubmitQueue');
+    await closeAttemptSubmitQueue();
+    await pool.end();
+  };
+
+  const finishOk = () => {
+    clearTimeout(forceExit);
+    console.log('Graceful shutdown complete');
+    process.exit(0);
+  };
+
+  const finishErr = (err) => {
+    console.error(err);
+    clearTimeout(forceExit);
+    process.exit(1);
+  };
+
+  if (!httpServer || !httpServer.listening) {
+    cleanup().then(finishOk).catch(finishErr);
+    return;
+  }
+
+  httpServer.close((closeErr) => {
+    if (closeErr) console.error('httpServer.close', closeErr);
+    cleanup().then(finishOk).catch(finishErr);
+  });
+}
+
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+
 ensureOptionalColumns().finally(() => {
-  app.listen(port, () => {
+  try {
+    const { warmupAttemptSubmitQueue } = require('./queues/attemptSubmitQueue');
+    warmupAttemptSubmitQueue();
+  } catch (e) {
+    console.error('attempt_submit_queue_warmup', e && e.message);
+  }
+  httpServer = app.listen(port, () => {
     console.log(`MockTestApp API listening on http://0.0.0.0:${port}`);
   });
 });

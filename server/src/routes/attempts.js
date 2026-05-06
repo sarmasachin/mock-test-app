@@ -2,6 +2,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
+const { insertAttemptRow } = require('../queues/attemptSubmitQueue');
 
 const router = express.Router();
 const submitWindowMs = Math.max(1000, Number(process.env.ATTEMPT_SUBMIT_WINDOW_MS || 10000));
@@ -97,15 +98,15 @@ router.post('/', async (req, res) => {
       return res.status(rate.status).json({ error: rate.error });
     }
 
-    const ins = await pool.query(
-      `INSERT INTO test_attempts (user_id, test_name, correct, total, completed_at, test_catalog_id, client_submission_id)
-       VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid, $7)
-       ON CONFLICT (user_id, test_catalog_id, client_submission_id)
-       DO UPDATE SET completed_at = EXCLUDED.completed_at
-       RETURNING id, test_name, correct, total, completed_at, test_catalog_id`,
-      [req.userId, name, c, t, completedAt.toISOString(), catalog, submissionId],
-    );
-    const row = ins.rows[0];
+    const row = await insertAttemptRow({
+      userId: req.userId,
+      name,
+      c,
+      t,
+      completedAtIso: completedAt.toISOString(),
+      catalog,
+      submissionId,
+    });
     return res.status(201).json({
       id: String(row.id),
       testName: row.test_name,

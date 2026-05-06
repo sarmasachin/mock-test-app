@@ -15,6 +15,11 @@ const {
   processAdminImageUpload,
 } = require('../lib/adminImageUpload');
 const { clampMcqCorrectIndex } = require('../mcqShuffle');
+const {
+  normalizeSubjectSectionsInput,
+  parseQuestionSubjectKey,
+} = require('../util/subjectSections');
+const { selectQuestionsFromSubcategoryPool } = require('../lib/subcategoryPoolSelection');
 
 const router = express.Router();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -689,6 +694,28 @@ async function setJsonSetting(settingKey, value, userId) {
   );
 }
 
+async function loadSubjectSectionsForTest(testId) {
+  const advancedMap = await getJsonSetting('testAdvancedConfigs', {});
+  return normalizeSubjectSectionsInput((advancedMap[testId] || {}).subjectSections || []);
+}
+
+/** Returns error message string or null when OK. */
+async function assertQuestionSubjectAllowed(testId, subjectKey) {
+  const sections = await loadSubjectSectionsForTest(testId);
+  if (!sections.length) {
+    return null;
+  }
+  const sk = String(subjectKey || '').trim();
+  if (!sk) {
+    return 'This test defines subject sections — each question must include subjectKey matching one of those keys.';
+  }
+  const allowed = new Set(sections.map((s) => s.key));
+  if (!allowed.has(sk)) {
+    return `subjectKey must be one of: ${[...allowed].sort().join(', ')}`;
+  }
+  return null;
+}
+
 function normalizeDailyQuizItem(raw, fallbackId) {
   const src = raw && typeof raw === 'object' ? raw : {};
   const id = String(src.id || fallbackId || '').trim() || `dq-${Date.now()}-${Math.floor(Math.random() * 9999)}`;
@@ -805,6 +832,17 @@ async function sendContentAnnouncementEmails({
   }
 }
 
+/** Bulk user emails are slow; admin-web uses a 15s axios timeout. Schedule mail after this delay (ms) so INSERT + JSON saves complete before HTTP responds. */
+const CONTENT_ANNOUNCEMENT_EMAIL_DELAY_MS = 5 * 60 * 1000;
+
+function scheduleContentAnnouncementEmails(payload) {
+  setTimeout(() => {
+    sendContentAnnouncementEmails(payload).catch((err) => {
+      console.error('content_announcement_emails_failed', err && (err.message || err));
+    });
+  }, CONTENT_ANNOUNCEMENT_EMAIL_DELAY_MS);
+}
+
 function shuffleArray(arr) {
   const list = [...arr];
   for (let i = list.length - 1; i > 0; i -= 1) {
@@ -863,7 +901,8 @@ async function regenerateTestFromSubcategoryPool(testId) {
   if (!base || !String(base.subcategory || '').trim()) return { regenerated: false, reason: 'missing_subcategory' };
   const needed = Math.max(1, Number(base.question_count || 0));
   const poolRes = await pool.query(
-    `SELECT q.id, q.stem, q.choice_a, q.choice_b, q.choice_c, q.choice_d, q.correct_index, q.explanation, q.created_at
+    `SELECT q.id, q.stem, q.choice_a, q.choice_b, q.choice_c, q.choice_d, q.correct_index, q.explanation, q.created_at,
+            COALESCE(q.subject_key, '') AS subject_key
      FROM questions q
      INNER JOIN tests t ON t.id = q.test_id
      WHERE t.subcategory = $1
@@ -872,44 +911,11 @@ async function regenerateTestFromSubcategoryPool(testId) {
   );
   const poolRows = poolRes.rows || [];
   if (!poolRows.length) return { regenerated: false, reason: 'empty_pool' };
-  const maxPick = Math.min(needed, poolRows.length);
-  const newWindowDays = 7;
-  const newRatio = 0.7;
-  const cutoffMs = Date.now() - newWindowDays * 24 * 60 * 60 * 1000;
-  const newRows = [];
-  const oldRows = [];
-  for (const row of poolRows) {
-    const createdAtMs = Date.parse(String(row.created_at || ''));
-    if (Number.isFinite(createdAtMs) && createdAtMs >= cutoffMs) {
-      newRows.push(row);
-    } else {
-      oldRows.push(row);
-    }
-  }
-
-  let targetNew = Math.min(newRows.length, Math.round(maxPick * newRatio));
-  let targetOld = maxPick - targetNew;
-
-  if (oldRows.length < targetOld) {
-    const oldDeficit = targetOld - oldRows.length;
-    targetOld = oldRows.length;
-    targetNew = Math.min(newRows.length, targetNew + oldDeficit);
-  }
-  if (newRows.length < targetNew) {
-    const newDeficit = targetNew - newRows.length;
-    targetNew = newRows.length;
-    targetOld = Math.min(oldRows.length, targetOld + newDeficit);
-  }
-
-  const selectedNew = shuffleArray(newRows).slice(0, targetNew);
-  const selectedOld = shuffleArray(oldRows).slice(0, targetOld);
-  let selected = shuffleArray([...selectedNew, ...selectedOld]).slice(0, maxPick);
-
-  if (selected.length < maxPick) {
-    const pickedIds = new Set(selected.map((x) => String(x.id)));
-    const remaining = shuffleArray(poolRows).filter((x) => !pickedIds.has(String(x.id)));
-    selected = [...selected, ...remaining.slice(0, maxPick - selected.length)];
-  }
+  /** Default 80% from last 7d ("new"), 20% older; env REGENERATE_NEW_RATIO / REGENERATE_NEW_WINDOW_DAYS override. */
+  const selected = selectQuestionsFromSubcategoryPool(poolRows, needed, {
+    newRatio: 0.8,
+    newWindowDays: 7,
+  });
 
   if (!selected.length) return { regenerated: false, reason: 'no_selection' };
   const client = await pool.connect();
@@ -919,10 +925,13 @@ async function regenerateTestFromSubcategoryPool(testId) {
     let position = 1;
     for (const row of selected) {
       const randomized = shuffleQuestionOptions(row);
+      const subjectKey = String(row.subject_key || '')
+        .trim()
+        .slice(0, 64);
       await client.query(
         `INSERT INTO questions (
-           test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation
-         ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9)`,
+           test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published, subject_key
+         ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           testId,
           position,
@@ -933,6 +942,8 @@ async function regenerateTestFromSubcategoryPool(testId) {
           randomized.choice_d,
           randomized.correct_index,
           randomized.explanation,
+          true,
+          subjectKey,
         ],
       );
       position += 1;
@@ -1189,8 +1200,25 @@ function normalizeQuestionPayload(body, options = {}) {
   if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3) {
     return { error: 'correctIndex must be 0, 1, 2, or 3' };
   }
+  const subjectKeyRaw =
+    payload.subjectKey !== undefined ? payload.subjectKey : payload.subject_key;
+  const skParsed = parseQuestionSubjectKey(subjectKeyRaw);
+  if (skParsed.error) {
+    return { error: skParsed.error };
+  }
   return {
-    value: { position, stem, choiceA, choiceB, choiceC, choiceD, correctIndex, explanation, isPublished },
+    value: {
+      position,
+      stem,
+      choiceA,
+      choiceB,
+      choiceC,
+      choiceD,
+      correctIndex,
+      explanation,
+      isPublished,
+      subjectKey: skParsed.value,
+    },
   };
 }
 
@@ -1239,6 +1267,11 @@ function parseBulkQuestionRows(rawRows) {
     );
     const explanation = String(x.explanation || '').trim();
     const isPublished = x.isPublished !== false && x.is_published !== false;
+    const skSrc = x.subjectKey !== undefined ? x.subjectKey : x.subject_key;
+    const skParsed = parseQuestionSubjectKey(skSrc === undefined ? '' : skSrc);
+    if (skParsed.error) {
+      return { error: `Row ${idx + 1}: ${skParsed.error}` };
+    }
     return {
       rowNo: idx + 1,
       position: positionRaw,
@@ -1250,8 +1283,13 @@ function parseBulkQuestionRows(rawRows) {
       correctIndex,
       explanation,
       isPublished,
+      subjectKey: skParsed.value,
     };
   });
+  const bulkParseErr = rows.find((r) => r && typeof r.error === 'string');
+  if (bulkParseErr) {
+    return { error: bulkParseErr.error };
+  }
   const invalid = rows.find(
     (r) =>
       !r.stem ||
@@ -1306,6 +1344,33 @@ function normalizeTestAdvancedConfig(rawValue) {
     return { error: 'advancedConfig.notifyBeforeMinutes must be an integer between 0 and 10080' };
   }
 
+  let subjectSections = [];
+  if (raw.subjectSections !== undefined && raw.subjectSections !== null) {
+    if (!Array.isArray(raw.subjectSections)) {
+      return { error: 'advancedConfig.subjectSections must be an array' };
+    }
+    if (raw.subjectSections.length > 40) {
+      return { error: 'advancedConfig.subjectSections allows at most 40 entries' };
+    }
+    for (let i = 0; i < raw.subjectSections.length; i += 1) {
+      const entry = raw.subjectSections[i];
+      if (!entry || typeof entry !== 'object') {
+        return { error: `advancedConfig.subjectSections[${i}] must be an object` };
+      }
+      const keyRaw = String(entry.key ?? '').trim();
+      if (!keyRaw) {
+        return { error: `advancedConfig.subjectSections[${i}].key is required` };
+      }
+    }
+    subjectSections = normalizeSubjectSectionsInput(raw.subjectSections);
+    if (subjectSections.length !== raw.subjectSections.length) {
+      return {
+        error:
+          'Each subject section needs a valid key (lowercase letters, digits, underscore, hyphen; max 40 chars). Keys must be unique.',
+      };
+    }
+  }
+
   return {
     value: {
       publishAt,
@@ -1321,6 +1386,7 @@ function normalizeTestAdvancedConfig(rawValue) {
       copyPasteBlocked: raw.copyPasteBlocked === true,
       notifyOnPublish: raw.notifyOnPublish !== false,
       sendEmailOnPublish: raw.sendEmailOnPublish === true,
+      subjectSections,
     },
   };
 }
@@ -2452,7 +2518,7 @@ router.post('/tests', async (req, res) => {
         });
       }
       if (advancedConfig.sendEmailOnPublish === true) {
-        await sendContentAnnouncementEmails({
+        scheduleContentAnnouncementEmails({
           kind: 'mocktest',
           title: data.title,
           message: `${data.title} is now available. Open app and attempt it now.`,
@@ -2559,7 +2625,7 @@ router.patch('/tests/:id', async (req, res) => {
         });
       }
       if (advancedConfig.sendEmailOnPublish === true) {
-        await sendContentAnnouncementEmails({
+        scheduleContentAnnouncementEmails({
           kind: 'mocktest',
           title: rows[0].title,
           message: `${rows[0].title} is now live. Start your attempt and track your score.`,
@@ -2605,7 +2671,8 @@ router.get('/tests/:id/questions', async (req, res) => {
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid test id' });
   try {
     const { rows } = await pool.query(
-      `SELECT id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published
+      `SELECT id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published,
+              COALESCE(subject_key, '') AS subject_key
        FROM questions
        WHERE test_id = $1::uuid
        ORDER BY position ASC`,
@@ -2625,6 +2692,8 @@ router.post('/tests/:id/questions', async (req, res) => {
   if (parsed.error) return res.status(400).json({ error: parsed.error });
   const q = parsed.value;
   try {
+    const subjectErr = await assertQuestionSubjectAllowed(id, q.subjectKey);
+    if (subjectErr) return res.status(400).json({ error: subjectErr });
     if (await hasDuplicateStemInTest(id, q.stem)) {
       return res.status(409).json({ error: 'Duplicate question detected for this test' });
     }
@@ -2635,10 +2704,22 @@ router.post('/tests/:id/questions', async (req, res) => {
       try {
         const { rows } = await pool.query(
           `INSERT INTO questions (
-             test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published
-           ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           RETURNING id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published`,
-          [id, finalPosition, q.stem, q.choiceA, q.choiceB, q.choiceC, q.choiceD, q.correctIndex, q.explanation, q.isPublished],
+             test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published, subject_key
+           ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           RETURNING id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published, subject_key`,
+          [
+            id,
+            finalPosition,
+            q.stem,
+            q.choiceA,
+            q.choiceB,
+            q.choiceC,
+            q.choiceD,
+            q.correctIndex,
+            q.explanation,
+            q.isPublished,
+            q.subjectKey || '',
+          ],
         );
         created = rows[0];
         break;
@@ -2681,6 +2762,8 @@ router.post('/tests/:id/questions/import', async (req, res) => {
       if (mode === 'append' && existingStemSet.has(key)) {
         return res.status(409).json({ error: `Duplicate question exists in this test at row ${row.rowNo}` });
       }
+      const skErr = await assertQuestionSubjectAllowed(id, row.subjectKey);
+      if (skErr) return res.status(400).json({ error: `${skErr} (row ${row.rowNo})` });
     }
     const client = await pool.connect();
     try {
@@ -2706,8 +2789,8 @@ router.post('/tests/:id/questions/import', async (req, res) => {
         usedPositions.add(finalPosition);
         await client.query(
           `INSERT INTO questions (
-             test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published
-           ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+             test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published, subject_key
+           ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
           [
             id,
             finalPosition,
@@ -2719,6 +2802,7 @@ router.post('/tests/:id/questions/import', async (req, res) => {
             row.correctIndex,
             row.explanation,
             row.isPublished,
+            row.subjectKey || '',
           ],
         );
         inserted += 1;
@@ -2746,15 +2830,29 @@ router.patch('/tests/:id/questions/:questionId', async (req, res) => {
   if (parsed.error) return res.status(400).json({ error: parsed.error });
   const q = parsed.value;
   try {
+    const subjectErr = await assertQuestionSubjectAllowed(id, q.subjectKey);
+    if (subjectErr) return res.status(400).json({ error: subjectErr });
     if (await hasDuplicateStemInTest(id, q.stem, qid)) {
       return res.status(409).json({ error: 'Duplicate question detected for this test' });
     }
     const { rows } = await pool.query(
       `UPDATE questions
-       SET stem = $1, choice_a = $2, choice_b = $3, choice_c = $4, choice_d = $5, correct_index = $6, explanation = $7, is_published = $8
-       WHERE id = $9 AND test_id = $10::uuid
-       RETURNING id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published`,
-      [q.stem, q.choiceA, q.choiceB, q.choiceC, q.choiceD, q.correctIndex, q.explanation, q.isPublished, qid, id],
+       SET stem = $1, choice_a = $2, choice_b = $3, choice_c = $4, choice_d = $5, correct_index = $6, explanation = $7, is_published = $8, subject_key = $9
+       WHERE id = $10 AND test_id = $11::uuid
+       RETURNING id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published, subject_key`,
+      [
+        q.stem,
+        q.choiceA,
+        q.choiceB,
+        q.choiceC,
+        q.choiceD,
+        q.correctIndex,
+        q.explanation,
+        q.isPublished,
+        q.subjectKey || '',
+        qid,
+        id,
+      ],
     );
     if (!rows[0]) return res.status(404).json({ error: 'Question not found' });
     return res.json({ item: rows[0] });
@@ -3138,7 +3236,7 @@ router.post('/articles', async (req, res) => {
       if (announcementOn) {
         const kind = feedKind === 'job' ? 'job' : feedKind === 'exam' ? 'exam' : null;
         if (kind) {
-          await sendContentAnnouncementEmails({
+          scheduleContentAnnouncementEmails({
             kind,
             title: headline,
             message: String(summary || category || 'A new update is now available for you.'),
@@ -3220,7 +3318,7 @@ router.patch('/articles/:id', async (req, res) => {
       if (announcementOn) {
         const kind = feedKind === 'job' ? 'job' : feedKind === 'exam' ? 'exam' : null;
         if (kind) {
-          await sendContentAnnouncementEmails({
+          scheduleContentAnnouncementEmails({
             kind,
             title: rows[0].headline,
             message: String(body.summary || body.category || 'A new update is now available for you.'),

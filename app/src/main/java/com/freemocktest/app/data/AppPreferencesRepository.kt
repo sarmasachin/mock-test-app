@@ -69,6 +69,8 @@ object AppPreferencesRepository {
     private val keyPendingResultWrong = intPreferencesKey("pending_result_wrong")
     private val keyPendingResultTotal = intPreferencesKey("pending_result_total")
     private val keyAppliedTestSeries = stringPreferencesKey("applied_test_series")
+    /** Single JSON blob: recover quiz after process death / swipe away only (cleared on explicit back/submit). */
+    private val keyInProgressQuizJson = stringPreferencesKey("in_progress_quiz_json")
     private val keyAuthBootstrapState = stringPreferencesKey("auth_bootstrap_state")
     private val keySeenNotificationIds = stringPreferencesKey("seen_notification_ids")
     // Keep "seen" state user-scoped. If a different user signs in on the same device,
@@ -141,6 +143,22 @@ object AppPreferencesRepository {
         val testName: String,
         val unlockAtMillis: Long,
         val expiresAtMillis: Long,
+    )
+
+    /**
+     * In-memory shape for a resumable quiz session (persisted as JSON under [keyInProgressQuizJson]).
+     * [deadlineAtMillis] is wall-clock end time; remaining time = deadline - now.
+     */
+    data class InProgressQuizState(
+        val ownerUserKey: String,
+        val testName: String,
+        val testCatalogId: String,
+        val deadlineAtMillis: Long,
+        val currentQuestionIndex: Int,
+        val answers: Map<Int, Int>,
+        val questionNavigationMode: String,
+        val resultReleaseAtMillis: Long?,
+        val configuredDurationSeconds: Int,
     )
 
     val drawerUserProfile: Flow<DrawerUserProfile>
@@ -262,7 +280,7 @@ object AppPreferencesRepository {
                 prefs[keyProfileEmail] = email.trim()
                 prefs[keyProfileMobile] = mobile.trim().filter(Char::isDigit).take(10)
                 prefs[keyProfileGender] = prefs[keyProfileGender].orEmpty()
-                prefs[keyProfileBirthdayDate] = birthdayDate?.trim().orEmpty()
+                prefs[keyProfileBirthdayDate] = normalizeStoredBirthdayDate(birthdayDate)
                 prefs[keyProfileContact] = email.trim()
                 if (isSixDigitPublicId(sixDigitPublicId)) {
                     prefs[keyProfileUserCode] = sixDigitPublicId
@@ -271,6 +289,20 @@ object AppPreferencesRepository {
                 prefs[keyEmailVerified] = if (isEmailVerified) 1 else 0
             }
         }.onFailure { Log.e(TAG, "applyServerAuthProfile failed", it) }
+    }
+
+    /**
+     * Normalizes server-provided DOB into strict `YYYY-MM-DD` for local caching/UI.
+     * Handles occasional ISO-datetime strings (`2000-05-06T00:00:00.000Z`) by extracting the date part.
+     */
+    private fun normalizeStoredBirthdayDate(raw: String?): String {
+        val s = raw?.trim().orEmpty()
+        if (s.isEmpty()) return ""
+        val isoDay = Regex("^\\d{4}-\\d{2}-\\d{2}$")
+        if (isoDay.matches(s)) return s
+        val m = Regex("^(\\d{4}-\\d{2}-\\d{2})").find(s)
+        val extracted = m?.groupValues?.getOrNull(1).orEmpty()
+        return if (isoDay.matches(extracted)) extracted else ""
     }
 
     /**
@@ -560,6 +592,59 @@ object AppPreferencesRepository {
         }
     }
 
+    suspend fun saveInProgressQuizNow(state: InProgressQuizState) {
+        if (!::appContext.isInitialized) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyInProgressQuizJson] = encodeInProgressQuiz(state)
+            }
+        }.onFailure { Log.e(TAG, "saveInProgressQuizNow failed", it) }
+    }
+
+    suspend fun clearInProgressQuizNow() {
+        if (!::appContext.isInitialized) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyInProgressQuizJson] = ""
+            }
+        }.onFailure { Log.e(TAG, "clearInProgressQuizNow failed", it) }
+    }
+
+    /**
+     * Valid saved quiz for [currentOwnerUserKey] with a future deadline (cold-start auto navigation).
+     */
+    suspend fun peekValidInProgressQuiz(currentOwnerUserKey: String): InProgressQuizState? {
+        if (!::appContext.isInitialized) return null
+        val raw = runCatching { store().data.first()[keyInProgressQuizJson].orEmpty().trim() }.getOrDefault("")
+        if (raw.isBlank()) return null
+        val parsed = parseInProgressQuiz(raw) ?: run {
+            clearInProgressQuizNow()
+            return null
+        }
+        val owner = currentOwnerUserKey.trim().ifBlank { "guest" }
+        if (!parsed.ownerUserKey.equals(owner, ignoreCase = true)) {
+            clearInProgressQuizNow()
+            return null
+        }
+        val now = System.currentTimeMillis()
+        if (parsed.deadlineAtMillis <= now) {
+            clearInProgressQuizNow()
+            return null
+        }
+        if (parsed.testName.isBlank()) {
+            clearInProgressQuizNow()
+            return null
+        }
+        return parsed
+    }
+
+    /** Resume payload only when saved session matches this test title (same user + deadline). */
+    suspend fun getResumableQuizSession(currentOwnerUserKey: String, testName: String): InProgressQuizState? {
+        val want = testName.trim().ifBlank { return null }
+        val parsed = peekValidInProgressQuiz(currentOwnerUserKey) ?: return null
+        return if (parsed.testName.equals(want, ignoreCase = true)) parsed else null
+    }
+
     fun cacheFeedUrl(kind: FeedKind, url: String) {
         if (!::appContext.isInitialized) return
         scope.launch {
@@ -649,6 +734,67 @@ object AppPreferencesRepository {
             )
         }
         return arr.toString()
+    }
+
+    private fun encodeInProgressQuiz(state: InProgressQuizState): String {
+        val o = JSONObject()
+        o.put("ownerUserKey", state.ownerUserKey)
+        o.put("testName", state.testName)
+        o.put("testCatalogId", state.testCatalogId)
+        o.put("deadlineAtMillis", state.deadlineAtMillis)
+        o.put("currentQuestionIndex", state.currentQuestionIndex)
+        o.put("questionNavigationMode", state.questionNavigationMode)
+        o.put("configuredDurationSeconds", state.configuredDurationSeconds)
+        val rr = state.resultReleaseAtMillis
+        if (rr != null && rr > 0L) {
+            o.put("resultReleaseAtMillis", rr)
+        }
+        val ansObj = JSONObject()
+        state.answers.forEach { (k, v) -> ansObj.put(k.toString(), v) }
+        o.put("answers", ansObj)
+        return o.toString()
+    }
+
+    private fun parseInProgressQuiz(raw: String): InProgressQuizState? {
+        return runCatching {
+            val o = JSONObject(raw)
+            val owner = o.optString("ownerUserKey", "").trim().ifBlank { return@runCatching null }
+            val testName = o.optString("testName", "").trim().ifBlank { return@runCatching null }
+            val catalogId = o.optString("testCatalogId", "").trim()
+            val deadline = o.optLong("deadlineAtMillis", 0L)
+            if (deadline <= 0L) return@runCatching null
+            val currentIdx = o.optInt("currentQuestionIndex", 0).coerceAtLeast(0)
+            val navMode = o.optString("questionNavigationMode", "sequential").trim()
+                .takeIf { it == "free" || it == "sequential" } ?: "sequential"
+            val durationSec = o.optInt("configuredDurationSeconds", 12 * 60).coerceAtLeast(60)
+            val resultRelease =
+                if (o.has("resultReleaseAtMillis")) {
+                    o.optLong("resultReleaseAtMillis", 0L).takeIf { it > 0L }
+                } else {
+                    null
+                }
+            val ansObj = o.optJSONObject("answers") ?: JSONObject()
+            val answers = buildMap {
+                val keys = ansObj.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val qi = key.toIntOrNull() ?: continue
+                    val ai = ansObj.optInt(key, -1)
+                    if (ai >= 0) put(qi, ai)
+                }
+            }
+            InProgressQuizState(
+                ownerUserKey = owner,
+                testName = testName,
+                testCatalogId = catalogId,
+                deadlineAtMillis = deadline,
+                currentQuestionIndex = currentIdx,
+                answers = answers,
+                questionNavigationMode = navMode,
+                resultReleaseAtMillis = resultRelease,
+                configuredDurationSeconds = durationSec,
+            )
+        }.getOrNull()
     }
 
     private fun parseStringSet(raw: String?): Set<String> {
@@ -802,6 +948,7 @@ object AppPreferencesRepository {
                 prefs[keyPendingResultViewed] = 1
                 prefs[keyAppliedTestSeries] = "[]"
                 prefs[keyAuthBootstrapState] = RestoreSessionStatus.LoggedOut.name
+                prefs[keyInProgressQuizJson] = ""
                 // Reset ownership so the next signed-in user starts fresh for unread badges.
                 prefs[keySeenNotificationIdsOwner] = ""
                 prefs[keySeenPollIdsOwner] = ""

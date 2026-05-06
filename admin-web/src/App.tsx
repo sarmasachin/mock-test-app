@@ -72,6 +72,8 @@ type Tab =
   | 'users';
 type TestKind = 'mock' | 'quiz';
 type RangeKind = 'weekly' | 'monthly' | 'all';
+type SubjectSectionRow = { key: string; label: string };
+
 type TestAdvancedConfig = {
   publishAt: string;
   unpublishAt: string;
@@ -86,6 +88,8 @@ type TestAdvancedConfig = {
   copyPasteBlocked: boolean;
   notifyOnPublish: boolean;
   sendEmailOnPublish: boolean;
+  /** Ordered sections — keys match question `subject_key`; used for subject-wise shuffle on the API. */
+  subjectSections?: SubjectSectionRow[];
 };
 
 type TestItem = {
@@ -131,6 +135,7 @@ type QuestionItem = {
   correct_index: number;
   explanation: string;
   is_published?: boolean;
+  subject_key?: string;
 };
 
 type DailyDigestItem = {
@@ -566,6 +571,77 @@ function normalizeBoolean(value: unknown, fallback = true) {
   return fallback;
 }
 
+/** Mirrors server `normalizeSubjectSectionsInput` — safe keys only. */
+function normalizeSubjectSectionsForSubmit(
+  raw: Array<{ key?: string; label?: string } | null | undefined>,
+): SubjectSectionRow[] {
+  const out: SubjectSectionRow[] = [];
+  const seen = new Set<string>();
+  if (!Array.isArray(raw)) return out;
+  for (let i = 0; i < raw.length; i += 1) {
+    const item = raw[i];
+    const o = item && typeof item === 'object' ? item : {};
+    let key = String(o.key ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '_');
+    if (!key) continue;
+    if (!/^[a-z0-9_-]{1,40}$/.test(key)) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const label = String(o.label ?? o.key ?? key)
+      .trim()
+      .slice(0, 120);
+    out.push({ key, label: label || key });
+    if (out.length >= 40) break;
+  }
+  return out;
+}
+
+function validateSubjectSectionDraft(raw: Array<{ key?: string; label?: string } | null | undefined>): string | null {
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const seenNorm = new Set<string>();
+  let nonEmpty = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    const item = raw[i];
+    const o = item && typeof item === 'object' ? item : {};
+    const keyRaw = String(o.key ?? '').trim();
+    const labelRaw = String(o.label ?? '').trim();
+    if (!keyRaw && !labelRaw) continue;
+    nonEmpty += 1;
+    if (!keyRaw && labelRaw) {
+      return `Subject sections row ${i + 1}: enter a subject key (e.g. math) when a label is set.`;
+    }
+    const nk = keyRaw.toLowerCase().replace(/\s+/g, '_');
+    if (!/^[a-z0-9_-]{1,40}$/.test(nk)) {
+      return `Subject sections row ${i + 1}: key must use only a-z, 0-9, underscore, hyphen (1-40 chars).`;
+    }
+    if (seenNorm.has(nk)) {
+      return `Subject sections: duplicate key "${nk}".`;
+    }
+    seenNorm.add(nk);
+  }
+  if (nonEmpty > 40) {
+    return 'Subject sections: at most 40 subjects.';
+  }
+  return null;
+}
+
+/** Optional question tag — mirrors server `parseQuestionSubjectKey` for non-empty values. */
+function normalizeQuestionSubjectKeyInput(raw: unknown): { value: string; error?: string } {
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return { value: '' };
+  }
+  const s = String(raw).trim().toLowerCase();
+  if (!/^[a-z0-9_-]{1,40}$/.test(s)) {
+    return {
+      value: '',
+      error: 'Subject must be 1-40 characters: lowercase letters, digits, underscore, or hyphen.',
+    };
+  }
+  return { value: s };
+}
+
 function toDateTimeLocal(value?: string | null) {
   if (!value) return '';
   const date = new Date(value);
@@ -648,6 +724,8 @@ function App() {
   const [, setAuthBooting] = useState(true);
   const [identifier, setIdentifier] = useState(initialAdminAuth.identifier);
   const [password, setPassword] = useState('');
+  const [adminOtpStep, setAdminOtpStep] = useState<'password' | 'otp'>('password');
+  const [otpCode, setOtpCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'info' | 'error' | 'success'>('info');
@@ -661,6 +739,8 @@ function App() {
     setToken('');
     setIsAdmin(false);
     setIsSuperAdmin(false);
+    setAdminOtpStep('password');
+    setOtpCode('');
     setMessage('Session expired or revoked. Please sign in again.');
     setMessageType('error');
   };
@@ -807,7 +887,10 @@ function App() {
       resolvedIsSuperAdmin = Boolean(meRes.data?.user?.isSuperAdmin);
     }
     if (!resolvedIsAdmin) {
-      return { ok: false, message: 'This account is not allowed for admin panel.' };
+      return {
+        ok: false,
+        message: 'No admin registration found for this login. Please check your Gmail account.',
+      };
     }
     saveStoredAuth(accessToken, resolvedIsSuperAdmin, identifierLabel, resolvedIsAdmin);
     setIsAdmin(true);
@@ -816,15 +899,49 @@ function App() {
     return { ok: true };
   }
 
-  async function handleLogin(e: FormEvent) {
+  async function handleAdminRequestOtp(e: FormEvent) {
     e.preventDefault();
     setLoading(true);
     setMessage('');
     setMessageType('info');
     try {
-      const loginRes = await api.post('/auth/login', {
+      const res = await api.post('/auth/admin-login/request-otp', {
         identifier,
         password,
+      });
+      if (res.data?.ok) {
+        setPassword('');
+        setAdminOtpStep('otp');
+        setOtpCode('');
+        setMessageType('success');
+        setMessage(String(res.data?.message || 'Check your email for the login code.'));
+      } else {
+        setMessageType('error');
+        setMessage('Could not send login code.');
+      }
+    } catch (err: unknown) {
+      setMessageType('error');
+      setMessage(formatAxiosErr(err, 'Could not send login code. Check ID and password.'));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAdminVerifyOtp(e: FormEvent) {
+    e.preventDefault();
+    const digits = otpCode.replace(/\D/g, '').slice(0, 6);
+    if (digits.length !== 6) {
+      setMessageType('error');
+      setMessage('Enter the 6-digit code from your email.');
+      return;
+    }
+    setLoading(true);
+    setMessage('');
+    setMessageType('info');
+    try {
+      const loginRes = await api.post('/auth/admin-login/verify-otp', {
+        identifier,
+        otp: digits,
       });
       const accessToken = String(loginRes.data?.accessToken || '');
       if (!accessToken) throw new Error('Token missing in login response');
@@ -835,11 +952,13 @@ function App() {
         setMessage(result.message);
         return;
       }
+      setAdminOtpStep('password');
+      setOtpCode('');
       setMessageType('success');
       setMessage('Login successful.');
     } catch (err: unknown) {
       setMessageType('error');
-      setMessage(formatAxiosErr(err, 'Login failed. Check ID and password.'));
+      setMessage(formatAxiosErr(err, 'Invalid or expired code.'));
     } finally {
       setLoading(false);
     }
@@ -857,40 +976,79 @@ function App() {
           <div className="auth-card login-card">
             <>
               <p className="auth-login-title">Admin login</p>
-              <form onSubmit={handleLogin} className="auth-form auth-float-form">
-                <div className="input-group">
-                  <div className="input-box input-box-float">
-                    <i aria-hidden="true">✉</i>
-                    <input
-                      id="admin-login-identifier"
-                      value={identifier}
-                      onChange={(e) => setIdentifier(e.target.value)}
-                      placeholder=" "
-                      autoComplete="username"
-                      required
-                    />
-                    <label htmlFor="admin-login-identifier">Email / Mobile</label>
+              {adminOtpStep === 'password' ? (
+                <form onSubmit={handleAdminRequestOtp} className="auth-form auth-float-form">
+                  <div className="input-group">
+                    <div className="input-box input-box-float">
+                      <i aria-hidden="true">✉</i>
+                      <input
+                        id="admin-login-identifier"
+                        value={identifier}
+                        onChange={(e) => setIdentifier(e.target.value)}
+                        placeholder=" "
+                        autoComplete="username"
+                        required
+                      />
+                      <label htmlFor="admin-login-identifier">Email / Mobile</label>
+                    </div>
                   </div>
-                </div>
-                <div className="input-group">
-                  <div className="input-box input-box-float">
-                    <i aria-hidden="true">🔒</i>
-                    <input
-                      id="admin-login-password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder=" "
-                      type="password"
-                      autoComplete="current-password"
-                      required
-                    />
-                    <label htmlFor="admin-login-password">Password</label>
+                  <div className="input-group">
+                    <div className="input-box input-box-float">
+                      <i aria-hidden="true">🔒</i>
+                      <input
+                        id="admin-login-password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder=" "
+                        type="password"
+                        autoComplete="current-password"
+                        required
+                      />
+                      <label htmlFor="admin-login-password">Password</label>
+                    </div>
                   </div>
-                </div>
-                <button type="submit" className="login-btn" disabled={loading}>
-                  {loading ? 'Logging in...' : 'Login'}
-                </button>
-              </form>
+                  <button type="submit" className="login-btn" disabled={loading}>
+                    {loading ? 'Login…' : 'Login'}
+                  </button>
+                </form>
+              ) : (
+                <form onSubmit={handleAdminVerifyOtp} className="auth-form auth-float-form">
+                  <p className="auth-message info" style={{ marginBottom: '12px', fontSize: '14px' }}>
+                    Code sent for <strong>{identifier}</strong>
+                  </p>
+                  <div className="input-group">
+                    <div className="input-box input-box-float">
+                      <i aria-hidden="true">🔢</i>
+                      <input
+                        id="admin-login-otp"
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder=" "
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        required
+                      />
+                      <label htmlFor="admin-login-otp">6-digit code</label>
+                    </div>
+                  </div>
+                  <button type="submit" className="login-btn" disabled={loading}>
+                    {loading ? 'Login…' : 'Login'}
+                  </button>
+                  <button
+                    type="button"
+                    className="login-btn"
+                    style={{ marginTop: '10px', background: 'transparent', border: '1px solid rgba(255,255,255,0.35)' }}
+                    disabled={loading}
+                    onClick={() => {
+                      setAdminOtpStep('password');
+                      setOtpCode('');
+                      setMessage('');
+                    }}
+                  >
+                    Back
+                  </button>
+                </form>
+              )}
               {message && <p className={`auth-message ${messageType} ${messageType === 'error' ? 'error-p' : ''}`}>{message}</p>}
             </>
           </div>
@@ -1194,6 +1352,8 @@ function TestsTab({
   const [copyPasteBlocked, setCopyPasteBlocked] = useState(false);
   const [notifyOnPublish, setNotifyOnPublish] = useState(true);
   const [sendEmailOnPublish, setSendEmailOnPublish] = useState(false);
+  /** Draft rows for All Tests → Advanced → subject sections (saved with test advancedConfig). */
+  const [subjectSectionRows, setSubjectSectionRows] = useState<SubjectSectionRow[]>([]);
   const [opsTestId, setOpsTestId] = useState('');
   const [search, setSearch] = useState('');
   const [questionBuilderSearch, setQuestionBuilderSearch] = useState('');
@@ -1216,6 +1376,8 @@ function TestsTab({
     correctIndex: '0',
     explanation: '',
     isPublished: true,
+    /** Subject key — must match a configured section key when this test defines subjectSections. */
+    subjectKey: '',
   });
   const [bulkImportOpen, setBulkImportOpen] = useState(false);
   const [bulkImportFormat, setBulkImportFormat] = useState<'csv' | 'excel' | 'json'>('csv');
@@ -1276,6 +1438,7 @@ function TestsTab({
     testKind: string;
     isPublished: boolean;
     dynamicFluctuationOnPublish: boolean;
+    subjectSectionRows?: SubjectSectionRow[];
   }) {
     const titleValue = String(input.title || '').trim().slice(0, 180);
     const slugValue = String(input.slug || '').trim().slice(0, 180).toLowerCase();
@@ -1390,6 +1553,12 @@ function TestsTab({
       return { error: 'advancedConfig.notifyBeforeMinutes must be an integer between 0 and 10080' };
     }
 
+    const subjectSectionsDraftErr = validateSubjectSectionDraft(input.subjectSectionRows ?? []);
+    if (subjectSectionsDraftErr) {
+      return { error: subjectSectionsDraftErr };
+    }
+    const subjectSectionsNormalized = normalizeSubjectSectionsForSubmit(input.subjectSectionRows ?? []);
+
     return {
       value: {
         title: titleValue,
@@ -1429,6 +1598,7 @@ function TestsTab({
           copyPasteBlocked: input.copyPasteBlocked === true,
           notifyOnPublish: input.notifyOnPublish !== false,
           sendEmailOnPublish: input.sendEmailOnPublish === true,
+          subjectSections: subjectSectionsNormalized,
         },
         testKind: testKindValue as TestKind,
         isPublished: input.isPublished !== false,
@@ -1495,11 +1665,25 @@ function TestsTab({
                     copyPasteBlocked: normalizeBoolean(x.advanced_config.copyPasteBlocked, false),
                     notifyOnPublish: normalizeBoolean(x.advanced_config.notifyOnPublish, true),
                     sendEmailOnPublish: normalizeBoolean(x.advanced_config.sendEmailOnPublish, false),
+                    subjectSections: Array.isArray(x.advanced_config.subjectSections)
+                      ? x.advanced_config.subjectSections
+                          .filter((s: unknown) => s && typeof s === 'object')
+                          .map((s: any) => ({
+                            key: String(s.key || '').trim(),
+                            label: String(s.label || s.key || '').trim(),
+                          }))
+                          .slice(0, 40)
+                      : [],
                   }
                 : null,
           }))
         : [];
       setItems(mapped);
+      setSelectedTest((prev) => {
+        if (!prev) return prev;
+        const next = mapped.find((x: TestItem) => x.id === prev.id);
+        return next ?? prev;
+      });
       setTestsPage(1);
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to load tests');
@@ -1545,6 +1729,7 @@ function TestsTab({
     setCopyPasteBlocked(false);
     setNotifyOnPublish(true);
     setSendEmailOnPublish(false);
+    setSubjectSectionRows([]);
     setKind('mock');
     setIsPublished(true);
     setDynamicFluctuationOnPublish(true);
@@ -1590,6 +1775,15 @@ function TestsTab({
     setCopyPasteBlocked(normalizeBoolean(ac?.copyPasteBlocked, false));
     setNotifyOnPublish(normalizeBoolean(ac?.notifyOnPublish, true));
     setSendEmailOnPublish(normalizeBoolean(ac?.sendEmailOnPublish, false));
+    const secs = ac?.subjectSections;
+    setSubjectSectionRows(
+      Array.isArray(secs) && secs.length
+        ? (secs as SubjectSectionRow[]).map((s) => ({
+            key: String(s.key || ''),
+            label: String(s.label || s.key || ''),
+          }))
+        : [],
+    );
   }
 
   function cancelEditTest() {
@@ -1637,6 +1831,7 @@ function TestsTab({
       testKind: kind,
       isPublished,
       dynamicFluctuationOnPublish,
+      subjectSectionRows,
     });
     if (parsed.error) {
       pushToast('error', parsed.error);
@@ -1728,6 +1923,7 @@ function TestsTab({
         correctIndex: '0',
         explanation: '',
         isPublished: true,
+        subjectKey: '',
       });
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to load questions');
@@ -1759,6 +1955,23 @@ function TestsTab({
       pushToast('error', 'Please select a valid correct answer');
       return;
     }
+    const allowedSubjects = normalizeSubjectSectionsForSubmit(selectedTest.advanced_config?.subjectSections ?? []);
+    let subjectKeyOut = '';
+    if (allowedSubjects.length > 0) {
+      const parsedSk = normalizeQuestionSubjectKeyInput(questionForm.subjectKey);
+      if (!parsedSk.value) {
+        pushToast('error', 'Select a subject for this question — this test requires subject tags.');
+        return;
+      }
+      subjectKeyOut = parsedSk.value;
+    } else {
+      const parsedSk = normalizeQuestionSubjectKeyInput(questionForm.subjectKey);
+      if (parsedSk.error) {
+        pushToast('error', parsedSk.error);
+        return;
+      }
+      subjectKeyOut = parsedSk.value;
+    }
     const createPosition = Number(nextQuestionPositionFrom(questions));
     const editingPosition = Number(
       questions.find((item) => item.id === editingQuestionId)?.position || 0,
@@ -1776,6 +1989,7 @@ function TestsTab({
       correctIndex,
       explanation,
       isPublished: questionForm.isPublished,
+      subjectKey: subjectKeyOut,
     };
     try {
       if (editingQuestionId) {
@@ -1806,6 +2020,7 @@ function TestsTab({
       correctIndex: String(item.correct_index),
       explanation: item.explanation || '',
       isPublished: normalizeBoolean(item.is_published, true),
+      subjectKey: String(item.subject_key || '').trim(),
     });
   }
 
@@ -1905,6 +2120,10 @@ function TestsTab({
     });
   }, [items, questionBuilderSearch]);
   const selectedOpsTest = useMemo(() => items.find((x) => x.id === opsTestId) || null, [items, opsTestId]);
+  const questionBuilderSubjectOptions = useMemo(
+    () => normalizeSubjectSectionsForSubmit(selectedTest?.advanced_config?.subjectSections ?? []),
+    [selectedTest?.advanced_config?.subjectSections],
+  );
 
   return (
     <section className={`panel-card ${mode === 'allTests' ? 'all-tests-panel' : ''}`}>
@@ -2053,6 +2272,63 @@ function TestsTab({
                     <input type="checkbox" checked={shuffleOptions} onChange={(e) => setShuffleOptions(e.target.checked)} />
                     shuffle options
                   </label>
+                  <div className="all-tests-subject-sections" style={{ gridColumn: '1 / -1' }}>
+                    <p className="muted" style={{ margin: '0 0 8px' }}>
+                      Subject sections (optional). List order = paper order when <b>shuffle questions</b> groups by subject. Keys:{' '}
+                      <code>a-z</code>, <code>0-9</code>, <code>_</code>, <code>-</code> (max 40 each).
+                    </p>
+                    {subjectSectionRows.map((row, idx) => (
+                      <div
+                        key={`subj-${idx}-${row.key}`}
+                        className="all-tests-grid"
+                        style={{ marginBottom: 8, alignItems: 'end' }}
+                      >
+                        <label className="all-tests-field">
+                          <span>Key</span>
+                          <input
+                            value={row.key}
+                            onChange={(e) => {
+                              const next = [...subjectSectionRows];
+                              next[idx] = { ...next[idx], key: e.target.value };
+                              setSubjectSectionRows(next);
+                            }}
+                            placeholder="e.g. math"
+                            maxLength={48}
+                            autoComplete="off"
+                          />
+                        </label>
+                        <label className="all-tests-field">
+                          <span>Label (shown in Question Builder)</span>
+                          <input
+                            value={row.label}
+                            onChange={(e) => {
+                              const next = [...subjectSectionRows];
+                              next[idx] = { ...next[idx], label: e.target.value };
+                              setSubjectSectionRows(next);
+                            }}
+                            placeholder="e.g. Mathematics"
+                            maxLength={120}
+                            autoComplete="off"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => setSubjectSectionRows(subjectSectionRows.filter((_, i) => i !== idx))}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => setSubjectSectionRows([...subjectSectionRows, { key: '', label: '' }])}
+                      disabled={subjectSectionRows.length >= 40}
+                    >
+                      + Add subject
+                    </button>
+                  </div>
                   <label className="check-wrap">
                     <input type="checkbox" checked={fullscreenRequired} onChange={(e) => setFullscreenRequired(e.target.checked)} />
                     fullscreen required
@@ -2335,6 +2611,34 @@ function TestsTab({
                     ))}
                   </select>
                 </label>
+                {selectedTest && questionBuilderSubjectOptions.length > 0 ? (
+                  <label>
+                    Subject
+                    <select
+                      value={questionForm.subjectKey}
+                      onChange={(e) => setQuestionForm((p) => ({ ...p, subjectKey: e.target.value }))}
+                      required
+                    >
+                      <option value="">Select subject…</option>
+                      {questionForm.subjectKey &&
+                        editingQuestionId &&
+                        !questionBuilderSubjectOptions.some((s) => s.key === questionForm.subjectKey) && (
+                          <option value={questionForm.subjectKey}>
+                            {questionForm.subjectKey} (update test subjects or change tag)
+                          </option>
+                        )}
+                      {questionBuilderSubjectOptions.map((s) => (
+                        <option key={s.key} value={s.key}>
+                          {s.label} ({s.key})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : selectedTest ? (
+                  <p className="muted" style={{ margin: '0 0 8px' }}>
+                    Optional subject tagging: add subjects under <b>All Tests → Advanced (+)</b>, save the test, then pick a subject here.
+                  </p>
+                ) : null}
                 <label>
                   Question Statement
                   <textarea
@@ -2429,6 +2733,7 @@ function TestsTab({
                           correctIndex: '0',
                           explanation: '',
                           isPublished: true,
+                          subjectKey: '',
                         });
                       }}
                     >
@@ -2484,6 +2789,7 @@ function TestsTab({
         <div className="list table questions-table">
           <div className="row row-head">
             <span>Pos</span>
+            <span>Subject</span>
             <span>Question</span>
             <span>Status</span>
             <span>Answer</span>
@@ -2496,6 +2802,7 @@ function TestsTab({
           {pagedQuestions.map((q) => (
             <div key={q.id} className="row">
               <span>{q.position}</span>
+              <span title={q.subject_key || ''}>{q.subject_key ? String(q.subject_key) : '—'}</span>
               <span>{q.stem}</span>
               <span>{normalizeBoolean(q.is_published, true) ? 'Published' : 'Draft'}</span>
               <span>{['A', 'B', 'C', 'D'][q.correct_index] || '-'}</span>
@@ -2515,6 +2822,7 @@ function TestsTab({
           ))}
           {!pagedQuestions.length && (
             <div className="row">
+              <span>-</span>
               <span>-</span>
               <span>{selectedTest ? 'No questions found for this test yet.' : 'Select a test to view questions.'}</span>
               <span>-</span>

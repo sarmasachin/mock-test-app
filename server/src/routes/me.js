@@ -32,6 +32,15 @@ function parseBirthdayDateOnly(input) {
   return raw;
 }
 
+/** YYYY-MM-DD in the Node process timezone (e.g. IST on VPS) — matches typical DOB "today" checks. */
+function todayIsoLocal() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 async function ensureDeviceTokensTable() {
   await pool.query(
     `CREATE TABLE IF NOT EXISTS user_device_tokens (
@@ -197,7 +206,7 @@ router.patch('/profile', async (req, res) => {
         if (!parsed) {
           return res.status(400).json({ error: 'birthdayDate must be in YYYY-MM-DD format' });
         }
-        const today = new Date().toISOString().slice(0, 10);
+        const today = todayIsoLocal();
         if (parsed > today) {
           return res.status(400).json({ error: 'birthdayDate cannot be in the future' });
         }

@@ -586,7 +586,7 @@ button:active {
 }
 
 .questions-table .row {
-  grid-template-columns: 60px 1.2fr 90px 80px 0.85fr 0.85fr 0.85fr 0.85fr 150px;
+  grid-template-columns: 52px minmax(72px, 0.55fr) minmax(120px, 1.15fr) 90px 80px 0.85fr 0.85fr 0.85fr 0.85fr 150px;
 }
 
 .users-table .row {

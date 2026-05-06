@@ -49,6 +49,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -297,33 +298,10 @@ fun HomeScreenNew(
         }
     }
 
-    LaunchedEffect(Unit) {
-        val now = System.currentTimeMillis()
-        val previousVisitTs = visitPrefs.getLong("last_home_visit_ts", 0L)
-        val appLaunchTs = MockTestApp.appLaunchTimeMillis
-        val shownForLaunchTs = visitPrefs.getLong("last_home_visit_shown_for_launch_ts", -1L)
-        lastVisitMillis = previousVisitTs
-        if (previousVisitTs <= 0L || shownForLaunchTs == appLaunchTs) {
-            showLastVisit = false
-        } else {
-            showLastVisit = true
-        }
-        visitPrefs.edit()
-            .putLong("last_home_visit_shown_for_launch_ts", appLaunchTs)
-            .putLong("last_home_visit_ts", now)
-            .apply()
-    }
-    LaunchedEffect(Unit) {
-        while (true) {
-            nowMs = System.currentTimeMillis()
-            delay(1000L)
-        }
-    }
-    LaunchedEffect(pendingResult?.publishAtMillis) {
-        hiddenSessionAt = 0L
-    }
-    LaunchedEffect(Unit) {
-        val remote = ContentRepository.loadHomeContent() ?: return@LaunchedEffect
+    /** Wall-clock of last successful home CMS fetch; used to throttle resume refreshes. */
+    var lastHomeContentFetchAt by remember { mutableLongStateOf(0L) }
+
+    fun applyHomeRemote(remote: ContentRepository.HomeContentRemote) {
         applyColorPresetFromRemote(remote.themePreset)
         if (!remote.welcomeText.isNullOrBlank()) {
             homeWelcomeTemplate = remote.welcomeText
@@ -392,6 +370,37 @@ fun HomeScreenNew(
         }
         bannerSlides = mixedSlides
     }
+
+    LaunchedEffect(Unit) {
+        val now = System.currentTimeMillis()
+        val previousVisitTs = visitPrefs.getLong("last_home_visit_ts", 0L)
+        val appLaunchTs = MockTestApp.appLaunchTimeMillis
+        val shownForLaunchTs = visitPrefs.getLong("last_home_visit_shown_for_launch_ts", -1L)
+        lastVisitMillis = previousVisitTs
+        if (previousVisitTs <= 0L || shownForLaunchTs == appLaunchTs) {
+            showLastVisit = false
+        } else {
+            showLastVisit = true
+        }
+        visitPrefs.edit()
+            .putLong("last_home_visit_shown_for_launch_ts", appLaunchTs)
+            .putLong("last_home_visit_ts", now)
+            .apply()
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(1000L)
+        }
+    }
+    LaunchedEffect(pendingResult?.publishAtMillis) {
+        hiddenSessionAt = 0L
+    }
+    LaunchedEffect(Unit) {
+        val remote = ContentRepository.loadHomeContent(forceRefresh = true) ?: return@LaunchedEffect
+        lastHomeContentFetchAt = System.currentTimeMillis()
+        applyHomeRemote(remote)
+    }
     LaunchedEffect(Unit) {
         val share = ContentRepository.loadShareContent() ?: return@LaunchedEffect
         val text = share.body?.trim().orEmpty()
@@ -459,7 +468,15 @@ fun HomeScreenNew(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                scope.launch { refreshUnreadCounts() }
+                scope.launch {
+                    refreshUnreadCounts()
+                    val now = System.currentTimeMillis()
+                    if (now - lastHomeContentFetchAt > 45_000L) {
+                        val remote = ContentRepository.loadHomeContent(forceRefresh = true) ?: return@launch
+                        lastHomeContentFetchAt = System.currentTimeMillis()
+                        applyHomeRemote(remote)
+                    }
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

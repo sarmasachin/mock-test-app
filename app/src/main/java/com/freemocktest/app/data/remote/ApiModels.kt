@@ -19,6 +19,8 @@ data class AuthUserDto(
 data class LoginRequest(
     val identifier: String,
     val password: String,
+    /** Sent to server so new-device login alerts are accurate (same device = no repeat mail). */
+    @SerializedName("deviceFingerprint") val deviceFingerprint: String? = null,
 )
 
 data class GoogleSignInRequestBody(
@@ -167,6 +169,11 @@ data class CatalogTestDto(
     @SerializedName("advancedConfig") val advancedConfig: TestAdvancedConfigDto? = null,
 )
 
+data class SubjectSectionDto(
+    @SerializedName("key") val key: String,
+    @SerializedName("label") val label: String? = null,
+)
+
 data class TestAdvancedConfigDto(
     @SerializedName("publishAt") val publishAt: String? = null,
     @SerializedName("unpublishAt") val unpublishAt: String? = null,
@@ -180,6 +187,8 @@ data class TestAdvancedConfigDto(
     @SerializedName("fullscreenRequired") val fullscreenRequired: Boolean? = null,
     @SerializedName("copyPasteBlocked") val copyPasteBlocked: Boolean? = null,
     @SerializedName("notifyOnPublish") val notifyOnPublish: Boolean? = null,
+    /** Ordered sections — when set + shuffleQuestions, server shuffles within each subject only. */
+    @SerializedName("subjectSections") val subjectSections: List<SubjectSectionDto>? = null,
 )
 
 data class TestsListResponse(
@@ -193,6 +202,8 @@ data class TestQuestionDto(
     val options: List<String>,
     @SerializedName("correctIndex") val correctIndex: Int,
     val explanation: String? = null,
+    /** Present when server stores subject tags (optional for older APIs). */
+    @SerializedName("subjectKey") val subjectKey: String? = null,
 )
 
 data class TestQuestionsResponse(

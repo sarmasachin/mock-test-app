@@ -45,8 +45,14 @@ private val isoBirthdayPattern = Regex("^\\d{4}-\\d{2}-\\d{2}$")
 
 internal fun parseIsoBirthdayDate(raw: String): LocalDate? {
     val s = raw.trim()
-    if (s.isEmpty() || !isoBirthdayPattern.matches(s)) return null
-    return runCatching { LocalDate.parse(s) }.getOrNull()
+    if (s.isEmpty()) return null
+    if (isoBirthdayPattern.matches(s)) return runCatching { LocalDate.parse(s) }.getOrNull()
+    // Some backends occasionally echo ISO datetimes even though the semantic field is a calendar date.
+    val prefix = Regex("^(\\d{4}-\\d{2}-\\d{2})").find(s)?.groupValues?.getOrNull(1).orEmpty()
+    if (prefix.isNotBlank() && isoBirthdayPattern.matches(prefix)) {
+        return runCatching { LocalDate.parse(prefix) }.getOrNull()
+    }
+    return null
 }
 
 /** @return null if birth is after [end] (invalid for age). */
@@ -77,6 +83,13 @@ private fun localDateToPickerMillis(d: LocalDate): Long =
 private fun pickerMillisToLocalDate(millis: Long): LocalDate =
     Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalDate()
 
+private fun clampSelectableReferenceDate(birth: LocalDate?, candidate: LocalDate): LocalDate {
+    val zoneToday = LocalDate.now()
+    val notFuture = if (candidate.isAfter(zoneToday)) zoneToday else candidate
+    val birthSafe = birth ?: return notFuture
+    return if (notFuture.isBefore(birthSafe)) birthSafe else notFuture
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CalculatorToolSection(
@@ -87,15 +100,25 @@ fun CalculatorToolSection(
     val cardShape = RoundedCornerShape(22.dp)
     val scroll = rememberScrollState()
     var showDatePicker by remember { mutableStateOf(false) }
+    var showReferencePicker by remember { mutableStateOf(false) }
     var calculatorBirthMillis by remember(profileBirthdayIso) {
         mutableStateOf(
             parseIsoBirthdayDate(profileBirthdayIso)?.let { localDateToPickerMillis(it) }
                 ?: localDateToPickerMillis(LocalDate.now().minusYears(20)),
         )
     }
+    var referenceMillis by remember {
+        mutableStateOf(localDateToPickerMillis(LocalDate.now()))
+    }
 
     val profileBirth = remember(profileBirthdayIso) { parseIsoBirthdayDate(profileBirthdayIso) }
-    val profilePeriod = remember(profileBirth) { profileBirth?.let { periodYearsMonthsDaysSafe(it) } }
+    val referenceDate = remember(referenceMillis) {
+        runCatching { pickerMillisToLocalDate(referenceMillis) }.getOrNull()
+    }
+    val profileAgeLine = remember(profileBirth, referenceDate) {
+        val end = referenceDate ?: LocalDate.now()
+        profileBirth?.let { birth -> formatAgeDisplay(birth, end) }
+    }
 
     Column(
         modifier = modifier
@@ -136,26 +159,55 @@ fun CalculatorToolSection(
                         lineHeight = 20.sp,
                     )
                 }
-                profilePeriod == null -> {
-                    Text(
-                        text = "Saved date of birth is in the future. Update it in Profile.",
-                        color = p.error,
-                        fontSize = 14.sp,
-                    )
-                }
                 else -> {
-                    Text(
-                        text = "Date of birth: ${displayDate(profileBirth)}",
-                        color = p.textSecondary,
-                        fontSize = 14.sp,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = formatAgeDisplay(profileBirth, LocalDate.now()).orEmpty(),
-                        color = p.textPrimary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                    val birth = profileBirth!!
+                    when {
+                        birth.isAfter(LocalDate.now()) -> {
+                            Text(
+                                text = "Saved date of birth is in the future. Update it in Profile.",
+                                color = p.error,
+                                fontSize = 14.sp,
+                                lineHeight = 20.sp,
+                            )
+                        }
+                        referenceDate != null && birth.isAfter(referenceDate) -> {
+                            Text(
+                                text = "Reference date is before your saved date of birth. Pick a reference date on/after your DOB.",
+                                color = p.error,
+                                fontSize = 14.sp,
+                                lineHeight = 20.sp,
+                            )
+                        }
+                        else -> {
+                            Text(
+                                text = "Date of birth: ${displayDate(birth)}",
+                                color = p.textSecondary,
+                                fontSize = 14.sp,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = "Age as of: ${referenceDate?.let { displayDate(it) } ?: displayDate(LocalDate.now())}",
+                                color = p.textSecondary,
+                                fontSize = 13.sp,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = profileAgeLine.orEmpty(),
+                                color = p.textPrimary,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Button(
+                                onClick = { showReferencePicker = true },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+                                shape = RoundedCornerShape(14.dp),
+                            ) {
+                                Text("Choose reference date", color = Color.White, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -186,16 +238,27 @@ fun CalculatorToolSection(
             val calcDate = remember(calculatorBirthMillis) {
                 calculatorBirthMillis?.let { runCatching { pickerMillisToLocalDate(it) }.getOrNull() }
             }
-            val todayCalc = LocalDate.now()
-            val calcAgeLine = remember(calcDate, todayCalc) {
-                calcDate?.takeIf { !it.isAfter(todayCalc) }?.let { formatAgeDisplay(it, todayCalc) }
+            val calcReferenceDate = remember(referenceMillis) {
+                runCatching { pickerMillisToLocalDate(referenceMillis) }.getOrNull()
+            }
+            val calcAgeLine = remember(calcDate, calcReferenceDate) {
+                val birth = calcDate ?: return@remember null
+                val endRaw = calcReferenceDate ?: LocalDate.now()
+                val end = clampSelectableReferenceDate(birth, endRaw)
+                formatAgeDisplay(birth, end)
             }
 
             if (calcAgeLine != null && calcDate != null) {
                 Text(
-                    text = "Selected: ${displayDate(calcDate)}",
+                    text = "Selected birth date: ${displayDate(calcDate)}",
                     color = p.textSecondary,
                     fontSize = 14.sp,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "Age as of: ${calcReferenceDate?.let { displayDate(it) } ?: displayDate(LocalDate.now())}",
+                    color = p.textSecondary,
+                    fontSize = 13.sp,
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
@@ -214,6 +277,15 @@ fun CalculatorToolSection(
                 shape = RoundedCornerShape(14.dp),
             ) {
                 Text("Choose birth date", color = Color.White, fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = { showReferencePicker = true },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text("Choose reference date", color = Color.White, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -241,13 +313,68 @@ fun CalculatorToolSection(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        datePickerState.selectedDateMillis?.let { calculatorBirthMillis = it }
+                        datePickerState.selectedDateMillis?.let { millis ->
+                            val picked = runCatching { pickerMillisToLocalDate(millis) }.getOrNull()
+                            if (picked != null) {
+                                calculatorBirthMillis = millis
+                                val ref = runCatching { pickerMillisToLocalDate(referenceMillis) }.getOrNull() ?: LocalDate.now()
+                                referenceMillis = localDateToPickerMillis(clampSelectableReferenceDate(picked, ref))
+                            }
+                        }
                         showDatePicker = false
                     },
                 ) { Text("OK", color = p.accent) }
             },
             dismissButton = {
                 TextButton(onClick = { showDatePicker = false }) {
+                    Text("Cancel", color = p.textSecondary)
+                }
+            },
+            colors = DatePickerDefaults.colors(),
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+
+    if (showReferencePicker) {
+        val birthForClamp = parseIsoBirthdayDate(profileBirthdayIso)
+        val selectableDates = remember(birthForClamp) {
+            object : SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long): Boolean =
+                    runCatching {
+                        val d = Instant.ofEpochMilli(utcTimeMillis).atZone(ZoneId.systemDefault()).toLocalDate()
+                        if (d.isAfter(LocalDate.now())) return false
+                        val b = birthForClamp ?: return true
+                        !d.isBefore(b)
+                    }.getOrDefault(false)
+
+                override fun isSelectableYear(year: Int): Boolean =
+                    year in 1900..LocalDate.now().year
+            }
+        }
+        val initialMillis = referenceMillis
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = initialMillis,
+            selectableDates = selectableDates,
+        )
+        DatePickerDialog(
+            onDismissRequest = { showReferencePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        datePickerState.selectedDateMillis?.let { millis ->
+                            val picked = runCatching { pickerMillisToLocalDate(millis) }.getOrNull()
+                            if (picked != null) {
+                                val b = birthForClamp
+                                referenceMillis = localDateToPickerMillis(clampSelectableReferenceDate(b, picked))
+                            }
+                        }
+                        showReferencePicker = false
+                    },
+                ) { Text("OK", color = p.accent) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReferencePicker = false }) {
                     Text("Cancel", color = p.textSecondary)
                 }
             },

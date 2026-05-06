@@ -4,6 +4,7 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../middleware/requireAuth');
 const { clampMcqCorrectIndex } = require('../mcqShuffle');
+const { normalizeSubjectSectionsInput } = require('../util/subjectSections');
 
 const router = express.Router();
 
@@ -98,6 +99,9 @@ function mapTest(row) {
 function normalizeTestAdvancedConfig(rawValue) {
   const raw = rawValue && typeof rawValue === 'object' ? rawValue : {};
   const resultVisibilityRaw = String(raw.resultVisibility || 'immediate').trim().toLowerCase();
+  const subjectSections = normalizeSubjectSectionsInput(
+    Array.isArray(raw.subjectSections) ? raw.subjectSections : [],
+  );
   return {
     publishAt: String(raw.publishAt || '').trim() || null,
     unpublishAt: String(raw.unpublishAt || '').trim() || null,
@@ -111,6 +115,7 @@ function normalizeTestAdvancedConfig(rawValue) {
     fullscreenRequired: raw.fullscreenRequired === true,
     copyPasteBlocked: raw.copyPasteBlocked === true,
     notifyOnPublish: raw.notifyOnPublish !== false,
+    subjectSections,
   };
 }
 
@@ -152,11 +157,44 @@ function applyPerUserShuffleToQuestions(rows, seedText, options) {
   const rng = seededRandomFactory(seed);
   const shuffleQuestions = options && options.shuffleQuestions === true;
   const shuffleOptions = options && options.shuffleOptions === true;
+  const subjectSections = options && Array.isArray(options.subjectSections) ? options.subjectSections : [];
+  const sectionKeysOrdered = subjectSections.map((s) => String(s.key || '').trim().toLowerCase()).filter(Boolean);
 
   const withBaseIndex = safeRows.map((row, idx) => ({ row, baseIndex: idx }));
-  const ordered = shuffleQuestions ? seededShuffle(withBaseIndex, rng) : withBaseIndex;
+
+  let ordered;
+  if (!shuffleQuestions) {
+    ordered = withBaseIndex;
+  } else if (sectionKeysOrdered.length > 0) {
+    const buckets = new Map();
+    sectionKeysOrdered.forEach((k) => buckets.set(k, []));
+    const orphan = [];
+    for (const item of withBaseIndex) {
+      const sk = String(item.row.subject_key || '').trim().toLowerCase();
+      if (!sk) {
+        orphan.push(item);
+        continue;
+      }
+      if (buckets.has(sk)) {
+        buckets.get(sk).push(item);
+      } else {
+        orphan.push(item);
+      }
+    }
+    ordered = [];
+    for (const key of sectionKeysOrdered) {
+      const bucket = buckets.get(key) || [];
+      ordered.push(...seededShuffle(bucket, rng));
+    }
+    if (orphan.length) {
+      ordered.push(...seededShuffle(orphan, rng));
+    }
+  } else {
+    ordered = seededShuffle(withBaseIndex, rng);
+  }
 
   return ordered.map(({ row }, newPosition) => {
+    const subjectKeyOut = String(row.subject_key || '').trim();
     const sourceOptions = [
       String(row.choice_a || ''),
       String(row.choice_b || ''),
@@ -164,37 +202,35 @@ function applyPerUserShuffleToQuestions(rows, seedText, options) {
       String(row.choice_d || ''),
     ].map((x) => x.trim());
     const sourceCorrect = clampMcqCorrectIndex(row.correct_index);
-    if (!shuffleOptions) {
-      return {
-        id: Number(row.id),
-        position: Number(newPosition + 1),
-        questionPrompt: String(row.stem || ''),
-        options: sourceOptions,
-        correctIndex: sourceCorrect,
-        explanation: String(row.explanation || ''),
-      };
-    }
-    const indexed = sourceOptions.map((opt, idx) => ({ opt, idx }));
-    const shuffled = seededShuffle(indexed, rng);
-    const newOptions = shuffled.map((x) => x.opt);
-    const newCorrectIndex = shuffled.findIndex((x) => x.idx === sourceCorrect);
-    if (newCorrectIndex < 0) {
-      return {
-        id: Number(row.id),
-        position: Number(newPosition + 1),
-        questionPrompt: String(row.stem || ''),
-        options: sourceOptions,
-        correctIndex: sourceCorrect,
-        explanation: String(row.explanation || ''),
-      };
-    }
-    return {
+    const baseOut = {
       id: Number(row.id),
       position: Number(newPosition + 1),
       questionPrompt: String(row.stem || ''),
+      explanation: String(row.explanation || ''),
+      subjectKey: subjectKeyOut,
+    };
+    if (!shuffleOptions) {
+      return {
+        ...baseOut,
+        options: sourceOptions,
+        correctIndex: sourceCorrect,
+      };
+    }
+    const indexed = sourceOptions.map((opt, idx) => ({ opt, idx }));
+    const shuffledOpts = seededShuffle(indexed, rng);
+    const newOptions = shuffledOpts.map((x) => x.opt);
+    const newCorrectIndex = shuffledOpts.findIndex((x) => x.idx === sourceCorrect);
+    if (newCorrectIndex < 0) {
+      return {
+        ...baseOut,
+        options: sourceOptions,
+        correctIndex: sourceCorrect,
+      };
+    }
+    return {
+      ...baseOut,
       options: newOptions,
       correctIndex: newCorrectIndex,
-      explanation: String(row.explanation || ''),
     };
   });
 }
@@ -310,7 +346,8 @@ router.get('/:id/questions', async (req, res) => {
     );
     if (!testRes.rows[0]) return res.status(404).json({ error: 'Test not found' });
     const { rows } = await pool.query(
-      `SELECT id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation
+      `SELECT id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation,
+              COALESCE(subject_key, '') AS subject_key
        FROM questions
        WHERE test_id = $1::uuid AND is_published = true
        ORDER BY position ASC, id ASC`,
@@ -328,6 +365,7 @@ router.get('/:id/questions', async (req, res) => {
       ].map((x) => x.trim()),
       correctIndex: Number(row.correct_index || 0),
       explanation: String(row.explanation || ''),
+      subjectKey: String(row.subject_key || '').trim(),
     }));
     return res.json({ items });
   } catch (e) {
@@ -366,7 +404,8 @@ router.get('/:id/questions-attempt', requireAuth, async (req, res) => {
     }
     const advancedConfig = normalizeTestAdvancedConfig(advancedMap[id]);
     const rowsRes = await pool.query(
-      `SELECT id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation
+      `SELECT id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation,
+              COALESCE(subject_key, '') AS subject_key
        FROM questions
        WHERE test_id = $1::uuid AND is_published = true
        ORDER BY position ASC, id ASC`,
@@ -374,9 +413,12 @@ router.get('/:id/questions-attempt', requireAuth, async (req, res) => {
     );
     const cycleKey = String(test.last_cycle_started_at || '').trim() || 'no_cycle';
     const seedText = `${req.userId}:${id}:${cycleKey}`;
+    const useWithinSubject =
+      advancedConfig.shuffleQuestions === true && (advancedConfig.subjectSections || []).length > 0;
     const items = applyPerUserShuffleToQuestions(rowsRes.rows || [], seedText, {
       shuffleQuestions: advancedConfig.shuffleQuestions === true,
       shuffleOptions: advancedConfig.shuffleOptions === true,
+      subjectSections: useWithinSubject ? advancedConfig.subjectSections : [],
     });
     return res.json({ items });
   } catch (e) {

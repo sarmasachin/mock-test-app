@@ -1,6 +1,7 @@
 package com.freemocktest.app.data
 
 import android.content.Context
+import android.provider.Settings
 import android.util.Log
 import com.freemocktest.app.data.remote.AttemptRequest
 import com.freemocktest.app.data.remote.EmailVerificationConfirmBody
@@ -21,7 +22,10 @@ import com.freemocktest.app.data.remote.ApplyTestResponse
 import com.freemocktest.app.data.remote.TestWaitlistStatusResponse
 import com.freemocktest.app.notifications.PushTokenRegistrar
 import com.google.gson.JsonParser
+import java.io.IOException
+import java.net.UnknownHostException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -40,6 +44,15 @@ enum class RestoreSessionStatus {
 object AuthRepository {
     private const val TAG = "AuthRepository"
     private const val RESTORE_TIMEOUT_MS = 3500L
+
+    private fun loginDeviceFingerprint(): String {
+        return try {
+            val id = Settings.Secure.getString(appContext.contentResolver, Settings.Secure.ANDROID_ID)
+            if (id.isNullOrBlank()) "" else "android:$id"
+        } catch (_: Exception) {
+            ""
+        }
+    }
 
     @Volatile
     private var accessTokenMem: String? = null
@@ -132,8 +145,13 @@ object AuthRepository {
 
     suspend fun login(identifier: String, password: String): Result<AuthUserDto> = withContext(Dispatchers.IO) {
         try {
+            val fp = loginDeviceFingerprint()
             val resp = RetrofitProvider.authApi.login(
-                LoginRequest(identifier = identifier.trim(), password = password),
+                LoginRequest(
+                    identifier = identifier.trim(),
+                    password = password,
+                    deviceFingerprint = fp.takeIf { it.isNotBlank() },
+                ),
             )
             persistTokens(resp.accessToken, resp.refreshToken)
             AppPreferencesRepository.applyServerAuthProfile(
@@ -245,6 +263,34 @@ object AuthRepository {
             onSuccess = { Result.success(Unit) },
             onFailure = { Result.failure(it) },
         )
+    }
+
+    /**
+     * Pulls latest profile from `GET /v1/me` (including `birthdayDate`) into local prefs.
+     * Used so Tools / Calculator see server DOB without a separate network layer there.
+     */
+    suspend fun syncProfileFromServer(): Result<Unit> = withContext(Dispatchers.IO) {
+        loadStoredTokens()
+        if (accessTokenMem.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("Not signed in"))
+        }
+        try {
+            val me = RetrofitProvider.appApi.me()
+            AppPreferencesRepository.applyServerAuthProfile(
+                displayName = me.user.displayName,
+                email = me.user.email,
+                mobile = me.user.phone,
+                sixDigitPublicId = me.user.sixDigitPublicId,
+                isEmailVerified = !me.user.emailVerifiedAt.isNullOrBlank(),
+                passwordPlain = "",
+                birthdayDate = me.user.birthdayDate,
+            )
+            Result.success(Unit)
+        } catch (e: HttpException) {
+            Result.failure(Exception(parseHttpError(e)))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     suspend fun patchProfileRemote(
@@ -455,19 +501,47 @@ object AuthRepository {
         if (accessTokenMem.isNullOrBlank()) {
             return@withContext
         }
-        try {
-            RetrofitProvider.appApi.postAttempt(
-                AttemptRequest(
-                    testName = testName,
-                    correct = correct,
-                    total = total,
-                    completedAtMillis = completedAtMillis,
-                    testCatalogId = testCatalogId,
-                    clientSubmissionId = clientSubmissionId,
-                ),
+        val body =
+            AttemptRequest(
+                testName = testName,
+                correct = correct,
+                total = total,
+                completedAtMillis = completedAtMillis,
+                testCatalogId = testCatalogId,
+                clientSubmissionId = clientSubmissionId,
             )
-        } catch (e: Exception) {
-            Log.w(TAG, "postAttemptRemote failed (offline or 401?)", e)
+        val maxAttempts = 4
+        for (attempt in 0 until maxAttempts) {
+            try {
+                RetrofitProvider.appApi.postAttempt(body)
+                return@withContext
+            } catch (e: HttpException) {
+                val code = e.code()
+                val retryableHttp = code == 429 || code == 502 || code == 503 || code == 504
+                if (!retryableHttp || attempt == maxAttempts - 1) {
+                    Log.w(TAG, "postAttemptRemote failed HTTP $code", e)
+                    return@withContext
+                }
+                val headerSec = e.response()?.headers()?.get("Retry-After")?.trim()?.toLongOrNull()
+                val waitMs =
+                    when {
+                        headerSec != null && headerSec > 0 -> (headerSec * 1000L).coerceAtMost(30_000L)
+                        else -> (500L shl attempt).coerceAtMost(10_000L)
+                    }
+                delay(waitMs.coerceAtLeast(200L))
+            } catch (e: UnknownHostException) {
+                Log.w(TAG, "postAttemptRemote offline", e)
+                return@withContext
+            } catch (e: IOException) {
+                if (attempt >= maxAttempts - 1) {
+                    Log.w(TAG, "postAttemptRemote network error after retries", e)
+                    return@withContext
+                }
+                delay((500L shl attempt).coerceAtMost(10_000L))
+            } catch (e: Exception) {
+                Log.w(TAG, "postAttemptRemote failed", e)
+                return@withContext
+            }
         }
     }
 

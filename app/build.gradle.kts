@@ -63,6 +63,13 @@ android {
                 "proguard-rules.pro"
             )
         }
+        // Same as release (prod API in BuildConfig) but no R8 shrink — APK size similar to old “fat” debug-style builds (~tens of MB).
+        create("releaseFat") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            isMinifyEnabled = false
+            isShrinkResources = false
+        }
     }
 
     buildFeatures {

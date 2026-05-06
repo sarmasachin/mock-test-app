@@ -32,6 +32,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.freemocktest.app.data.ContentRepository
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -61,16 +63,28 @@ fun NewsScreenNew(
     onBack: () -> Unit,
     onOpenArticle: (newsId: String) -> Unit,
 ) {
-    var articles by remember { mutableStateOf(ManualNewsContent.items) }
+    var articles by remember { mutableStateOf(emptyList<ManualNewsItem>()) }
     var newsMenuCategories by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedCategory by remember { mutableStateOf<String?>(null) }
+    var feedLoading by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
-        articles = ContentRepository.loadNewsFeed("all")
-        newsMenuCategories = ContentRepository.loadHomeContent()
-            ?.newsCategoryMenu
-            ?.filter { it.isNotBlank() }
-            .orEmpty()
-            .distinctBy { it.lowercase() }
+        feedLoading = true
+        try {
+            coroutineScope {
+                val feedDeferred = async { ContentRepository.loadNewsFeed("all") }
+                val menuDeferred = async {
+                    ContentRepository.loadHomeContent()
+                        ?.newsCategoryMenu
+                        ?.filter { it.isNotBlank() }
+                        .orEmpty()
+                        .distinctBy { it.lowercase() }
+                }
+                articles = feedDeferred.await()
+                newsMenuCategories = menuDeferred.await()
+            }
+        } finally {
+            feedLoading = false
+        }
     }
     val derivedCategories = remember(articles) {
         articles.map { it.category.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
@@ -93,6 +107,7 @@ fun NewsScreenNew(
         feedIcon = Icons.Rounded.Newspaper,
         items = visibleArticles,
         imageSeedPrefix = NewsFeedImageSeedPrefix,
+        loading = feedLoading && articles.isEmpty(),
         onBack = onBack,
         onOpenItem = onOpenArticle,
         categoryMenu = menuCategories,

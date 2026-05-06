@@ -71,6 +71,8 @@ fun FeedBrowseScreenNew(
     onBack: () -> Unit,
     onOpenItem: (id: String) -> Unit,
     modifier: Modifier = Modifier,
+    /** When true, show skeleton placeholders instead of an empty feed while data loads. */
+    loading: Boolean = false,
     topStoriesSectionLabel: String = "",
     listSectionTitle: String = "",
     categoryMenu: List<String> = emptyList(),
@@ -79,12 +81,15 @@ fun FeedBrowseScreenNew(
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
-    val topStories = remember(items) { items.take(3) }
+    val topStories = remember(items, loading) {
+        if (loading && items.isEmpty()) emptyList() else items.take(3)
+    }
     val topStoryIds = remember(topStories) { topStories.map { it.id }.toSet() }
     val pagerState = rememberPagerState(pageCount = { topStories.size.coerceAtLeast(1) })
 
-    val totalPages = remember(items.size) {
-        max(1, (items.size + FeedBrowsePageSize - 1) / FeedBrowsePageSize)
+    val effectiveCount = if (loading && items.isEmpty()) FeedBrowsePageSize else items.size
+    val totalPages = remember(effectiveCount) {
+        max(1, (effectiveCount + FeedBrowsePageSize - 1) / FeedBrowsePageSize)
     }
     var pageIndex by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(totalPages) {
@@ -92,9 +97,13 @@ fun FeedBrowseScreenNew(
             pageIndex = max(0, totalPages - 1)
         }
     }
-    val pageItems = remember(items, pageIndex, totalPages) {
-        val safe = pageIndex.coerceIn(0, totalPages - 1)
-        items.drop(safe * FeedBrowsePageSize).take(FeedBrowsePageSize)
+    val pageItems = remember(items, pageIndex, totalPages, loading) {
+        if (loading && items.isEmpty()) {
+            emptyList()
+        } else {
+            val safe = pageIndex.coerceIn(0, totalPages - 1)
+            items.drop(safe * FeedBrowsePageSize).take(FeedBrowsePageSize)
+        }
     }
 
     Scaffold(
@@ -149,7 +158,7 @@ fun FeedBrowseScreenNew(
 
             item { Spacer(Modifier.height(12.dp)) }
 
-            if (categoryMenu.isNotEmpty() && onSelectCategory != null) {
+            if (!loading && categoryMenu.isNotEmpty() && onSelectCategory != null) {
                 item {
                     LazyRow(
                         modifier = Modifier.fillMaxWidth(),
@@ -174,6 +183,24 @@ fun FeedBrowseScreenNew(
                     }
                 }
                 item { Spacer(Modifier.height(10.dp)) }
+            }
+
+            if (loading && items.isEmpty()) {
+                item { FeedHeroSkeleton() }
+                item { Spacer(Modifier.height(18.dp)) }
+                items(FeedBrowsePageSize) {
+                    FeedListRowSkeleton()
+                    Spacer(Modifier.height(14.dp))
+                }
+                item {
+                    FeedPaginationBar(
+                        pageIndex = pageIndex.coerceIn(0, totalPages - 1),
+                        totalPages = totalPages,
+                        onPrev = { },
+                        onNext = { },
+                    )
+                }
+                return@LazyColumn
             }
 
             if (topStories.isNotEmpty()) {
@@ -339,7 +366,7 @@ private fun FeedTopStoryCard(
             AsyncImage(
                 model = ImageRequest.Builder(context)
                     .data(item.imageUrl(900, 520, imageSeedPrefix))
-                    .crossfade(280)
+                    .crossfade(false)
                     .build(),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
@@ -429,7 +456,7 @@ private fun FeedListRow(
         AsyncImage(
             model = ImageRequest.Builder(context)
                 .data(item.imageUrl(240, 240, imageSeedPrefix))
-                .crossfade(220)
+                .crossfade(false)
                 .build(),
             contentDescription = null,
             contentScale = ContentScale.Crop,
@@ -460,6 +487,81 @@ private fun FeedListRow(
                 color = p.textSecondary.copy(alpha = 0.85f),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FeedHeroSkeleton() {
+    val p = mockTestPalette()
+    val shape = RoundedCornerShape(18.dp)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .height(248.dp),
+        shape = shape,
+        colors = CardDefaults.cardColors(containerColor = p.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(p.textSecondary.copy(alpha = 0.12f)),
+        )
+    }
+}
+
+@Composable
+private fun FeedListRowSkeleton() {
+    val p = mockTestPalette()
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .clip(shape)
+            .border(
+                width = 1.dp,
+                color = p.border.copy(alpha = 0.14f),
+                shape = shape,
+            )
+            .background(p.surface)
+            .padding(12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            modifier = Modifier
+                .width(102.dp)
+                .height(96.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(p.textSecondary.copy(alpha = 0.14f)),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.92f)
+                    .height(14.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(p.textSecondary.copy(alpha = 0.18f)),
+            )
+            Spacer(Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.72f)
+                    .height(12.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(p.textSecondary.copy(alpha = 0.12f)),
+            )
+            Spacer(Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.55f)
+                    .height(10.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(p.textSecondary.copy(alpha = 0.10f)),
             )
         }
     }
