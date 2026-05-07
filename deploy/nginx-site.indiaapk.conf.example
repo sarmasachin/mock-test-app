@@ -3,7 +3,13 @@
 # Adjust root paths and ssl cert names if needed.
 # sudo nginx -t && sudo systemctl reload nginx
 #
-# Admin static files: build admin-web and upload "dist/" to REMOTE_PATH (see deploy-admin.ps1).
+# Admin static: deploy-admin.ps1 uploads admin-web/dist → /var/www/indiaapk-admin/dist/
+# API: Node (e.g. PM2) must listen on 127.0.0.1:3000 — admin-web calls https://YOUR_DOMAIN/v1/...
+
+upstream mocktest_api {
+    server 127.0.0.1:3000;
+    keepalive 16;
+}
 
 # HTTP — ACME + correct HTTPS redirect (do NOT use "return 301 https://;" alone)
 server {
@@ -36,6 +42,27 @@ server {
         root /var/www/html;
         allow all;
         default_type "text/plain";
+    }
+
+    location /v1/ {
+        proxy_pass http://mocktest_api/v1/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    location /uploads/ {
+        proxy_pass http://mocktest_api/uploads/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     location = /admin {
