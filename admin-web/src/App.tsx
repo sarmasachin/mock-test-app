@@ -2223,58 +2223,16 @@ function TestsTab({
               <div className="all-tests-section">
                 <h4>Advanced Controls</h4>
                 <div className="all-tests-grid all-tests-advanced-grid">
-                  <input type="datetime-local" value={publishAt} onChange={(e) => setPublishAt(e.target.value)} placeholder="Publish at" />
-                  <input type="datetime-local" value={unpublishAt} onChange={(e) => setUnpublishAt(e.target.value)} placeholder="Unpublish at" />
-                  <select value={resultVisibility} onChange={(e) => setResultVisibility(e.target.value as 'immediate' | 'after_result_time')}>
-                    <option value="immediate">Result visibility: immediate</option>
-                    <option value="after_result_time">Result visibility: after result time</option>
-                  </select>
-                  <input
-                    type="number"
-                    value={reattemptCooldownMinutes}
-                    onChange={(e) => setReattemptCooldownMinutes(e.target.value)}
-                    placeholder="Reattempt cooldown (minutes)"
-                  />
-                  <input type="number" value={lateJoinMinutes} onChange={(e) => setLateJoinMinutes(e.target.value)} placeholder="Late join window (minutes)" />
-                  <input
-                    type="number"
-                    value={notifyBeforeMinutes}
-                    onChange={(e) => setNotifyBeforeMinutes(e.target.value)}
-                    placeholder="Notify before exam (minutes)"
-                  />
-                  <label className="all-tests-field">
-                    <span>Answer Key Release At</span>
-                    <input
-                      type="datetime-local"
-                      value={answerKeyReleaseAt}
-                      onChange={(e) => setAnswerKeyReleaseAt(e.target.value)}
-                      placeholder="Answer key release"
-                    />
-                  </label>
-                  <label className="all-tests-field">
-                    <span>Result Release At</span>
-                    <input
-                      type="datetime-local"
-                      value={resultReleaseAt}
-                      onChange={(e) => setResultReleaseAt(e.target.value)}
-                      placeholder="Result release"
-                    />
-                  </label>
-                  <label className="check-wrap">
-                    <input type="checkbox" checked={resumeEnabled} onChange={(e) => setResumeEnabled(e.target.checked)} />
-                    resume enabled
-                  </label>
-                  <label className="check-wrap">
-                    <input type="checkbox" checked={shuffleQuestions} onChange={(e) => setShuffleQuestions(e.target.checked)} />
-                    shuffle questions
-                  </label>
-                  <label className="check-wrap">
-                    <input type="checkbox" checked={shuffleOptions} onChange={(e) => setShuffleOptions(e.target.checked)} />
-                    shuffle options
-                  </label>
-                  <div className="all-tests-subject-sections" style={{ gridColumn: '1 / -1' }}>
+                  <div
+                    id="admin-subject-sections"
+                    className="all-tests-subject-sections"
+                    style={{ gridColumn: '1 / -1' }}
+                  >
+                    <p className="muted" style={{ margin: '0 0 8px', fontWeight: 600 }}>
+                      Subject sections (optional)
+                    </p>
                     <p className="muted" style={{ margin: '0 0 8px' }}>
-                      Subject sections (optional). List order = paper order when <b>shuffle questions</b> groups by subject. Keys:{' '}
+                      List order = paper order when <b>shuffle questions</b> groups by subject. Keys:{' '}
                       <code>a-z</code>, <code>0-9</code>, <code>_</code>, <code>-</code> (max 40 each).
                     </p>
                     {subjectSectionRows.map((row, idx) => (
@@ -2329,6 +2287,55 @@ function TestsTab({
                       + Add subject
                     </button>
                   </div>
+                  <input type="datetime-local" value={publishAt} onChange={(e) => setPublishAt(e.target.value)} placeholder="Publish at" />
+                  <input type="datetime-local" value={unpublishAt} onChange={(e) => setUnpublishAt(e.target.value)} placeholder="Unpublish at" />
+                  <select value={resultVisibility} onChange={(e) => setResultVisibility(e.target.value as 'immediate' | 'after_result_time')}>
+                    <option value="immediate">Result visibility: immediate</option>
+                    <option value="after_result_time">Result visibility: after result time</option>
+                  </select>
+                  <input
+                    type="number"
+                    value={reattemptCooldownMinutes}
+                    onChange={(e) => setReattemptCooldownMinutes(e.target.value)}
+                    placeholder="Reattempt cooldown (minutes)"
+                  />
+                  <input type="number" value={lateJoinMinutes} onChange={(e) => setLateJoinMinutes(e.target.value)} placeholder="Late join window (minutes)" />
+                  <input
+                    type="number"
+                    value={notifyBeforeMinutes}
+                    onChange={(e) => setNotifyBeforeMinutes(e.target.value)}
+                    placeholder="Notify before exam (minutes)"
+                  />
+                  <label className="all-tests-field">
+                    <span>Answer Key Release At</span>
+                    <input
+                      type="datetime-local"
+                      value={answerKeyReleaseAt}
+                      onChange={(e) => setAnswerKeyReleaseAt(e.target.value)}
+                      placeholder="Answer key release"
+                    />
+                  </label>
+                  <label className="all-tests-field">
+                    <span>Result Release At</span>
+                    <input
+                      type="datetime-local"
+                      value={resultReleaseAt}
+                      onChange={(e) => setResultReleaseAt(e.target.value)}
+                      placeholder="Result release"
+                    />
+                  </label>
+                  <label className="check-wrap">
+                    <input type="checkbox" checked={resumeEnabled} onChange={(e) => setResumeEnabled(e.target.checked)} />
+                    resume enabled
+                  </label>
+                  <label className="check-wrap">
+                    <input type="checkbox" checked={shuffleQuestions} onChange={(e) => setShuffleQuestions(e.target.checked)} />
+                    shuffle questions
+                  </label>
+                  <label className="check-wrap">
+                    <input type="checkbox" checked={shuffleOptions} onChange={(e) => setShuffleOptions(e.target.checked)} />
+                    shuffle options
+                  </label>
                   <label className="check-wrap">
                     <input type="checkbox" checked={fullscreenRequired} onChange={(e) => setFullscreenRequired(e.target.checked)} />
                     fullscreen required
