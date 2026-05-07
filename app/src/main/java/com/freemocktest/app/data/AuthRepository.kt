@@ -109,6 +109,7 @@ object AuthRepository {
                 isEmailVerified = !me.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
                 birthdayDate = me.user.birthdayDate,
+                accountCreatedAtIso = me.user.createdAt,
             )
             val status = if (me.user.needsProfileCompletion()) {
                 RestoreSessionStatus.ProfileIncomplete
@@ -162,6 +163,7 @@ object AuthRepository {
                 isEmailVerified = !resp.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = password,
                 birthdayDate = resp.user.birthdayDate,
+                accountCreatedAtIso = resp.user.createdAt,
             )
             AppPreferencesRepository.setAuthBootstrapState(
                 if (resp.user.needsProfileCompletion()) {
@@ -193,6 +195,7 @@ object AuthRepository {
                 isEmailVerified = !resp.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
                 birthdayDate = resp.user.birthdayDate,
+                accountCreatedAtIso = resp.user.createdAt,
             )
             AppPreferencesRepository.setAuthBootstrapState(
                 if (resp.user.needsProfileCompletion()) {
@@ -238,6 +241,7 @@ object AuthRepository {
                 isEmailVerified = !resp.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = password,
                 birthdayDate = resp.user.birthdayDate,
+                accountCreatedAtIso = resp.user.createdAt,
             )
             AppPreferencesRepository.setAuthBootstrapState(
                 if (resp.user.needsProfileCompletion()) {
@@ -284,6 +288,7 @@ object AuthRepository {
                 isEmailVerified = !me.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
                 birthdayDate = me.user.birthdayDate,
+                accountCreatedAtIso = me.user.createdAt,
             )
             Result.success(Unit)
         } catch (e: HttpException) {
@@ -334,6 +339,7 @@ object AuthRepository {
                 isEmailVerified = !u.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
                 birthdayDate = u.birthdayDate,
+                accountCreatedAtIso = u.createdAt,
             )
             Result.success(Unit)
         } catch (e: HttpException) {

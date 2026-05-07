@@ -21,7 +21,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import com.freemocktest.app.newui.auth.isValidEmail
 import com.freemocktest.app.newui.auth.isValidMobile
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneOffset
 import java.util.Locale
 import kotlin.random.Random
 import org.json.JSONArray
@@ -57,6 +59,8 @@ object AppPreferencesRepository {
     private val keyProfileGender = stringPreferencesKey("profile_gender")
     /** Cached from server `birthdayDate` (YYYY-MM-DD). */
     private val keyProfileBirthdayDate = stringPreferencesKey("profile_birthday_date")
+    /** Cached from server `createdAt` on the user row (ISO string). */
+    private val keyAccountCreatedAtIso = stringPreferencesKey("account_created_at_iso")
     private val keyProfileNotificationsEnabled = intPreferencesKey("profile_notifications_enabled")
     private val keyScoreVisibilityEnabled = intPreferencesKey("score_visibility_enabled")
     /** Stored numeric id: server `six_digit_public_id` (100000–999999) or legacy local 8-digit; 0 = not assigned. */
@@ -272,6 +276,7 @@ object AppPreferencesRepository {
         isEmailVerified: Boolean,
         passwordPlain: String,
         birthdayDate: String? = null,
+        accountCreatedAtIso: String? = null,
     ) {
         if (!::appContext.isInitialized) return
         runCatching {
@@ -285,10 +290,40 @@ object AppPreferencesRepository {
                 if (isSixDigitPublicId(sixDigitPublicId)) {
                     prefs[keyProfileUserCode] = sixDigitPublicId
                 }
+                val createdTrim = accountCreatedAtIso?.trim().orEmpty()
+                if (createdTrim.isNotEmpty()) {
+                    prefs[keyAccountCreatedAtIso] = createdTrim
+                }
                 // Never persist plain passwords on device storage.
                 prefs[keyEmailVerified] = if (isEmailVerified) 1 else 0
             }
         }.onFailure { Log.e(TAG, "applyServerAuthProfile failed", it) }
+    }
+
+    /**
+     * Instant after which inbox notifications should be shown for this account.
+     * Null if unknown (guest / not synced yet) — caller shows full feed like before.
+     */
+    suspend fun getAccountSignupInstantOrNull(): Instant? {
+        if (!::appContext.isInitialized) return null
+        val raw = runCatching {
+            store().data.first()[keyAccountCreatedAtIso].orEmpty().trim()
+        }.getOrNull().orEmpty()
+        if (raw.isBlank()) return null
+        return parseFlexibleInstant(raw)
+    }
+
+    private fun parseFlexibleInstant(raw: String): Instant? {
+        val s = raw.trim()
+        if (s.isBlank()) return null
+        runCatching { Instant.parse(s) }.getOrNull()?.let { return it }
+        return runCatching {
+            if (Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(s)) {
+                LocalDate.parse(s).atStartOfDay(ZoneOffset.UTC).toInstant()
+            } else {
+                null
+            }
+        }.getOrNull()
     }
 
     /**
@@ -953,6 +988,7 @@ object AppPreferencesRepository {
                 prefs[keySeenNotificationIdsOwner] = ""
                 prefs[keySeenPollIdsOwner] = ""
                 prefs[keyVotedPollIdsOwner] = ""
+                prefs[keyAccountCreatedAtIso] = ""
             }
         }.onFailure { Log.e(TAG, "clearAuthSessionPrefs failed", it) }
     }

@@ -14,6 +14,8 @@ data class AuthUserDto(
     @SerializedName("phoneVerifiedAt") val phoneVerifiedAt: String? = null,
     /** Server: `birthdayDate` (YYYY-MM-DD) from `users.date_of_birth`. */
     @SerializedName("birthdayDate") val birthdayDate: String? = null,
+    /** Account creation time from server (`users.created_at`), ISO-8601. Used to hide pre-signup broadcast inbox rows. */
+    @SerializedName("createdAt") val createdAt: String? = null,
 )
 
 data class LoginRequest(

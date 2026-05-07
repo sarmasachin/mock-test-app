@@ -60,7 +60,7 @@ fun NotificationsScreenNew(
     LaunchedEffect(Unit) {
         loadingNotifications = true
         val remoteRows = runCatching { ContentRepository.loadNotifications() }.getOrDefault(emptyList())
-        val localRows = LocalNotificationInbox.read(context)
+        val localRows = ContentRepository.filterNotificationsForCurrentAccount(LocalNotificationInbox.read(context))
         val rows = (localRows + remoteRows)
             .distinctBy { it.id.trim() }
             .sortedByDescending { it.createdAt.orEmpty() }

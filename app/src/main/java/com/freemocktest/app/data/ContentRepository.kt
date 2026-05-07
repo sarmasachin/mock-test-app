@@ -8,7 +8,10 @@ import com.freemocktest.app.newui.alerts.ManualJobAlertContent
 import com.freemocktest.app.newui.news.ManualNewsContent
 import com.freemocktest.app.newui.news.ManualNewsItem
 import com.freemocktest.app.newui.tests.TestCardNew
+import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -581,6 +584,27 @@ object ContentRepository {
         }
     }
 
+    suspend fun filterNotificationsForCurrentAccount(rows: List<PushNotificationItemRemote>): List<PushNotificationItemRemote> {
+        val signup = AppPreferencesRepository.getAccountSignupInstantOrNull() ?: return rows
+        return rows.filter { row ->
+            val t = parseNotificationCreatedInstant(row.createdAt) ?: return@filter false
+            !t.isBefore(signup)
+        }
+    }
+
+    private fun parseNotificationCreatedInstant(raw: String?): Instant? {
+        val s = raw?.trim().orEmpty()
+        if (s.isBlank()) return null
+        runCatching { Instant.parse(s) }.getOrNull()?.let { return it }
+        return runCatching {
+            if (Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(s)) {
+                LocalDate.parse(s).atStartOfDay(ZoneOffset.UTC).toInstant()
+            } else {
+                null
+            }
+        }.getOrNull()
+    }
+
     suspend fun loadNotifications(): List<PushNotificationItemRemote> = withContext(Dispatchers.IO) {
         if (!AppPreferencesRepository.notificationsEnabledNow()) {
             return@withContext emptyList()
@@ -603,6 +627,7 @@ object ContentRepository {
                     )
                 }
                 .sortedByDescending { it.createdAt.orEmpty() }
+                .let { filterNotificationsForCurrentAccount(it) }
                 .take(30)
         } catch (e: Exception) {
             Log.w(TAG, "loadNotifications", e)
