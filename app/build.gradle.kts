@@ -23,10 +23,10 @@ android {
         targetSdk = 34
         versionCode = 2
         versionName = "1.0.1"
-        // Default release API (no local.properties): same VPS as admin — avoid a second stale host (e.g. old Render).
+        // Release: prod URL only unless mocktest.releaseApiBaseUrl is set (staging).
+        // Do NOT use mocktest.apiBaseUrl here — that key is for local dev and would ship bad URLs in APKs.
         val apiBase = (
             localProperties.getProperty("mocktest.releaseApiBaseUrl")
-                ?: localProperties.getProperty("mocktest.apiBaseUrl")
                 ?: "https://indiaapk.com/v1/"
             ).let { b -> if (b.endsWith("/")) b else "$b/" }
         val escaped = apiBase.replace("\\", "\\\\").replace("\"", "\\\"")
@@ -51,7 +51,13 @@ android {
                 localProperties.getProperty("mocktest.debugApiBaseUrl")
                     ?: localProperties.getProperty("mocktest.apiBaseUrl")
                     ?: "http://10.0.2.2:3000/v1/"
-                ).let { b -> if (b.endsWith("/")) b else "$b/" }
+                ).let { b ->
+                    val base = if (b.endsWith("/")) b else "$b/"
+                    if (base.startsWith("https:") && (base.contains(":3000/") || base.matches(Regex("https://[0-9.]+:\\d+/")))) {
+                        println("⚠️  mocktest debug API URL uses https on a port — Node default is HTTP. Use http://…:3000/ or you get TLS parse errors.")
+                    }
+                    base
+                }
             val debugEscaped = debugApiBase.replace("\\", "\\\\").replace("\"", "\\\"")
             buildConfigField("String", "API_BASE_URL", "\"$debugEscaped\"")
         }
