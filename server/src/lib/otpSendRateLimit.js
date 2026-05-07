@@ -9,9 +9,10 @@ const WINDOW_MS = Math.max(60_000, parseInt(process.env.OTP_REQUEST_WINDOW_MS ||
 const PW_MAX_IP = Math.max(5, parseInt(process.env.OTP_PASSWORD_RESET_MAX_PER_IP || '30', 10));
 const PW_MAX_EMAIL = Math.max(1, parseInt(process.env.OTP_PASSWORD_RESET_MAX_PER_EMAIL || '5', 10));
 const EV_MAX_USER = Math.max(1, parseInt(process.env.OTP_EMAIL_VERIFY_MAX_PER_USER || '8', 10));
-const ADL_REQ_MAX_IP = Math.max(5, parseInt(process.env.OTP_ADMIN_LOGIN_REQUEST_MAX_PER_IP || '25', 10));
-const ADL_REQ_MAX_UID = Math.max(2, parseInt(process.env.OTP_ADMIN_LOGIN_REQUEST_MAX_PER_USER || '8', 10));
-const ADL_VER_MAX_IP = Math.max(10, parseInt(process.env.OTP_ADMIN_LOGIN_VERIFY_MAX_PER_IP || '60', 10));
+// Admin login: keep these low to avoid mail provider blocks during testing.
+const ADL_REQ_MAX_IP = Math.max(1, parseInt(process.env.OTP_ADMIN_LOGIN_REQUEST_MAX_PER_IP || '5', 10));
+const ADL_REQ_MAX_UID = Math.max(1, parseInt(process.env.OTP_ADMIN_LOGIN_REQUEST_MAX_PER_USER || '5', 10));
+const ADL_VER_MAX_IP = Math.max(1, parseInt(process.env.OTP_ADMIN_LOGIN_VERIFY_MAX_PER_IP || '10', 10));
 
 const buckets = new Map();
 
