@@ -15,6 +15,7 @@ const {
 const { checkEmailVerificationUser } = require('../lib/otpSendRateLimit');
 
 const router = express.Router();
+const { isProtectedSuperAdminDbEmail } = require('../constants/protectedSuperAdminEmails');
 const EMAIL_VERIFY_OTP_MINUTES = () =>
   parseInt(process.env.EMAIL_VERIFY_OTP_MINUTES || '15', 10);
 
@@ -121,6 +122,16 @@ router.get('/', async (req, res) => {
 
 router.delete('/', async (req, res) => {
   try {
+    const { rows } = await pool.query(
+      `SELECT lower(trim(email::text)) AS e FROM users WHERE id = $1::uuid LIMIT 1`,
+      [req.userId],
+    );
+    if (!rows[0]) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (isProtectedSuperAdminDbEmail(rows[0].e)) {
+      return res.status(403).json({ error: 'This account cannot be deleted.' });
+    }
     const r = await pool.query(`DELETE FROM users WHERE id = $1::uuid`, [req.userId]);
     if (r.rowCount === 0) {
       return res.status(404).json({ error: 'User not found' });

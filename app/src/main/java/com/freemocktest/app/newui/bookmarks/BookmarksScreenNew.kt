@@ -83,7 +83,7 @@ fun BookmarksScreenNew(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val tabs = remember {
-        listOf("Image Compress", "PDF Tools", "Unit Converter", AgeCalculatorTabName)
+        listOf(AgeCalculatorTabName, "Image Compress", "PDF Tools", "Unit Converter")
     }
     var selectedTab by remember { mutableStateOf(tabs.first()) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }

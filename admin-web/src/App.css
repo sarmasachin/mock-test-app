@@ -130,6 +130,20 @@
   border: 1px solid rgba(59, 130, 246, 0.35);
 }
 
+/* Keep "Code sent for <email>" on one line. */
+.auth-message.info .auth-otp-sent-label {
+  white-space: nowrap;
+}
+
+.auth-message.info .auth-otp-sent-id {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
 .auth-page .auth-form input {
   background: rgba(255, 255, 255, 0.07);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -662,6 +676,41 @@ button:active {
   grid-template-columns: 1fr 1.4fr 1fr 120px 90px 70px 70px 90px 90px;
 }
 
+.profile-panel .admin-account-strip {
+  margin-bottom: 1.35rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.profile-panel .admin-account-strip .account-meta {
+  margin: 0 0 0.5rem 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.profile-panel .admin-account-strip .account-meta-strong {
+  color: inherit;
+  font-weight: 600;
+}
+
+.profile-panel .admin-account-strip .account-meta-hint {
+  margin: 0.5rem 0 0 0;
+  font-size: 12px;
+}
+
+.profile-panel .admin-dob-form {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.profile-panel .admin-dob-form label {
+  min-width: 100%;
+  margin-bottom: -2px;
+}
+
 .profile-panel {
   display: grid;
   gap: 12px;
@@ -838,6 +887,18 @@ button:active {
   gap: 8px;
 }
 
+.all-tests-subject-sections {
+  padding: 10px;
+  border: 1px solid #e6edf7;
+  border-radius: 12px;
+  background: #fbfdff;
+}
+
+.all-tests-subject-sections .all-tests-grid {
+  gap: 12px;
+  row-gap: 12px;
+}
+
 .all-tests-field {
   display: grid;
   gap: 4px;
@@ -852,7 +913,9 @@ button:active {
 }
 
 .all-tests-advanced-grid {
-  align-items: center;
+  align-items: start;
+  gap: 12px;
+  row-gap: 12px;
 }
 
 .all-tests-grid input,
@@ -2378,8 +2441,19 @@ button:active {
   word-break: break-all;
 }
 
-.auth-page .login-card .auth-message {
+/* OTP “code sent” row lives INSIDE the form — keep compact; `.auth-float-form` gap drives spacing. */
+.auth-page .login-card form.auth-float-form > .auth-message {
   margin-top: 0;
+  margin-bottom: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Login feedback (error/success/info) renders as direct sibling AFTER `form` → must not inherit margin-top:0 from generic card styles. */
+.auth-page .login-card > form.auth-form.auth-float-form + .auth-message,
+.auth-page .login-card > form.auth-float-form + .auth-message {
+  margin-top: 25px;
   margin-bottom: 12px;
   padding: 10px 12px;
   font-size: 12px;

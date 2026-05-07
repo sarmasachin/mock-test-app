@@ -17,6 +17,7 @@ const testsCatalogRouter = require('./routes/tests');
 const leaderboardRouter = require('./routes/leaderboard');
 const homeRouter = require('./routes/home');
 const adminRouter = require('./routes/admin');
+const { PROTECTED_SUPER_ADMIN_EMAIL_LIST } = require('./constants/protectedSuperAdminEmails');
 const pollsRouter = require('./routes/polls');
 const { pool } = require('./db');
 const { clampMcqCorrectIndex } = require('./mcqShuffle');
@@ -46,6 +47,10 @@ if (!process.env.DATABASE_URL) {
 }
 
 const app = express();
+// Ensure req.protocol reflects HTTPS when behind a reverse proxy (x-forwarded-proto).
+// This is important for generating correct public asset URLs (e.g. /uploads/*) consumed by Android,
+// where cleartext http:// images are blocked in release builds.
+app.set('trust proxy', 1);
 
 /** When CORS_ALLOWED_ORIGINS is set (comma-separated), only those browser origins may call the API. */
 function buildCorsMiddleware() {
@@ -245,6 +250,17 @@ async function ensureOptionalColumns() {
         )
       )
     `);
+    /** Locked super-admin roster — sourced from `./constants/protectedSuperAdminEmails.js`. */
+    for (const em of PROTECTED_SUPER_ADMIN_EMAIL_LIST) {
+      await pool.query(
+        `UPDATE users
+         SET is_admin = true,
+             is_super_admin = true,
+             updated_at = now()
+         WHERE lower(trim(email::text)) = lower(trim($1::text))`,
+        [em],
+      );
+    }
   } catch (e) {
     if (e && e.code === '42P01') return;
     console.error('optional_columns_init_error', e);

@@ -76,6 +76,32 @@ private fun defaultDynamicProfileMenuItems() = listOf(
     DynamicProfileMenuItem("delete-account", "Delete account", "Removes your account on the server and clears this device", "/delete-account", true),
 )
 
+/** When remote profile menu omits `/edit-dob`, insert it next to other identity fields — not at the list tail. */
+private fun mergeRemoteMenuWithDobIfMissing(
+    mapped: List<DynamicProfileMenuItem>,
+): List<DynamicProfileMenuItem> {
+    if (mapped.any { it.path == "/edit-dob" }) return mapped
+    val dobItem = DynamicProfileMenuItem(
+        id = "edit-dob",
+        title = "Date of birth",
+        subtitle = "{value}",
+        path = "/edit-dob",
+        enabled = true,
+    )
+    val iMobile = mapped.indexOfFirst { it.path == "/edit-mobile" }
+    val insertAt = when {
+        iMobile >= 0 -> iMobile + 1
+        else -> {
+            val iGender = mapped.indexOfFirst { it.path == "/edit-gender" }
+            if (iGender >= 0) iGender else mapped.size
+        }
+    }
+    val out = mapped.toMutableList()
+    val safeIndex = insertAt.coerceIn(0, out.size)
+    out.add(safeIndex, dobItem)
+    return out
+}
+
 private fun formatDobForUi(iso: String): String {
     val raw = iso.trim()
     if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(raw)) return raw
@@ -133,14 +159,7 @@ fun ProfileScreenNew(
                         enabled = it.enabled,
                     )
                 }
-            val hasDob = mapped.any { it.path == "/edit-dob" }
-            menuItems = if (hasDob) mapped else (mapped + DynamicProfileMenuItem(
-                id = "edit-dob",
-                title = "Date of birth",
-                subtitle = "{value}",
-                path = "/edit-dob",
-                enabled = true,
-            ))
+            menuItems = mergeRemoteMenuWithDobIfMissing(mapped)
         }
     }
 

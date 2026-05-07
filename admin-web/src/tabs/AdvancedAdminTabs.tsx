@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { AdminAnalyticsDashboard } from '../components/AdminAnalyticsDashboard';
 import { useAdminDialog } from '../adminDialog';
 import { useAdminToast } from '../adminToast';
+import { isProtectedSuperAdminEmail } from '../protectedSuperAdmin';
 
 /** Display stored ISO (or parseable) times in India timezone for admin lists. */
 function formatScheduleAtDisplay(iso: string): string {
@@ -862,6 +863,10 @@ export function UserManagementAdvancedTabImpl({ apiClient, isSuperAdmin }: { api
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   async function toggleBan(item: UserReportItem) {
+    if (isProtectedSuperAdminEmail(item.email)) {
+      pushToast('error', 'This account is a protected super admin and cannot be blocked from here.');
+      return;
+    }
     const shouldBan = !item.is_banned;
     let reason = '';
     if (shouldBan) {
@@ -941,9 +946,15 @@ export function UserManagementAdvancedTabImpl({ apiClient, isSuperAdmin }: { api
             <span>{item.is_banned ? 'Blocked' : 'Active'}</span>
             <span>{item.last_attempt_at ? new Date(item.last_attempt_at).toLocaleString() : '-'}</span>
             {isSuperAdmin ? (
-              <button type="button" className={item.is_banned ? 'ghost' : 'danger'} onClick={() => toggleBan(item)}>
-                {item.is_banned ? 'Unblock' : 'Block'}
-              </button>
+              isProtectedSuperAdminEmail(item.email) ? (
+                <span title="Permanent super admin" style={{ fontSize: '0.78rem', color: '#64748b', fontWeight: 700 }}>
+                  Protected
+                </span>
+              ) : (
+                <button type="button" className={item.is_banned ? 'ghost' : 'danger'} onClick={() => toggleBan(item)}>
+                  {item.is_banned ? 'Unblock' : 'Block'}
+                </button>
+              )
             ) : (
               <button disabled title="Only super admin can block/unblock users">
                 Restricted

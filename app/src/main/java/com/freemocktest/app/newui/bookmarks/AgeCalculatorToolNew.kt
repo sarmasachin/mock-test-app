@@ -71,32 +71,36 @@ private fun formatDateForUi(iso: String): String {
 }
 
 private fun computeAgeResult(dob: LocalDate, onDate: LocalDate): AgeCalcResult {
-    val period = Period.between(dob, onDate)
-    val y = period.years.coerceAtLeast(0)
-    val m = period.months.coerceAtLeast(0)
-    val d = period.days.coerceAtLeast(0)
+    // Use an anchor-date method so Y/M/D never drift:
+    // yearsComplete = full years since DOB
+    // months/days = remainder after adding full years
+    val yearsComplete = ChronoUnit.YEARS.between(dob, onDate).coerceAtLeast(0).toInt()
+    val anchorAfterYears = dob.plusYears(yearsComplete.toLong())
+    val remAfterYears = Period.between(anchorAfterYears, onDate)
+    val y = yearsComplete
+    val m = remAfterYears.months.coerceAtLeast(0)
+    val d = remAfterYears.days.coerceAtLeast(0)
 
     val totalDays = ChronoUnit.DAYS.between(dob, onDate).coerceAtLeast(0)
-    val daysAfterYears = ChronoUnit.DAYS.between(dob.plusYears(y.toLong()), onDate).coerceAtLeast(0)
+    val daysAfterYears = ChronoUnit.DAYS.between(anchorAfterYears, onDate).coerceAtLeast(0)
 
-    val wholeWeeks = (totalDays / 7).coerceAtLeast(0)
-    val remDays = (totalDays % 7).coerceAtLeast(0)
+    // Totals (so values don't appear as 0 unless truly 0).
+    val totalWeeks = (totalDays / 7).coerceAtLeast(0)
+    val totalMonths = ChronoUnit.MONTHS.between(dob, onDate).coerceAtLeast(0)
 
-    // Hours/minutes: keep it intuitive.
-    // Since user selects a DATE only (not time), we show "time-of-day" only when calculating for today.
-    // Otherwise it would be misleading, so we use 0/0.
+    // User selects a DATE only (no time). We assume start-of-day for both; for "today" add current minutes-of-day.
     val minutesOfDay =
         if (onDate == LocalDate.now()) {
             LocalTime.now().let { it.hour * 60L + it.minute.toLong() }
         } else {
             0L
         }
-    val hoursPart = (minutesOfDay / 60L).coerceAtLeast(0)
-    val minutePart = (minutesOfDay % 60L).coerceAtLeast(0)
+    val totalMinutes = totalDays * 24L * 60L + minutesOfDay
+    val totalHours = totalMinutes / 60L
 
     return AgeCalcResult(
         ymdText = "$y Years / $m Months / $d Days",
-        ymwdhmText = "$y Years / $m Months / $wholeWeeks week / $remDays Days / $hoursPart hours / $minutePart minute",
+        ymwdhmText = "$y Years / $totalMonths Months / $totalWeeks week / $totalDays Days / $totalHours hours / $totalMinutes minute",
         ydText = "$y Years / $daysAfterYears Days",
     )
 }
@@ -206,26 +210,48 @@ internal fun AgeCalculatorToolCard(
             .padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Result at top (as requested)
-        Text(
-            text = result?.ymdText ?: "Years / Months / Days",
-            color = p.textPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.ExtraBold,
-        )
-        Spacer(Modifier.height(1.dp).fillMaxWidth().background(p.border.copy(alpha = 0.16f)))
-        Text(
-            text = result?.ymwdhmText ?: "Years / Months /week / Days/ hours / minute",
-            color = p.textSecondary,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Text(
-            text = result?.ydText ?: "Years/ Days",
-            color = p.textSecondary,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
+        // Result at top (as requested) — separated lines/blocks.
+        val resultShape = RoundedCornerShape(16.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(resultShape)
+                .background(p.surfaceElevated)
+                .border(1.dp, p.border.copy(alpha = 0.14f), resultShape)
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = result?.ymdText ?: "Years / Months / Days",
+                color = p.textPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.ExtraBold,
+            )
+            Spacer(
+                Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(p.border.copy(alpha = 0.16f)),
+            )
+            Text(
+                text = result?.ymwdhmText ?: "Years / Months /week / Days/ hours / minute",
+                color = p.textPrimary.copy(alpha = 0.92f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(
+                Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(p.border.copy(alpha = 0.16f)),
+            )
+            Text(
+                text = result?.ydText ?: "Years/ Days",
+                color = p.textPrimary.copy(alpha = 0.92f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
 
         Spacer(Modifier.height(6.dp))
 

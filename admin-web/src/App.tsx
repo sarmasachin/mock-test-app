@@ -10,6 +10,7 @@ import {
   PublishSchedulingTabImpl,
   UserManagementAdvancedTabImpl,
 } from './tabs/AdvancedAdminTabs';
+import { isProtectedSuperAdminEmail } from './protectedSuperAdmin';
 import {
   InstructionContentTabImpl,
   PollSettingsTabImpl,
@@ -492,6 +493,8 @@ const apiBase = normalizeApiBaseUrl(
 );
 
 const ADMIN_AUTH_STORAGE_KEY = 'mocktest_admin_auth_v1';
+/** Seconds between admin login OTP sends (matches UX; server has separate rate caps). */
+const ADMIN_OTP_RESEND_COOLDOWN_SEC = 60;
 
 const api = axios.create({
   baseURL: apiBase,
@@ -499,6 +502,16 @@ const api = axios.create({
 });
 
 /** Avoid showing raw nginx HTML pages in the UI; map common proxy mistakes to a short hint. */
+/** Best-effort parse of HTTP Retry-After (seconds) for rate-limit UX. */
+function parseRetryAfterSec(err: unknown): number | null {
+  const headers = (err as { response?: { headers?: Record<string, unknown> } })?.response?.headers;
+  if (!headers) return null;
+  const raw = headers['retry-after'] ?? headers['Retry-After'];
+  const n = typeof raw === 'string' ? parseInt(raw, 10) : typeof raw === 'number' ? raw : NaN;
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.min(900, Math.round(n));
+}
+
 function formatAxiosErr(err: unknown, fallback: string): string {
   const e = err as {
     response?: { status?: number; data?: unknown };
@@ -726,6 +739,7 @@ function App() {
   const [password, setPassword] = useState('');
   const [adminOtpStep, setAdminOtpStep] = useState<'password' | 'otp'>('password');
   const [otpCode, setOtpCode] = useState('');
+  const [otpResendSec, setOtpResendSec] = useState(0);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'info' | 'error' | 'success'>('info');
@@ -741,6 +755,8 @@ function App() {
     setIsSuperAdmin(false);
     setAdminOtpStep('password');
     setOtpCode('');
+    setPassword('');
+    setOtpResendSec(0);
     setMessage('Session expired or revoked. Please sign in again.');
     setMessageType('error');
   };
@@ -870,6 +886,20 @@ function App() {
     }
   }, [tab, selectedQuestionTestId]);
 
+  useEffect(() => {
+    if (adminOtpStep !== 'otp') {
+      setOtpResendSec(0);
+      return;
+    }
+    setOtpResendSec(ADMIN_OTP_RESEND_COOLDOWN_SEC);
+  }, [adminOtpStep]);
+
+  useEffect(() => {
+    if (otpResendSec <= 0) return;
+    const id = window.setTimeout(() => setOtpResendSec((s) => Math.max(0, s - 1)), 1000);
+    return () => window.clearTimeout(id);
+  }, [otpResendSec]);
+
   type LoginUserPayload = { isAdmin?: boolean; isSuperAdmin?: boolean; email?: string } | null;
 
   async function bootstrapAdminSession(
@@ -910,7 +940,6 @@ function App() {
         password,
       });
       if (res.data?.ok) {
-        setPassword('');
         setAdminOtpStep('otp');
         setOtpCode('');
         setMessageType('success');
@@ -922,6 +951,40 @@ function App() {
     } catch (err: unknown) {
       setMessageType('error');
       setMessage(formatAxiosErr(err, 'Could not send login code. Check ID and password.'));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAdminResendOtp() {
+    if (loading || otpResendSec > 0) return;
+    if (!password) {
+      setMessageType('error');
+      setMessage('Use Back, then sign in again to resend a code.');
+      return;
+    }
+    setLoading(true);
+    setMessage('');
+    setMessageType('info');
+    try {
+      const res = await api.post('/auth/admin-login/request-otp', {
+        identifier,
+        password,
+      });
+      if (res.data?.ok) {
+        setOtpCode('');
+        setOtpResendSec(ADMIN_OTP_RESEND_COOLDOWN_SEC);
+        setMessageType('success');
+        setMessage(String(res.data?.message || 'A new login code was sent to your email.'));
+      } else {
+        setMessageType('error');
+        setMessage('Could not resend login code.');
+      }
+    } catch (err: unknown) {
+      setMessageType('error');
+      setMessage(formatAxiosErr(err, 'Could not resend login code.'));
+      const ra = parseRetryAfterSec(err);
+      if (ra != null) setOtpResendSec((s) => Math.max(s, ra));
     } finally {
       setLoading(false);
     }
@@ -954,6 +1017,8 @@ function App() {
       }
       setAdminOtpStep('password');
       setOtpCode('');
+      setPassword('');
+      setOtpResendSec(0);
       setMessageType('success');
       setMessage('Login successful.');
     } catch (err: unknown) {
@@ -1014,7 +1079,8 @@ function App() {
               ) : (
                 <form onSubmit={handleAdminVerifyOtp} className="auth-form auth-float-form">
                   <p className="auth-message info" style={{ marginBottom: '12px', fontSize: '14px' }}>
-                    Code sent for <strong>{identifier}</strong>
+                    <span className="auth-otp-sent-label">Code sent for</span>
+                    <strong className="auth-otp-sent-id">{identifier}</strong>
                   </p>
                   <div className="input-group">
                     <div className="input-box input-box-float">
@@ -1036,6 +1102,14 @@ function App() {
                   </button>
                   <button
                     type="button"
+                    className="link-like-btn"
+                    disabled={loading || otpResendSec > 0}
+                    onClick={() => void handleAdminResendOtp()}
+                  >
+                    {otpResendSec > 0 ? `Resend code in ${otpResendSec}s` : 'Resend code'}
+                  </button>
+                  <button
+                    type="button"
                     className="login-btn"
                     style={{ marginTop: '10px', background: 'transparent', border: '1px solid rgba(255,255,255,0.35)' }}
                     disabled={loading}
@@ -1043,6 +1117,7 @@ function App() {
                       setAdminOtpStep('password');
                       setOtpCode('');
                       setMessage('');
+                      setOtpResendSec(0);
                     }}
                   >
                     Back
@@ -1182,7 +1257,7 @@ function App() {
           {tab === 'instructionContent' && <InstructionContentTab apiClient={authedApi} />}
           {tab === 'examCategories' && <ExamCategoriesTab apiClient={authedApi} />}
           {tab === 'settings' && <SettingsTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
-          {tab === 'auditLogs' && <AuditLogsTab apiClient={authedApi} />}
+          {tab === 'auditLogs' && <AuditLogsTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
           {tab === 'users' && <UsersTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
           {tab === 'userManagementAdvanced' && <UserManagementAdvancedTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
         </main>
@@ -2228,13 +2303,6 @@ function TestsTab({
                     className="all-tests-subject-sections"
                     style={{ gridColumn: '1 / -1' }}
                   >
-                    <p className="muted" style={{ margin: '0 0 8px', fontWeight: 600 }}>
-                      Subject sections (optional)
-                    </p>
-                    <p className="muted" style={{ margin: '0 0 8px' }}>
-                      List order = paper order when <b>shuffle questions</b> groups by subject. Keys:{' '}
-                      <code>a-z</code>, <code>0-9</code>, <code>_</code>, <code>-</code> (max 40 each).
-                    </p>
                     {subjectSectionRows.map((row, idx) => (
                       <div
                         key={`subj-${idx}-${row.key}`}
@@ -4364,6 +4432,7 @@ const DEFAULT_PROFILE_MENU_ITEMS: ProfileMenuItem[] = [
   { id: 'edit-username', title: 'Username', subtitle: '{value}', path: '/edit-username', enabled: true },
   { id: 'edit-email', title: 'Email', subtitle: '{value}', path: '/edit-email', enabled: true },
   { id: 'edit-mobile', title: 'Mobile number', subtitle: '{value}', path: '/edit-mobile', enabled: true },
+  { id: 'edit-dob', title: 'Date of birth', subtitle: '{value}', path: '/edit-dob', enabled: true },
   { id: 'edit-gender', title: 'Gender', subtitle: '{value}', path: '/edit-gender', enabled: true },
   { id: 'edit-password', title: 'Password', subtitle: 'Change password (current + new + confirm)', path: '/edit-password', enabled: true },
   { id: 'verify-email', title: 'Email verification', subtitle: 'Not verified', path: '/verify-email', enabled: true },
@@ -4379,6 +4448,12 @@ const DEFAULT_PROFILE_MENU_ITEMS: ProfileMenuItem[] = [
   { id: 'logout', title: 'Log out', subtitle: 'Sign out on this device', path: '/logout', enabled: true },
   { id: 'delete-account', title: 'Delete account', subtitle: 'Remove account and clear this device', path: '/delete-account', enabled: true },
 ];
+
+function todayIsoDateLocal(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function ProfileTab({ apiClient }: { apiClient: typeof api }) {
   const { pushToast } = useAdminToast();
   const { confirm: adminConfirm } = useAdminDialog();
@@ -4391,11 +4466,62 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
   const [enabled, setEnabled] = useState(true);
   const [editingId, setEditingId] = useState('');
   const [page, setPage] = useState(1);
+  const [adminMeLoading, setAdminMeLoading] = useState(true);
+  const [adminBirthdaySaving, setAdminBirthdaySaving] = useState(false);
+  const [adminDisplayName, setAdminDisplayName] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminBirthdayDraft, setAdminBirthdayDraft] = useState('');
 
   useEffect(() => {
     load();
+    void loadAdminAccount();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function loadAdminAccount() {
+    setAdminMeLoading(true);
+    try {
+      const res = await apiClient.get('/me');
+      const user = res.data?.user as
+        | { displayName?: string; email?: string; birthdayDate?: string | null }
+        | undefined;
+      const name = String(user?.displayName || '').trim();
+      const mail = String(user?.email || '').trim();
+      setAdminDisplayName(name);
+      setAdminEmail(mail);
+      const dob = user?.birthdayDate != null && String(user.birthdayDate).trim() ? String(user.birthdayDate).slice(0, 10) : '';
+      setAdminBirthdayDraft(dob);
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to load admin account');
+    } finally {
+      setAdminMeLoading(false);
+    }
+  }
+
+  async function saveAdminBirthday(e: FormEvent) {
+    e.preventDefault();
+    const trimmed = adminBirthdayDraft.trim();
+    if (trimmed && !/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      pushToast('error', 'Use a valid date.');
+      return;
+    }
+    if (trimmed && trimmed > todayIsoDateLocal()) {
+      pushToast('error', 'Date of birth cannot be in the future.');
+      return;
+    }
+    setAdminBirthdaySaving(true);
+    try {
+      await apiClient.patch('/me/profile', {
+        birthdayDate: trimmed === '' ? null : trimmed,
+      });
+      pushToast('success', trimmed === '' ? 'Date of birth cleared.' : 'Date of birth saved.');
+      await loadAdminAccount();
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Could not save date of birth.');
+    } finally {
+      setAdminBirthdaySaving(false);
+    }
+  }
 
   async function load() {
     try {
@@ -4465,6 +4591,7 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
     const ok = await saveAll(nextItems);
     if (!ok) return;
     setEditingId('');
+    pushToast('success', 'Menu item updated.');
   }
 
   async function removeItem(id: string) {
@@ -4479,12 +4606,14 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
     const nextItems = items.filter((x) => x.id !== id);
     const saved = await saveAll(nextItems);
     if (!saved) return;
+    pushToast('success', 'Menu item deleted.');
     setPage(1);
   }
 
   async function toggleItem(item: ProfileMenuItem) {
     const nextItems = items.map((x) => (x.id === item.id ? { ...x, enabled: !x.enabled } : x));
-    await saveAll(nextItems);
+    const ok = await saveAll(nextItems);
+    if (ok) pushToast('success', item.enabled ? 'Menu item disabled.' : 'Menu item enabled.');
   }
 
   async function moveItem(id: string, direction: -1 | 1) {
@@ -4509,6 +4638,51 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
 
   return (
     <section className="panel-card profile-panel">
+      <div className="admin-account-strip">
+        <div className="panel-head" style={{ marginBottom: 8 }}>
+          <h3 style={{ margin: 0 }}>Your admin account</h3>
+        </div>
+        {adminMeLoading ? (
+          <p className="account-meta">Loading account…</p>
+        ) : (
+          <>
+            {adminDisplayName ? <p className="account-meta">Name: {adminDisplayName}</p> : null}
+            {adminEmail ? (
+              <p className="account-meta" title={adminEmail}>
+                Email: {adminEmail}
+              </p>
+            ) : (
+              <p className="account-meta">Email: —</p>
+            )}
+            <form className="inline-form admin-dob-form" onSubmit={(ev) => void saveAdminBirthday(ev)}>
+              <label htmlFor="admin-profile-dob" className="account-meta account-meta-strong">
+                Date of birth
+              </label>
+              <input
+                id="admin-profile-dob"
+                type="date"
+                min="1900-01-01"
+                max={todayIsoDateLocal()}
+                value={adminBirthdayDraft}
+                onChange={(e) => setAdminBirthdayDraft(e.target.value)}
+                disabled={adminBirthdaySaving}
+              />
+              <button type="submit" disabled={adminBirthdaySaving}>
+                {adminBirthdaySaving ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={adminBirthdaySaving || adminBirthdayDraft.trim() === ''}
+                onClick={() => setAdminBirthdayDraft('')}
+              >
+                Clear
+              </button>
+            </form>
+            <p className="account-meta account-meta-hint">Stored as YYYY-MM-DD. Same field as mobile app profile / birthday reminders.</p>
+          </>
+        )}
+      </div>
       <div className="panel-head">
         <h3>Profile Menu Control</h3>
       </div>
@@ -5369,6 +5543,69 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
       const allArticles: ArticleItem[] = articleRes.data?.items || [];
       setNewsItems(allArticles.filter((item) => item.feed_kind === 'news' && item.is_published));
       if (home && typeof home === 'object') {
+        const loadedSections: HomeContentSection[] = Array.isArray(home.sections)
+          ? home.sections.map((s: any, idx: number) => ({
+              id: String(s.id || `section-${idx + 1}`),
+              title: String(s.title || ''),
+              items: Array.isArray(s.items) ? s.items.map((x: any) => String(x)) : [],
+            }))
+          : [];
+        const validSections = loadedSections
+          .map((s) => ({
+            ...s,
+            title: String(s.title || '').trim(),
+            items: (Array.isArray(s.items) ? s.items : []).map((x) => String(x || '').trim()).filter(Boolean),
+          }))
+          .filter((s) => s.title && s.items.length > 0);
+
+        const loadedQuickActionSections: HomeQuickActionSection[] = Array.isArray(home.quickActionSections)
+          ? home.quickActionSections.map((s: any, idx: number) => ({
+              id: String(s.id || `qa-section-${idx + 1}`),
+              title: String(s.title || ''),
+              items: Array.isArray(s.items)
+                ? s.items.map((x: any) => ({
+                    title: String(x.title || ''),
+                    actionKey: String(x.actionKey || ''),
+                    iconKey: String(x.iconKey || ''),
+                  }))
+                : [],
+            }))
+          : [];
+        const validQuickActionSections = loadedQuickActionSections
+          .map((s) => ({
+            ...s,
+            title: String(s.title || '').trim(),
+            items: (Array.isArray(s.items) ? s.items : [])
+              .map((x) => ({
+                title: String(x?.title || '').trim(),
+                actionKey: String(x?.actionKey || '').trim(),
+                iconKey: String(x?.iconKey || '').trim(),
+              }))
+              .filter((x) => x.title && x.actionKey),
+          }))
+          .filter((s) => s.title && s.items.length > 0);
+
+        const nextSections: HomeContentSection[] =
+          validSections.length > 0
+            ? validSections
+            : [{ id: 'category', title: 'Category', items: ['Math', 'Reasoning', 'English', 'GK'] }];
+
+        const nextQuickActionSections: HomeQuickActionSection[] =
+          validQuickActionSections.length > 0
+            ? validQuickActionSections
+            : [
+                {
+                  id: 'quick-actions-default',
+                  title: 'Quick actions',
+                  items: [
+                    { title: 'Start test', actionKey: 'startTest', iconKey: 'play' },
+                    { title: 'Leaderboard', actionKey: 'leaderboard', iconKey: 'trophy' },
+                    { title: 'Results', actionKey: 'results', iconKey: 'report' },
+                    { title: 'Tool', actionKey: 'bookmarks', iconKey: 'bookmark' },
+                  ],
+                },
+              ];
+
         setSettings({
           welcomeText: String(home.welcomeText || 'Welcome {name}'),
           quickActionsTitle: String(home.quickActionsTitle || 'Quick actions'),
@@ -5433,26 +5670,8 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
           newsCategoryMenu: Array.isArray(home.newsCategoryMenu) ? home.newsCategoryMenu.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
           jobCategoryMenu: Array.isArray(home.jobCategoryMenu) ? home.jobCategoryMenu.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
           examCategoryMenu: Array.isArray(home.examCategoryMenu) ? home.examCategoryMenu.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
-          sections: Array.isArray(home.sections)
-            ? home.sections.map((s: any, idx: number) => ({
-                id: String(s.id || `section-${idx + 1}`),
-                title: String(s.title || ''),
-                items: Array.isArray(s.items) ? s.items.map((x: any) => String(x)) : [],
-              }))
-            : [],
-          quickActionSections: Array.isArray(home.quickActionSections)
-            ? home.quickActionSections.map((s: any, idx: number) => ({
-                id: String(s.id || `qa-section-${idx + 1}`),
-                title: String(s.title || ''),
-                items: Array.isArray(s.items)
-                  ? s.items.map((x: any) => ({
-                      title: String(x.title || ''),
-                      actionKey: String(x.actionKey || ''),
-                      iconKey: String(x.iconKey || ''),
-                    }))
-                  : [],
-              }))
-            : [],
+          sections: nextSections,
+          quickActionSections: nextQuickActionSections,
           banners: Array.isArray(home.banners)
             ? home.banners.map((b: any, idx: number) => ({
                 id: String(b.id || `banner-${idx + 1}`),
@@ -5590,10 +5809,12 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
       });
       const imageUrl = String(res.data?.imageUrl || '').trim();
       if (!imageUrl) throw new Error('Upload response missing image URL');
-      setSettings((p) => ({
-        ...p,
-        banners: [...p.banners, { id: `banner-${Date.now()}`, imageUrl, enabled: true }],
-      }));
+      const nextSettings: HomeContentSettings = {
+        ...settings,
+        banners: [...settings.banners, { id: `banner-${Date.now()}`, imageUrl, enabled: true }],
+      };
+      setSettings(nextSettings);
+      await persistHomeContent(nextSettings, { silent: false });
       setBannerFile(null);
       pushToast('success', 'Banner uploaded.');
     } catch (err: any) {
@@ -5604,22 +5825,27 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   function addNewsSlide(article: ArticleItem) {
-    setSettings((p) => {
-      if (p.newsSlides.some((x) => x.articleId === article.id)) return p;
-      return {
-        ...p,
-        newsSlides: [
-          ...p.newsSlides,
-          {
-            id: `news-slide-${Date.now()}-${article.id.slice(0, 8)}`,
-            articleId: article.id,
-            headline: article.headline,
-            imageUrl: String(article.feature_image_url || '').trim(),
-            enabled: true,
-          },
-        ],
-      };
-    });
+    const featureImage = String(article.feature_image_url || '').trim();
+    if (!featureImage) {
+      pushToast('error', 'Add a Feature Image to this news article first (required for slider).');
+      return;
+    }
+    if (settings.newsSlides.some((x) => x.articleId === article.id)) return;
+    const nextSettings: HomeContentSettings = {
+      ...settings,
+      newsSlides: [
+        ...settings.newsSlides,
+        {
+          id: `news-slide-${Date.now()}-${article.id.slice(0, 8)}`,
+          articleId: article.id,
+          headline: article.headline,
+          imageUrl: featureImage,
+          enabled: true,
+        },
+      ],
+    };
+    setSettings(nextSettings);
+    void persistHomeContent(nextSettings, { silent: false });
   }
 
   function addPromoChip() {
@@ -5961,10 +6187,16 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
               type="button"
               className="danger"
               onClick={() =>
-                setSettings((p) => ({
-                  ...p,
-                  sections: p.sections.filter((x) => x.id !== section.id),
-                }))
+                setSettings((p) => {
+                  if (p.sections.length <= 1) {
+                    pushToast('error', 'At least one Category section is required.');
+                    return p;
+                  }
+                  return {
+                    ...p,
+                    sections: p.sections.filter((x) => x.id !== section.id),
+                  };
+                })
               }
             >
               Delete
@@ -5981,7 +6213,12 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
         {newsItems.map((article) => (
           <div key={article.id} className="row" style={{ gridTemplateColumns: '2fr 120px 120px' }}>
             <span title={article.summary || ''}>{article.headline}</span>
-            <button type="button" onClick={() => addNewsSlide(article)} disabled={settings.newsSlides.some((x) => x.articleId === article.id)}>
+            <button
+              type="button"
+              onClick={() => addNewsSlide(article)}
+              disabled={settings.newsSlides.some((x) => x.articleId === article.id) || !String(article.feature_image_url || '').trim()}
+              title={!String(article.feature_image_url || '').trim() ? 'Add a feature image first' : undefined}
+            >
               {settings.newsSlides.some((x) => x.articleId === article.id) ? 'Added' : 'Add'}
             </button>
             <button type="button" className="ghost" onClick={() => window.open(article.link_url || '', '_blank')} disabled={!article.link_url}>
@@ -6172,10 +6409,16 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
               type="button"
               className="danger"
               onClick={() =>
-                setSettings((p) => ({
-                  ...p,
-                  quickActionSections: p.quickActionSections.filter((x) => x.id !== section.id),
-                }))
+                setSettings((p) => {
+                  if (p.quickActionSections.length <= 1) {
+                    pushToast('error', 'At least one Quick actions section is required.');
+                    return p;
+                  }
+                  return {
+                    ...p,
+                    quickActionSections: p.quickActionSections.filter((x) => x.id !== section.id),
+                  };
+                })
               }
             >
               Delete
@@ -6782,12 +7025,14 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
   );
 }
 
-function AuditLogsTab({ apiClient }: { apiClient: typeof api }) {
+function AuditLogsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperAdmin: boolean }) {
   const { pushToast } = useAdminToast();
+  const { confirm: adminConfirm } = useAdminDialog();
   const [items, setItems] = useState<AuditLogItem[]>([]);
   const [auditPage, setAuditPage] = useState(1);
   const [auditPageSize, setAuditPageSize] = useState(50);
   const [auditTotal, setAuditTotal] = useState(0);
+  const [clearing, setClearing] = useState(false);
 
   async function fetchLogs(page: number) {
     const p = Math.max(1, page);
@@ -6823,6 +7068,29 @@ function AuditLogsTab({ apiClient }: { apiClient: typeof api }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auditPageSize]);
 
+  async function clearAllLogs() {
+    const ok = await adminConfirm({
+      title: 'Clear all audit logs?',
+      message: 'This permanently deletes every audit log row in the database. This cannot be undone. Only proceed if you are sure.',
+      confirmLabel: 'Clear all',
+      cancelLabel: 'Cancel',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    try {
+      setClearing(true);
+      const res = await apiClient.delete('/admin/audit-logs');
+      const deleted = Number(res.data?.deleted ?? 0);
+      pushToast('success', deleted > 0 ? `Cleared ${deleted} audit log row(s).` : 'Audit log table was already empty.');
+      setAuditPage(1);
+      await fetchLogs(1);
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to clear audit logs');
+    } finally {
+      setClearing(false);
+    }
+  }
+
   const totalAuditPages = Math.max(1, Math.ceil(auditTotal / auditPageSize) || 1);
   const safeAuditPage = Math.min(auditPage, totalAuditPages);
   const auditRangeStart = auditTotal === 0 ? 0 : (safeAuditPage - 1) * auditPageSize + 1;
@@ -6851,6 +7119,15 @@ function AuditLogsTab({ apiClient }: { apiClient: typeof api }) {
         <button type="button" onClick={() => void fetchLogs(safeAuditPage)}>
           Refresh
         </button>
+        {isSuperAdmin ? (
+          <button type="button" className="danger" onClick={() => void clearAllLogs()} disabled={clearing || auditTotal === 0}>
+            {clearing ? 'Clearing…' : 'Clear all logs'}
+          </button>
+        ) : (
+          <button type="button" className="ghost" disabled title="Only super admin can clear audit logs">
+            Clear all logs
+          </button>
+        )}
       </div>
       <div className="list table audit-table">
         <div className="row row-head">
@@ -7081,21 +7358,32 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
             <span>{item.is_banned ? `Banned: ${item.ban_reason || 'No reason'}` : 'Active'}</span>
             {isSuperAdmin ? (
               <div className="inline-form users-table-actions">
-                <button type="button" onClick={() => toggleAdmin(item)}>
-                  {item.is_admin ? 'Remove Admin' : 'Make Admin'}
-                </button>
-                <button type="button" onClick={() => toggleSuperAdmin(item)}>
-                  {item.is_super_admin ? 'Remove Super Admin' : 'Make Super Admin'}
-                </button>
-                <button type="button" className="ghost" onClick={() => toggleBan(item)}>
-                  {item.is_banned ? 'Unban User' : 'Ban User'}
-                </button>
-                <button type="button" className="ghost" onClick={() => revokeSessions(item)}>
-                  Revoke sessions
-                </button>
-                <button type="button" className="danger" onClick={() => deleteUser(item)}>
-                  Delete user
-                </button>
+                {isProtectedSuperAdminEmail(item.email) ? (
+                  <span
+                    title="Permanent super admin — admin, ban, delete and session revoke controls are disabled"
+                    style={{ fontSize: '0.78rem', color: '#64748b', fontWeight: 700 }}
+                  >
+                    Protected super admin
+                  </span>
+                ) : (
+                  <>
+                    <button type="button" onClick={() => toggleAdmin(item)}>
+                      {item.is_admin ? 'Remove Admin' : 'Make Admin'}
+                    </button>
+                    <button type="button" onClick={() => toggleSuperAdmin(item)}>
+                      {item.is_super_admin ? 'Remove Super Admin' : 'Make Super Admin'}
+                    </button>
+                    <button type="button" className="ghost" onClick={() => toggleBan(item)}>
+                      {item.is_banned ? 'Unban User' : 'Ban User'}
+                    </button>
+                    <button type="button" className="ghost" onClick={() => revokeSessions(item)}>
+                      Revoke sessions
+                    </button>
+                    <button type="button" className="danger" onClick={() => deleteUser(item)}>
+                      Delete user
+                    </button>
+                  </>
+                )}
               </div>
             ) : (
               <button disabled title="Only super admin can change roles and user access">

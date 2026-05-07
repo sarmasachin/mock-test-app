@@ -20,8 +20,20 @@ const {
   parseQuestionSubjectKey,
 } = require('../util/subjectSections');
 const { selectQuestionsFromSubcategoryPool } = require('../lib/subcategoryPoolSelection');
+const {
+  PROTECTED_SUPER_ADMIN_EMAILS,
+  isProtectedSuperAdminDbEmail,
+} = require('../constants/protectedSuperAdminEmails');
 
 const router = express.Router();
+
+/** Rolling cap for DB audit trail (Admin → Audit Logs). Oldest rows deleted once count exceeds this. */
+function getAdminAuditLogMaxRows() {
+  const raw = Number(process.env.ADMIN_AUDIT_LOG_MAX_ROWS);
+  const n = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 100;
+  return Math.min(10_000, Math.max(10, n));
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isUuid(value) {
@@ -649,6 +661,27 @@ function normalizeAdminImageExportFormatsPatch(body) {
   return { value: normalizeAdminImageExportFormats(body) };
 }
 
+/** Keep newest N rows by created_at (then id); delete older rows. Best-effort after each audit insert. */
+async function pruneAdminAuditLogsRolling() {
+  const cap = getAdminAuditLogMaxRows();
+  try {
+    await pool.query(
+      `DELETE FROM admin_audit_logs
+       WHERE id IN (
+         SELECT id FROM (
+           SELECT id
+           FROM admin_audit_logs
+           ORDER BY created_at DESC NULLS LAST, id DESC
+           OFFSET $1
+         ) AS doomed
+       )`,
+      [cap],
+    );
+  } catch (e) {
+    console.error('audit_log_prune_failed', e.message || e);
+  }
+}
+
 async function logAdminAction(req, actionType, targetType, targetId, details) {
   try {
     await pool.query(
@@ -667,7 +700,9 @@ async function logAdminAction(req, actionType, targetType, targetId, details) {
     );
   } catch (e) {
     console.error('audit_log_failed', e.message || e);
+    return;
   }
+  await pruneAdminAuditLogsRolling();
 }
 
 async function getJsonSetting(settingKey, fallback) {
@@ -2398,6 +2433,22 @@ router.get('/audit-logs', async (req, res) => {
     return res.status(500).json({ error: 'Failed to load audit logs' });
   }
 });
+
+/** Super admin only: remove every row from audit log table (cannot be undone). No DB row retained for “who cleared”—use server logs / backups for forensics. */
+router.delete('/audit-logs', async (req, res) => {
+  if (!req.isSuperAdmin) {
+    return res.status(403).json({ error: 'Super admin access required' });
+  }
+  try {
+    const result = await pool.query(`DELETE FROM admin_audit_logs`);
+    const deleted = Number(result.rowCount || 0);
+    console.warn('[audit_logs] cleared by super_admin', { actorUserId: req.userId, deleted });
+    return res.json({ ok: true, deleted });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to clear audit logs' });
+  }
+});
 router.get('/tests', async (_req, res) => {
   try {
     const advancedMap = await getJsonSetting('testAdvancedConfigs', {});
@@ -3630,6 +3681,23 @@ router.patch('/users/:id/admin', async (req, res) => {
     return res.status(400).json({ error: 'You cannot remove your own super admin access' });
   }
   try {
+    const existing = await pool.query(
+      `SELECT lower(trim(email::text)) AS email_key, is_admin, is_super_admin FROM users WHERE id = $1::uuid LIMIT 1`,
+      [id],
+    );
+    if (!existing.rows[0]) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const emailKey = String(existing.rows[0].email_key || '').trim().toLowerCase();
+    if (PROTECTED_SUPER_ADMIN_EMAILS.has(emailKey)) {
+      const nextIsAdmin = isAdmin;
+      const nextIsSuper = hasSuperAdminUpdate ? Boolean(makeSuperAdmin) : Boolean(existing.rows[0].is_super_admin);
+      if (!nextIsAdmin || !nextIsSuper) {
+        return res.status(403).json({
+          error: 'This account is a protected super admin and cannot lose admin privileges.',
+        });
+      }
+    }
     const sql = hasSuperAdminUpdate
       ? `UPDATE users SET is_admin = $1, is_super_admin = $2 WHERE id = $3::uuid
          RETURNING id, email, display_name, phone, is_admin, is_super_admin, is_banned, ban_reason, banned_at, created_at`
@@ -3664,6 +3732,18 @@ router.patch('/users/:id/ban', async (req, res) => {
     return res.status(400).json({ error: 'banReason is required when banning a user' });
   }
   try {
+    const victim = await pool.query(
+      `SELECT lower(trim(email::text)) AS email_key FROM users WHERE id = $1::uuid LIMIT 1`,
+      [id],
+    );
+    if (!victim.rows[0]) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const emailKey = String(victim.rows[0].email_key || '').trim().toLowerCase();
+    if (isBanned && isProtectedSuperAdminDbEmail(emailKey)) {
+      return res.status(403).json({ error: 'This account cannot be banned.' });
+    }
+
     const { rows } = await pool.query(
       `UPDATE users
        SET is_banned = $1,
@@ -3702,8 +3782,14 @@ router.post('/users/:id/revoke-sessions', async (req, res) => {
     return res.status(400).json({ error: 'You cannot revoke your own active sessions from here' });
   }
   try {
-    const exists = await pool.query(`SELECT id FROM users WHERE id = $1::uuid LIMIT 1`, [id]);
+    const exists = await pool.query(
+      `SELECT id, lower(trim(email::text)) AS e FROM users WHERE id = $1::uuid LIMIT 1`,
+      [id],
+    );
     if (!exists.rows[0]) return res.status(404).json({ error: 'User not found' });
+    if (isProtectedSuperAdminDbEmail(exists.rows[0].e)) {
+      return res.status(403).json({ error: 'Sessions for this protected super admin account cannot be revoked from here.' });
+    }
     const result = await pool.query(
       `UPDATE user_refresh_sessions
        SET revoked_at = now()
@@ -3728,6 +3814,17 @@ router.delete('/users/:id', async (req, res) => {
     return res.status(400).json({ error: 'You cannot delete your own account from admin panel' });
   }
   try {
+    const victim = await pool.query(
+      `SELECT lower(trim(email::text)) AS email_key FROM users WHERE id = $1::uuid LIMIT 1`,
+      [id],
+    );
+    if (!victim.rows[0]) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (isProtectedSuperAdminDbEmail(victim.rows[0].email_key)) {
+      return res.status(403).json({ error: 'This protected super admin account cannot be deleted.' });
+    }
+
     const del = await pool.query(`DELETE FROM users WHERE id = $1::uuid`, [id]);
     if (!del.rowCount) return res.status(404).json({ error: 'User not found' });
     await logAdminAction(req, 'user_deleted', 'user', id, {});
