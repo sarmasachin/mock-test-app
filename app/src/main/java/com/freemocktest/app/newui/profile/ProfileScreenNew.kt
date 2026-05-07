@@ -42,6 +42,10 @@ import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
+import java.util.Locale
 
 private data class DynamicProfileMenuItem(
     val id: String,
@@ -72,6 +76,16 @@ private fun defaultDynamicProfileMenuItems() = listOf(
     DynamicProfileMenuItem("delete-account", "Delete account", "Removes your account on the server and clears this device", "/delete-account", true),
 )
 
+private fun formatDobForUi(iso: String): String {
+    val raw = iso.trim()
+    if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(raw)) return raw
+    return try {
+        LocalDate.parse(raw).format(DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.ENGLISH))
+    } catch (_: DateTimeParseException) {
+        raw
+    }
+}
+
 @Composable
 fun ProfileScreenNew(
     modifier: Modifier = Modifier,
@@ -80,7 +94,7 @@ fun ProfileScreenNew(
     onEditUsername: () -> Unit,
     onEditEmail: () -> Unit,
     onEditMobile: () -> Unit,
-    onEditBirthday: () -> Unit,
+    onEditDob: () -> Unit,
     onEditGender: () -> Unit,
     onEditPassword: () -> Unit,
     onOpenNotifications: () -> Unit,
@@ -109,25 +123,24 @@ fun ProfileScreenNew(
     LaunchedEffect(Unit) {
         val remote = ContentRepository.loadProfileMenuItems()
         if (remote.isNotEmpty()) {
-            val mapped = remote.map {
-                DynamicProfileMenuItem(
-                    id = it.id,
-                    title = it.title,
-                    subtitle = it.subtitle,
-                    path = it.path,
-                    enabled = it.enabled,
-                )
-            }
-            menuItems =
-                if (mapped.none { it.path == "/edit-dob" }) {
-                    val insertIdx =
-                        (mapped.indexOfFirst { it.path == "/edit-mobile" }).let { idx ->
-                            if (idx >= 0) idx + 1 else mapped.size
-                        }
-                    mapped.toMutableList().apply { add(insertIdx, DynamicProfileMenuItem("edit-dob", "Date of birth", "{value}", "/edit-dob", true)) }
-                } else {
-                    mapped
+            val mapped =
+                remote.map {
+                    DynamicProfileMenuItem(
+                        id = it.id,
+                        title = it.title,
+                        subtitle = it.subtitle,
+                        path = it.path,
+                        enabled = it.enabled,
+                    )
                 }
+            val hasDob = mapped.any { it.path == "/edit-dob" }
+            menuItems = if (hasDob) mapped else (mapped + DynamicProfileMenuItem(
+                id = "edit-dob",
+                title = "Date of birth",
+                subtitle = "{value}",
+                path = "/edit-dob",
+                enabled = true,
+            ))
         }
     }
 
@@ -181,7 +194,10 @@ fun ProfileScreenNew(
                         "/edit-username" -> item.subtitle.replace("{value}", profile.displayName.ifBlank { "Tap to set" })
                         "/edit-email" -> item.subtitle.replace("{value}", profile.email.ifBlank { "Tap to set" })
                         "/edit-mobile" -> item.subtitle.replace("{value}", profile.mobile.ifBlank { "Tap to set" })
-                        "/edit-dob" -> item.subtitle.replace("{value}", profile.birthdayDate.ifBlank { "Tap to set" })
+                        "/edit-dob" -> item.subtitle.replace(
+                            "{value}",
+                            profile.birthdayDate.ifBlank { "Tap to set" }.let { v -> if (v == "Tap to set") v else formatDobForUi(v) },
+                        )
                         "/edit-gender" -> item.subtitle.replace("{value}", profile.gender.ifBlank { "Tap to set" })
                         "/verify-email" -> if (emailOk) "Verified" else if (item.subtitle.isBlank()) "Not verified — tap to send OTP" else item.subtitle
                         "/verify-phone" -> if (phoneOk) "Verified" else if (item.subtitle.isBlank()) "Not verified — tap to send OTP" else item.subtitle
@@ -191,7 +207,7 @@ fun ProfileScreenNew(
                         "/edit-username" -> onEditUsername
                         "/edit-email" -> onEditEmail
                         "/edit-mobile" -> onEditMobile
-                        "/edit-dob" -> onEditBirthday
+                        "/edit-dob" -> onEditDob
                         "/edit-gender" -> onEditGender
                         "/edit-password" -> onEditPassword
                         "/verify-email" -> onSendEmailVerification

@@ -46,7 +46,7 @@ private object ProfileInnerRoutes {
     const val EMAIL = "profile_edit_email"
     const val EMAIL_VERIFY = "profile_email_verify"
     const val MOBILE = "profile_edit_mobile"
-    const val BIRTHDAY = "profile_edit_birthday"
+    const val DOB = "profile_edit_dob"
     const val GENDER = "profile_edit_gender"
     const val PASSWORD = "profile_edit_password"
     const val NOTIFICATIONS = "profile_notifications"
@@ -117,7 +117,7 @@ fun ProfileRouteNew(
                         onEditUsername = { innerNav.navigate(ProfileInnerRoutes.USERNAME) },
                         onEditEmail = { innerNav.navigate(ProfileInnerRoutes.EMAIL) },
                         onEditMobile = { innerNav.navigate(ProfileInnerRoutes.MOBILE) },
-                        onEditBirthday = { innerNav.navigate(ProfileInnerRoutes.BIRTHDAY) },
+                        onEditDob = { innerNav.navigate(ProfileInnerRoutes.DOB) },
                         onEditGender = { innerNav.navigate(ProfileInnerRoutes.GENDER) },
                         onEditPassword = { innerNav.navigate(ProfileInnerRoutes.PASSWORD) },
                         onOpenNotifications = { innerNav.navigate(ProfileInnerRoutes.NOTIFICATIONS) },
@@ -186,8 +186,8 @@ fun ProfileRouteNew(
                         onBack = { innerNav.popBackStack() },
                     )
                 }
-                composable(ProfileInnerRoutes.BIRTHDAY) {
-                    ProfileEditBirthdayScreen(
+                composable(ProfileInnerRoutes.DOB) {
+                    ProfileEditDobScreen(
                         onBack = { innerNav.popBackStack() },
                     )
                 }

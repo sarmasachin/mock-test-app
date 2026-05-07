@@ -51,7 +51,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,15 +65,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.freemocktest.app.data.AppPreferencesRepository
-import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlin.math.abs
 
 private const val PdfToolTabName = "PDF Tools"
-private const val CalculatorTabName = "Calculator"
 private const val PdfToolUrl = "https://mypdffile.onrender.com/"
+private const val AgeCalculatorTabName = "Age Calculator"
 
 @Composable
 fun BookmarksScreenNew(
@@ -86,19 +83,11 @@ fun BookmarksScreenNew(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val tabs = remember {
-        listOf("Calculator", "Image Compress", "PDF Tools", "Unit Converter")
+        listOf("Image Compress", "PDF Tools", "Unit Converter", AgeCalculatorTabName)
     }
-    val profile by AppPreferencesRepository.editableProfile.collectAsState(
-        initial = AppPreferencesRepository.EditableProfileState("", "", "", "", ""),
-    )
     var selectedTab by remember { mutableStateOf(tabs.first()) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var showPdfHeader by remember { mutableStateOf(true) }
-    LaunchedEffect(selectedTab) {
-        if (selectedTab == CalculatorTabName) {
-            AuthRepository.syncProfileFromServer()
-        }
-    }
     BackHandler(enabled = selectedTab == PdfToolTabName && (webViewRef?.canGoBack() == true)) {
         webViewRef?.goBack()
     }
@@ -149,9 +138,8 @@ fun BookmarksScreenNew(
                         showPdfHeader = showOnUp
                     },
                 )
-            } else if (selectedTab == CalculatorTabName) {
-                CalculatorToolSection(
-                    profileBirthdayIso = profile.birthdayDate,
+            } else if (selectedTab == AgeCalculatorTabName) {
+                AgeCalculatorToolCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),

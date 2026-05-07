@@ -1,5 +1,6 @@
 package com.freemocktest.app.newui.profile
 
+import android.app.DatePickerDialog
 import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,15 +28,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDefaults
-import androidx.compose.material3.DatePickerDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -49,7 +45,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import android.widget.Toast
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -61,7 +56,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material3.rememberDatePickerState
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.newui.auth.isValidEmail
@@ -70,29 +64,12 @@ import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import java.util.Locale
 
 private enum class InlineMessageType { Success, Error }
-
-private val profileBirthdayPattern = Regex("^\\d{4}-\\d{2}-\\d{2}$")
-
-/** @return Pair(serverValue, errorMessage) — serverValue `""` clears DOB; null = invalid. */
-private fun validateBirthdayForServer(raw: String): Pair<String?, String> {
-    val s = raw.trim()
-    if (s.isEmpty()) return "" to ""
-    if (!profileBirthdayPattern.matches(s)) return null to "Use YYYY-MM-DD (e.g. 1998-03-21)"
-    return try {
-        val d = LocalDate.parse(s)
-        val today = LocalDate.now(ZoneId.systemDefault())
-        if (d.isAfter(today)) return null to "Date cannot be in the future"
-        s to ""
-    } catch (_e: DateTimeParseException) {
-        null to "Invalid calendar date"
-    }
-}
 
 private fun normalizeProfileInlineMessage(raw: String?, fallback: String): String {
     val msg = raw?.trim().orEmpty()
@@ -107,6 +84,25 @@ private fun normalizeProfileInlineMessage(raw: String?, fallback: String): Strin
         "503" in key || "maintenance" in key || "service unavailable" in key -> "Server is temporarily unavailable"
         else -> msg
     }
+}
+
+private fun isValidIsoDob(value: String): Boolean {
+    val raw = value.trim()
+    if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(raw)) return false
+    return try {
+        LocalDate.parse(raw)
+        true
+    } catch (_: DateTimeParseException) {
+        false
+    }
+}
+
+private fun formatDobForUi(iso: String): String {
+    val raw = iso.trim()
+    if (!isValidIsoDob(raw)) return raw
+    return runCatching {
+        LocalDate.parse(raw).format(DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.ENGLISH))
+    }.getOrDefault(raw)
 }
 
 @Composable
@@ -496,6 +492,181 @@ fun ProfileEditMobileScreen(
 }
 
 @Composable
+fun ProfileEditDobScreen(
+    onBack: () -> Unit,
+) {
+    val p = mockTestPalette()
+    val bg = Brush.verticalGradient(colors = p.gradientColors())
+    val profile by AppPreferencesRepository.editableProfile.collectAsState(
+        initial = AppPreferencesRepository.EditableProfileState("", "", "", "", ""),
+    )
+    var dobIso by remember { mutableStateOf("") }
+    LaunchedEffect(profile.birthdayDate) {
+        dobIso = profile.birthdayDate
+    }
+    val scope = rememberCoroutineScope()
+    val scroll = rememberScrollState()
+    val fieldShape = RoundedCornerShape(12.dp)
+    var inlineMessage by remember { mutableStateOf("") }
+    var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
+    var submitted by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    fun setError(msg: String) {
+        inlineType = InlineMessageType.Error
+        inlineMessage = msg
+    }
+
+    fun openDatePicker() {
+        val initial = runCatching {
+            if (isValidIsoDob(dobIso)) LocalDate.parse(dobIso) else LocalDate.now().minusYears(18)
+        }.getOrElse { LocalDate.now().minusYears(18) }
+        DatePickerDialog(
+            context,
+            { _, y, m, d ->
+                val picked = runCatching { LocalDate.of(y, m + 1, d) }.getOrNull()
+                if (picked == null) {
+                    setError("Invalid date selected")
+                    return@DatePickerDialog
+                }
+                val today = LocalDate.now()
+                if (picked.isAfter(today)) {
+                    setError("Date of birth cannot be in the future")
+                    return@DatePickerDialog
+                }
+                dobIso = picked.toString()
+                if (inlineType == InlineMessageType.Error) inlineMessage = ""
+            },
+            initial.year,
+            initial.monthValue - 1,
+            initial.dayOfMonth,
+        ).show()
+    }
+
+    Scaffold(
+        containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets(0),
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(bg)
+                .padding(padding)
+                .verticalScroll(scroll)
+                .padding(horizontal = 18.dp, vertical = 10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "Back",
+                        tint = p.textPrimary,
+                    )
+                }
+                Spacer(Modifier.size(4.dp))
+                Text("Date of birth", color = p.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "Select your birthday. This is stored as a calendar date (YYYY-MM-DD).",
+                color = p.textSecondary,
+                fontSize = 14.sp,
+            )
+            Spacer(Modifier.height(14.dp))
+
+            if (!submitted) {
+                OutlinedTextField(
+                    value = if (dobIso.isBlank()) "" else formatDobForUi(dobIso),
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Date of birth") },
+                    placeholder = { Text("Tap to select") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { openDatePicker() },
+                    colors = ProfileEditFieldColors(),
+                    shape = fieldShape,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = { openDatePicker() },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text(if (dobIso.isBlank()) "Select date" else "Change date", fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = {
+                        dobIso = ""
+                        if (inlineType == InlineMessageType.Error) inlineMessage = ""
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = dobIso.isNotBlank(),
+                ) {
+                    Text("Clear", fontWeight = FontWeight.SemiBold)
+                }
+                if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = inlineMessage,
+                        color = p.error,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+            Button(
+                onClick = {
+                    if (submitted) {
+                        submitted = false
+                        inlineMessage = ""
+                        return@Button
+                    }
+                    val payload = dobIso.trim()
+                    if (payload.isNotBlank() && !isValidIsoDob(payload)) {
+                        setError("Please select a valid date")
+                        return@Button
+                    }
+                    scope.launch {
+                        val r = AuthRepository.patchProfileRemote(birthdayDate = payload)
+                        r.fold(
+                            onSuccess = {
+                                inlineType = InlineMessageType.Success
+                                inlineMessage = "Date of birth saved successfully"
+                                submitted = true
+                            },
+                            onFailure = { e ->
+                                inlineType = InlineMessageType.Error
+                                inlineMessage = normalizeProfileInlineMessage(e.message, "Could not save date of birth")
+                            },
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = p.accent),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Text(if (submitted) "Edit again" else "Save", color = Color.White, fontWeight = FontWeight.SemiBold)
+            }
+            if (inlineType == InlineMessageType.Success && inlineMessage.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = inlineMessage,
+                    color = Color(0xFF16A34A),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun ProfileEditGenderScreen(
     onBack: () -> Unit,
 ) {
@@ -641,275 +812,6 @@ fun ProfileEditGenderScreen(
                 )
             }
         }
-    }
-}
-
-@Composable
-fun ProfileEditBirthdayScreen(
-    onBack: () -> Unit,
-) {
-    val p = mockTestPalette()
-    val bg = Brush.verticalGradient(colors = p.gradientColors())
-    val profile by AppPreferencesRepository.editableProfile.collectAsState(
-        initial = AppPreferencesRepository.EditableProfileState("", "", "", "", ""),
-    )
-    var dateText by remember { mutableStateOf("") }
-    LaunchedEffect(profile.birthdayDate) {
-        dateText = profile.birthdayDate.trim()
-    }
-    val scope = rememberCoroutineScope()
-    val scroll = rememberScrollState()
-    val fieldShape = RoundedCornerShape(12.dp)
-    var inlineMessage by remember { mutableStateOf("") }
-    var inlineType by remember { mutableStateOf(InlineMessageType.Success) }
-    var submitted by remember { mutableStateOf(false) }
-    var showDobPicker by remember { mutableStateOf(false) }
-
-    Scaffold(
-        containerColor = Color.Transparent,
-        contentWindowInsets = WindowInsets(0),
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(bg)
-                .padding(padding)
-                .verticalScroll(scroll)
-                .padding(horizontal = 18.dp, vertical = 10.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = "Back",
-                        tint = p.textPrimary,
-                    )
-                }
-                Spacer(Modifier.size(4.dp))
-                Text("Date of birth", color = p.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
-            }
-            Spacer(Modifier.height(10.dp))
-            Text(
-                "Format: YYYY-MM-DD (device calendar). Cannot be in the future.",
-                color = p.textSecondary,
-                fontSize = 14.sp,
-            )
-            Spacer(Modifier.height(14.dp))
-            if (!submitted) {
-                OutlinedTextField(
-                    value = dateText,
-                    onValueChange = { value ->
-                        dateText = value.filter { it.isDigit() || it == '-' }.take(10)
-                        if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
-                    },
-                    label = { Text("YYYY-MM-DD") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ProfileEditFieldColors(),
-                    shape = fieldShape,
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedButton(
-                    onClick = { showDobPicker = true },
-                    enabled = !submitted,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = fieldShape,
-                ) {
-                    Text("Pick date (calendar)", color = p.textPrimary, fontWeight = FontWeight.SemiBold)
-                }
-                if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = inlineMessage,
-                        color = p.error,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth()) {
-                TextButton(
-                    onClick = {
-                        if (submitted) return@TextButton
-                        dateText = ""
-                        inlineMessage = ""
-                    },
-                    enabled = !submitted && dateText.isNotBlank(),
-                ) {
-                    Text("Clear field", color = p.accent)
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                OutlinedButton(
-                    onClick = {
-                        if (submitted) return@OutlinedButton
-                        scope.launch {
-                            val r = AuthRepository.patchProfileRemote(birthdayDate = "")
-                            r.fold(
-                                onSuccess = {
-                                    inlineType = InlineMessageType.Success
-                                    inlineMessage = "Date of birth removed"
-                                    submitted = true
-                                },
-                                onFailure = { e ->
-                                    inlineType = InlineMessageType.Error
-                                    inlineMessage = normalizeProfileInlineMessage(e.message, "Could not clear date of birth")
-                                },
-                            )
-                        }
-                    },
-                    enabled = !submitted && profile.birthdayDate.isNotBlank(),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text("Remove from account", color = p.textPrimary)
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-            Button(
-                onClick = {
-                    if (submitted) {
-                        submitted = false
-                        inlineMessage = ""
-                        dateText = profile.birthdayDate.trim()
-                        return@Button
-                    }
-                    val (serverVal, err) = validateBirthdayForServer(dateText)
-                    if (serverVal == null) {
-                        inlineType = InlineMessageType.Error
-                        inlineMessage = err.ifBlank { "Invalid date" }
-                        return@Button
-                    }
-                    scope.launch {
-                        val r = AuthRepository.patchProfileRemote(birthdayDate = serverVal)
-                        r.fold(
-                            onSuccess = {
-                                inlineType = InlineMessageType.Success
-                                inlineMessage =
-                                    if (serverVal.isEmpty()) {
-                                        "Date of birth cleared"
-                                    } else {
-                                        "Date of birth saved"
-                                    }
-                                submitted = true
-                            },
-                            onFailure = { e ->
-                                inlineType = InlineMessageType.Error
-                                inlineMessage = normalizeProfileInlineMessage(e.message, "Could not save date of birth")
-                            },
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = p.accent),
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Text(if (submitted) "Edit again" else "Save", color = Color.White, fontWeight = FontWeight.SemiBold)
-            }
-            if (inlineType == InlineMessageType.Success && inlineMessage.isNotBlank()) {
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    text = inlineMessage,
-                    color = Color(0xFF16A34A),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
-        }
-    }
-
-    if (showDobPicker) {
-        DobPickerDialog(
-            initialIso = dateText,
-            onDismiss = { showDobPicker = false },
-            onPickIso = { iso ->
-                dateText = iso
-                if (inlineType == InlineMessageType.Error && inlineMessage.isNotBlank()) inlineMessage = ""
-                showDobPicker = false
-            },
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun DobPickerDialog(
-    initialIso: String,
-    onDismiss: () -> Unit,
-    onPickIso: (String) -> Unit,
-) {
-    val p = mockTestPalette()
-    val ctx = LocalContext.current
-
-    fun millisToIso(millis: Long): String =
-        Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalDate().toString()
-
-    val selectableDates = remember {
-        object : SelectableDates {
-            override fun isSelectableDate(utcTimeMillis: Long): Boolean =
-                runCatching {
-                    val d = Instant.ofEpochMilli(utcTimeMillis).atZone(ZoneId.systemDefault()).toLocalDate()
-                    !d.isAfter(LocalDate.now())
-                }.getOrDefault(false)
-
-            override fun isSelectableYear(year: Int): Boolean =
-                year in 1900..LocalDate.now().year
-        }
-    }
-
-    val initialMillis = remember(initialIso) {
-        val trimmed = initialIso.trim()
-        val fromExisting =
-            if (profileBirthdayPattern.matches(trimmed)) {
-                runCatching { LocalDate.parse(trimmed).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() }.getOrNull()
-            } else {
-                null
-            }
-        fromExisting ?: run {
-            val todayIso = LocalDate.now().toString()
-            LocalDate.parse(todayIso).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        }
-    }
-
-    val state = rememberDatePickerState(
-        initialSelectedDateMillis = initialMillis,
-        selectableDates = selectableDates,
-    )
-
-    DatePickerDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    val millis = state.selectedDateMillis
-                    if (millis == null) {
-                        onDismiss()
-                        return@TextButton
-                    }
-                    val iso = millisToIso(millis)
-                    val (serverVal, errMsg) = validateBirthdayForServer(iso)
-                    if (serverVal != null) {
-                        onPickIso(iso)
-                    } else {
-                        Toast.makeText(
-                            ctx,
-                            errMsg.ifBlank { "Invalid date" },
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                    }
-                },
-            ) { Text("OK", color = p.accent) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel", color = p.textSecondary) }
-        },
-        colors = DatePickerDefaults.colors(),
-    ) {
-        DatePicker(state = state)
     }
 }
 
