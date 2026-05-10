@@ -210,6 +210,10 @@ async function ensureOptionalColumns() {
       `ALTER TABLE users
        ADD COLUMN IF NOT EXISTS date_of_birth DATE`,
     );
+    await pool.query(
+      `ALTER TABLE users
+       ADD COLUMN IF NOT EXISTS gender VARCHAR(20) NOT NULL DEFAULT ''`,
+    );
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(255)`);
     await pool.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS uq_users_google_sub_nonempty
@@ -1126,6 +1130,14 @@ async function processNotificationSchedules() {
     const items = Array.isArray(payload.items) ? payload.items : [];
     if (!items.length) return;
     const nowMs = Date.now();
+    // Safety: never blast a huge backlog in one scheduler tick.
+    // If multiple items are overdue (scheduleAt in the past), we process only a limited number per run,
+    // and defer the rest slightly into the future.
+    const maxPerRunRaw = Number(process.env.NOTIFICATION_SCHEDULER_MAX_PER_RUN || 3);
+    const maxPerRun = Number.isFinite(maxPerRunRaw) ? Math.max(1, Math.min(50, Math.floor(maxPerRunRaw))) : 3;
+    const deferMsRaw = Number(process.env.NOTIFICATION_SCHEDULER_DEFER_MS || 120000);
+    const deferMs = Number.isFinite(deferMsRaw) ? Math.max(10000, Math.min(3600000, Math.floor(deferMsRaw))) : 120000;
+    let processedThisRun = 0;
     let changed = false;
     const nextItems = [];
     for (const raw of items) {
@@ -1139,6 +1151,20 @@ async function processNotificationSchedules() {
       const scheduleMs = Date.parse(scheduleAt);
       if (!Number.isFinite(scheduleMs) || scheduleMs > nowMs) {
         nextItems.push(item);
+        continue;
+      }
+      if (processedThisRun >= maxPerRun) {
+        // Defer: keep order stable and avoid re-sending immediately on the next tick.
+        nextItems.push({
+          ...item,
+          scheduleAt: new Date(nowMs + deferMs).toISOString(),
+          status: 'scheduled',
+          lastRunAt: String(item.lastRunAt || ''),
+          lastRunSent: Number(item.lastRunSent || 0),
+          lastRunFailed: Number(item.lastRunFailed || 0),
+          lastError: 'deferred_backlog_limit',
+        });
+        changed = true;
         continue;
       }
       const title = String(item.title || '').trim();
@@ -1158,6 +1184,7 @@ async function processNotificationSchedules() {
         continue;
       }
       const result = await sendPushToAudience({ title, message, target, deepLink });
+      processedThisRun += 1;
       const runSucceeded = result.sent > 0 && result.failed === 0;
       const nextScheduleAt = computeNextNotificationSchedule(item, scheduleAt);
       const repeatUntilMs = Date.parse(String(item.repeatUntil || '').trim());

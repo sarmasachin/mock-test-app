@@ -782,7 +782,7 @@ fun ProfileEditGenderScreen(
                         return@Button
                     }
                     scope.launch {
-                        val r = AppPreferencesRepository.updateGender(selected)
+                        val r = AuthRepository.patchProfileRemote(gender = selected)
                         r.fold(
                             onSuccess = {
                                 inlineType = InlineMessageType.Success

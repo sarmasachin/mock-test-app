@@ -3,6 +3,8 @@ package com.freemocktest.app.data
 import android.util.Log
 import com.freemocktest.app.data.remote.NewsArticleDto
 import com.freemocktest.app.data.remote.RetrofitProvider
+import org.json.JSONArray
+import org.json.JSONObject
 import com.freemocktest.app.newui.alerts.ManualExamAlertContent
 import com.freemocktest.app.newui.alerts.ManualJobAlertContent
 import com.freemocktest.app.newui.news.ManualNewsContent
@@ -364,6 +366,19 @@ object ContentRepository {
      * Loads CMS home payload (banners, news slider, sections). Cached in-memory after first success
      * unless [forceRefresh] clears the cache — use when Home must reflect server updates (slider, etc.).
      */
+    /**
+     * Returns the previously persisted home payload (no network). Used by the Home screen to render
+     * instantly on cold start while a fresh fetch runs in the background (stale-while-revalidate).
+     * Safe to call before [loadHomeContent]; returns null on first-ever launch or on parse failure.
+     */
+    suspend fun loadCachedHomeContent(): HomeContentRemote? = withContext(Dispatchers.IO) {
+        homeContentMemory?.let { return@withContext it }
+        val raw = AppPreferencesRepository.peekCachedHomeContent() ?: return@withContext null
+        val parsed = runCatching { decodeHomeContent(raw) }.getOrNull() ?: return@withContext null
+        homeContentMemory = parsed
+        parsed
+    }
+
     suspend fun loadHomeContent(forceRefresh: Boolean = false): HomeContentRemote? = withContext(Dispatchers.IO) {
         if (!forceRefresh) {
             homeContentMemory?.let { return@withContext it }
@@ -424,11 +439,162 @@ object ContentRepository {
                     },
                 startSeriesLockSeconds = (content.startSeriesLockSeconds ?: 20).coerceIn(0, 86_400),
                 startSeriesActiveWindowMinutes = (content.startSeriesActiveWindowMinutes ?: 30).coerceIn(1, 10_080),
-            ).also { homeContentMemory = it }
+            ).also { fresh ->
+                homeContentMemory = fresh
+                // Persist for the next cold start. Failure here is non-fatal: in-memory cache
+                // still serves the rest of this session, and the next successful fetch will retry.
+                runCatching {
+                    AppPreferencesRepository.saveCachedHomeContentNow(encodeHomeContent(fresh))
+                }.onFailure { Log.w(TAG, "saveCachedHomeContent", it) }
+            }
         } catch (e: Exception) {
             Log.w(TAG, "loadHomeContent", e)
             null
         }
+    }
+
+    private fun encodeHomeContent(c: HomeContentRemote): String {
+        val o = JSONObject()
+        c.welcomeText?.let { o.put("welcomeText", it) }
+        c.quickActionsTitle?.let { o.put("quickActionsTitle", it) }
+        c.themePreset?.let { o.put("themePreset", it) }
+        o.put("promoWidgetEnabled", c.promoWidgetEnabled)
+        c.promoWidgetHtml?.let { o.put("promoWidgetHtml", it) }
+        o.put("studentUpdateWidgetEnabled", c.studentUpdateWidgetEnabled)
+        c.studentUpdateWidgetHtml?.let { o.put("studentUpdateWidgetHtml", it) }
+        o.put("newsCategoryMenu", JSONArray(c.newsCategoryMenu))
+        o.put("jobCategoryMenu", JSONArray(c.jobCategoryMenu))
+        o.put("examCategoryMenu", JSONArray(c.examCategoryMenu))
+        val sectionsArr = JSONArray()
+        c.sections.forEach { s ->
+            sectionsArr.put(
+                JSONObject().apply {
+                    put("id", s.id)
+                    put("title", s.title)
+                    put("items", JSONArray(s.items))
+                },
+            )
+        }
+        o.put("sections", sectionsArr)
+        val qaArr = JSONArray()
+        c.quickActionSections.forEach { s ->
+            val itemsArr = JSONArray()
+            s.items.forEach { it2 ->
+                itemsArr.put(
+                    JSONObject().apply {
+                        put("title", it2.title)
+                        put("actionKey", it2.actionKey)
+                        it2.iconKey?.let { ik -> put("iconKey", ik) }
+                    },
+                )
+            }
+            qaArr.put(
+                JSONObject().apply {
+                    put("id", s.id)
+                    put("title", s.title)
+                    put("items", itemsArr)
+                },
+            )
+        }
+        o.put("quickActionSections", qaArr)
+        o.put("banners", JSONArray(c.banners))
+        val newsArr = JSONArray()
+        c.newsSlides.forEach { ns ->
+            newsArr.put(
+                JSONObject().apply {
+                    put("id", ns.id)
+                    put("articleId", ns.articleId)
+                    ns.headline?.let { put("headline", it) }
+                    put("imageUrl", ns.imageUrl)
+                },
+            )
+        }
+        o.put("newsSlides", newsArr)
+        o.put("startSeriesLockSeconds", c.startSeriesLockSeconds)
+        o.put("startSeriesActiveWindowMinutes", c.startSeriesActiveWindowMinutes)
+        return o.toString()
+    }
+
+    private fun decodeHomeContent(raw: String): HomeContentRemote {
+        val o = JSONObject(raw)
+        fun nullableString(key: String): String? =
+            if (o.has(key) && !o.isNull(key)) o.optString(key, "").takeIf { it.isNotEmpty() } else null
+        fun stringList(key: String): List<String> {
+            val arr = o.optJSONArray(key) ?: return emptyList()
+            return List(arr.length()) { arr.optString(it).orEmpty() }
+        }
+        val sections = o.optJSONArray("sections")?.let { arr ->
+            List(arr.length()) { i ->
+                val s = arr.optJSONObject(i) ?: JSONObject()
+                HomeSectionRemote(
+                    id = s.optString("id", ""),
+                    title = s.optString("title", ""),
+                    items = s.optJSONArray("items")?.let { ia ->
+                        List(ia.length()) { ia.optString(it).orEmpty() }
+                    }.orEmpty(),
+                )
+            }
+        }.orEmpty()
+        val quickActions = o.optJSONArray("quickActionSections")?.let { arr ->
+            List(arr.length()) { i ->
+                val s = arr.optJSONObject(i) ?: JSONObject()
+                val itemsArr = s.optJSONArray("items")
+                val items = if (itemsArr == null) {
+                    emptyList()
+                } else {
+                    List(itemsArr.length()) { j ->
+                        val it2 = itemsArr.optJSONObject(j) ?: JSONObject()
+                        HomeQuickActionItemRemote(
+                            title = it2.optString("title", ""),
+                            actionKey = it2.optString("actionKey", ""),
+                            iconKey = if (it2.has("iconKey") && !it2.isNull("iconKey")) {
+                                it2.optString("iconKey", "").takeIf { ik -> ik.isNotEmpty() }
+                            } else {
+                                null
+                            },
+                        )
+                    }
+                }
+                HomeQuickActionSectionRemote(
+                    id = s.optString("id", ""),
+                    title = s.optString("title", ""),
+                    items = items,
+                )
+            }
+        }.orEmpty()
+        val newsSlides = o.optJSONArray("newsSlides")?.let { arr ->
+            List(arr.length()) { i ->
+                val ns = arr.optJSONObject(i) ?: JSONObject()
+                HomeNewsSlideRemote(
+                    id = ns.optString("id", ""),
+                    articleId = ns.optString("articleId", ""),
+                    headline = if (ns.has("headline") && !ns.isNull("headline")) {
+                        ns.optString("headline", "").takeIf { it.isNotEmpty() }
+                    } else {
+                        null
+                    },
+                    imageUrl = ns.optString("imageUrl", ""),
+                )
+            }
+        }.orEmpty()
+        return HomeContentRemote(
+            welcomeText = nullableString("welcomeText"),
+            quickActionsTitle = nullableString("quickActionsTitle"),
+            themePreset = nullableString("themePreset"),
+            promoWidgetEnabled = o.optBoolean("promoWidgetEnabled", false),
+            promoWidgetHtml = nullableString("promoWidgetHtml"),
+            studentUpdateWidgetEnabled = o.optBoolean("studentUpdateWidgetEnabled", false),
+            studentUpdateWidgetHtml = nullableString("studentUpdateWidgetHtml"),
+            newsCategoryMenu = stringList("newsCategoryMenu"),
+            jobCategoryMenu = stringList("jobCategoryMenu"),
+            examCategoryMenu = stringList("examCategoryMenu"),
+            sections = sections,
+            quickActionSections = quickActions,
+            banners = stringList("banners"),
+            newsSlides = newsSlides,
+            startSeriesLockSeconds = o.optInt("startSeriesLockSeconds", 20).coerceIn(0, 86_400),
+            startSeriesActiveWindowMinutes = o.optInt("startSeriesActiveWindowMinutes", 30).coerceIn(1, 10_080),
+        )
     }
 
     suspend fun loadSubmitApplicationContent(): SubmitApplicationContentRemote? = withContext(Dispatchers.IO) {

@@ -28,6 +28,7 @@ function mapUserRow(row) {
     sixDigitPublicId: row.six_digit_public_id,
     signupState: row.signup_state || '',
     signupDistrict: row.signup_district || '',
+    gender: row.gender || '',
     emailVerifiedAt: row.email_verified_at,
     phoneVerifiedAt: row.phone_verified_at,
     createdAt: row.created_at,

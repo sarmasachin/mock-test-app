@@ -62,6 +62,11 @@ object LocalNotificationInbox {
             .sortedByDescending { it.createdAt.orEmpty() }
     }
 
+    fun clearAll(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().remove(KEY_ITEMS).apply()
+    }
+
     private fun readLocalItems(raw: String?): List<LocalItem> {
         if (raw.isNullOrBlank()) return emptyList()
         return runCatching {

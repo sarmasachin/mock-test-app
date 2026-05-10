@@ -2454,9 +2454,14 @@ function TestsTab({
                   <button type="submit">Save changes</button>
                 </>
               ) : (
-                <button type="submit">Add Test</button>
+                <></>
               )}
             </div>
+            {!editingTestId && (
+              <div className="all-tests-add-center">
+                <button type="submit">Add Test</button>
+              </div>
+            )}
           </form>
           <div className="inline-form all-tests-tools">
             <button type="button" className="all-tests-refresh" onClick={load}>
@@ -2847,8 +2852,14 @@ function TestsTab({
                   }}
                   placeholder={
                     bulkImportFormat === 'json'
-                      ? '[{"position":1,"stem":"Q?","choiceA":"A","choiceB":"B","choiceC":"C","choiceD":"D","correctIndex":0,"isPublished":true}]'
-                      : 'Headers: position,stem,choiceA,choiceB,choiceC,choiceD,correctIndex,explanation,isPublished'
+                      ? `JSON array. Optional: subjectKey (or subject_key).
+
+Example (subject-less):
+[{"position":1,"stem":"Q?","choiceA":"A","choiceB":"B","choiceC":"C","choiceD":"D","correctIndex":0,"explanation":"","isPublished":true}]
+
+Example (subject-wise):
+[{"position":1,"subjectKey":"math","stem":"Q?","choiceA":"A","choiceB":"B","choiceC":"C","choiceD":"D","correctIndex":0,"explanation":"","isPublished":true}]`
+                      : 'Headers: position,subjectKey(or subject_key),stem,choiceA,choiceB,choiceC,choiceD,correctIndex,explanation,isPublished'
                   }
                   className="qb-import-textarea"
                 />
@@ -2957,15 +2968,6 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
   const [dailyReleaseHour, setDailyReleaseHour] = useState('10');
   const [dailyReleaseMinute, setDailyReleaseMinute] = useState('0');
   const [dailyTimezoneOffset, setDailyTimezoneOffset] = useState('330');
-  const [dailyDigestShareTitle, setDailyDigestShareTitle] = useState('Daily Digest');
-  const [dailyDigestShareBody, setDailyDigestShareBody] = useState(
-    'Try today\'s Daily Digest on Mock Test App!\nDate: {date}\n\n{question}\n\nDownload: {storeUrl}',
-  );
-  const [dailyQuizShareTitle, setDailyQuizShareTitle] = useState('Daily Quiz Result');
-  const [dailyQuizShareBody, setDailyQuizShareBody] = useState(
-    'My Daily Quiz result on {date}\n\n{question}\nScore: {score}\n\nDownload: {storeUrl}',
-  );
-  const [savingDailyShareText, setSavingDailyShareText] = useState(false);
   const DIGEST_LIST_PER_PAGE = 15;
   const [digestListPage, setDigestListPage] = useState(1);
 
@@ -2981,19 +2983,9 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
       ]);
       setItems(digestRes.data?.items || []);
       const schedule = settingsRes.data?.settings?.dailyQuizSettings || {};
-      const digestShare = settingsRes.data?.settings?.dailyDigestShareContent || {};
-      const quizShare = settingsRes.data?.settings?.dailyQuizShareContent || {};
       setDailyReleaseHour(String(Math.max(0, Math.min(23, Number(schedule.releaseHour ?? 10)))));
       setDailyReleaseMinute(String(Math.max(0, Math.min(59, Number(schedule.releaseMinute ?? 0)))));
       setDailyTimezoneOffset(String(Math.max(-720, Math.min(840, Number(schedule.timezoneOffsetMinutes ?? 330)))));
-      setDailyDigestShareTitle(String(digestShare.title || 'Daily Digest'));
-      setDailyDigestShareBody(
-        String(digestShare.body || 'Try today\'s Daily Digest on Mock Test App!\nDate: {date}\n\n{question}\n\nDownload: {storeUrl}'),
-      );
-      setDailyQuizShareTitle(String(quizShare.title || 'Daily Quiz Result'));
-      setDailyQuizShareBody(
-        String(quizShare.body || 'My Daily Quiz result on {date}\n\n{question}\nScore: {score}\n\nDownload: {storeUrl}'),
-      );
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to load daily digest items');
     }
@@ -3015,26 +3007,6 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
       pushToast('success', 'Daily quiz schedule saved.');
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to save daily quiz schedule');
-    }
-  }
-  async function saveDailyShareTextSettings() {
-    try {
-      setSavingDailyShareText(true);
-      await apiClient.patch('/admin/settings', {
-        dailyDigestShareContent: {
-          title: String(dailyDigestShareTitle || 'Daily Digest').trim(),
-          body: String(dailyDigestShareBody || '').trim(),
-        },
-        dailyQuizShareContent: {
-          title: String(dailyQuizShareTitle || 'Daily Quiz Result').trim(),
-          body: String(dailyQuizShareBody || '').trim(),
-        },
-      });
-      pushToast('success', 'Daily digest/quiz share text saved.');
-    } catch (err: any) {
-      pushToast('error', err?.response?.data?.error || 'Failed to save daily share text');
-    } finally {
-      setSavingDailyShareText(false);
     }
   }
   async function createDigestItem(e: FormEvent) {
@@ -3176,51 +3148,6 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
         />
         <button type="button" onClick={saveDailySchedule}>Save Daily Quiz Time</button>
       </div>
-      <section className="panel-card" style={{ marginBottom: 10 }}>
-        <div className="panel-head">
-          <h3>Daily Digest & Daily Quiz Share Text</h3>
-        </div>
-        <p className="muted">
-          Placeholders: <b>{'{date}'}</b>, <b>{'{question}'}</b>, <b>{'{storeUrl}'}</b>, <b>{'{score}'}</b>,{' '}
-          <b>{'{result}'}</b>
-        </p>
-        <div className="settings-form">
-          <input
-            value={dailyDigestShareTitle}
-            onChange={(e) => setDailyDigestShareTitle(e.target.value)}
-            placeholder="Daily Digest share subject/title"
-            maxLength={120}
-          />
-        </div>
-        <textarea
-          value={dailyDigestShareBody}
-          onChange={(e) => setDailyDigestShareBody(e.target.value)}
-          placeholder="Daily Digest share text"
-          rows={5}
-        />
-        <div className="settings-form" style={{ marginTop: 10 }}>
-          <input
-            value={dailyQuizShareTitle}
-            onChange={(e) => setDailyQuizShareTitle(e.target.value)}
-            placeholder="Daily Quiz result share subject/title"
-            maxLength={120}
-          />
-        </div>
-        <textarea
-          value={dailyQuizShareBody}
-          onChange={(e) => setDailyQuizShareBody(e.target.value)}
-          placeholder="Daily Quiz result share text"
-          rows={5}
-        />
-        <div className="inline-form">
-          <button type="button" className="ghost" onClick={() => void load()} disabled={savingDailyShareText}>
-            Reload
-          </button>
-          <button type="button" onClick={saveDailyShareTextSettings} disabled={savingDailyShareText}>
-            {savingDailyShareText ? 'Saving...' : 'Save Share Text'}
-          </button>
-        </div>
-      </section>
       <button onClick={load}>Refresh Digest Items</button>
       <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search digest items" />
       <div className="list table questions-table">
@@ -5368,6 +5295,9 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   const [newsItems, setNewsItems] = useState<ArticleItem[]>([]);
   const [newSectionTitle, setNewSectionTitle] = useState('');
   const [newSectionItems, setNewSectionItems] = useState('');
+  // Keep raw comma-separated text while typing; parse into array only on blur/save.
+  // Otherwise, typing a trailing comma gets "eaten" (split+filter removes empty tail).
+  const [sectionItemsDraft, setSectionItemsDraft] = useState<Record<string, string>>({});
   const [newQuickSectionTitle, setNewQuickSectionTitle] = useState('');
   const [newQuickSectionItems, setNewQuickSectionItems] = useState('');
   const [newPromoChipTitle, setNewPromoChipTitle] = useState('');
@@ -5691,6 +5621,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
           startSeriesLockSeconds: Number(home.startSeriesLockSeconds || 20),
           startSeriesActiveWindowMinutes: Number(home.startSeriesActiveWindowMinutes || 30),
         });
+        setSectionItemsDraft({});
       }
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to load home content');
@@ -6062,22 +5993,30 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
         />
       </div>
       <div className="inline-form">
-        <input value={newSectionTitle} onChange={(e) => setNewSectionTitle(e.target.value)} placeholder="New section title" />
+        <input
+          value={newSectionTitle}
+          onChange={(e) => setNewSectionTitle(e.target.value)}
+          placeholder="New category section title (e.g. Category, Exams, Jobs)"
+        />
         <input
           value={newSectionItems}
           onChange={(e) => setNewSectionItems(e.target.value)}
-          placeholder="Items comma separated (e.g. Math,Reasoning)"
+          placeholder="Section items (comma-separated). Example: SSC, Railway, Police, GK"
         />
         <button type="button" onClick={addSection}>
           Add Section
         </button>
       </div>
       <div className="inline-form">
-        <input value={newQuickSectionTitle} onChange={(e) => setNewQuickSectionTitle(e.target.value)} placeholder="New quick action section title" />
+        <input
+          value={newQuickSectionTitle}
+          onChange={(e) => setNewQuickSectionTitle(e.target.value)}
+          placeholder="New quick action section title (e.g. Quick actions)"
+        />
         <input
           value={newQuickSectionItems}
           onChange={(e) => setNewQuickSectionItems(e.target.value)}
-          placeholder="Quick actions format: Label:key:icon, Label:key:icon"
+          placeholder="Quick actions (comma-separated). Format: Label:actionKey:iconKey. Example: Start test:startTest:bolt, Leaderboard:leaderboard:chart"
         />
         <button type="button" onClick={addQuickActionSection}>
           Add Quick Action Section
@@ -6162,23 +6101,24 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
               }
             />
             <input
-              value={section.items.join(', ')}
-              onChange={(e) =>
+              value={sectionItemsDraft[section.id] ?? section.items.join(', ')}
+              onChange={(e) => setSectionItemsDraft((p) => ({ ...p, [section.id]: e.target.value }))}
+              onBlur={() => {
+                const raw = String(sectionItemsDraft[section.id] ?? section.items.join(', '));
+                const nextItems = raw
+                  .split(',')
+                  .map((v) => v.trim())
+                  .filter(Boolean);
                 setSettings((p) => ({
                   ...p,
-                  sections: p.sections.map((x) =>
-                    x.id === section.id
-                      ? {
-                          ...x,
-                          items: e.target.value
-                            .split(',')
-                            .map((v) => v.trim())
-                            .filter(Boolean),
-                        }
-                      : x,
-                  ),
-                }))
-              }
+                  sections: p.sections.map((x) => (x.id === section.id ? { ...x, items: nextItems } : x)),
+                }));
+                setSectionItemsDraft((p) => {
+                  const copy = { ...p };
+                  delete copy[section.id];
+                  return copy;
+                });
+              }}
             />
             <button type="button" onClick={save}>
               Save

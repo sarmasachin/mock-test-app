@@ -3,6 +3,7 @@ package com.freemocktest.app.newui.tests
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,11 +15,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
@@ -26,10 +32,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.freemocktest.app.data.ContentRepository
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -79,6 +89,9 @@ data class TestCardNew(
     val notifyOnPublish: Boolean = true,
 )
 
+private const val TESTS_LOAD_ERROR_MESSAGE = "Couldn't load tests. Check your connection and try again."
+private const val TESTS_EMPTY_MESSAGE = "No tests available for this topic yet."
+
 @Composable
 fun TestsScreenNew(
     modifier: Modifier = Modifier,
@@ -88,14 +101,25 @@ fun TestsScreenNew(
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
+    val scope = rememberCoroutineScope()
 
-    var tests by remember(subcategory) {
-        mutableStateOf(
-            listOf(TestCardNew(title = "${subcategory.trim()} Sprint", meta = "10 Questions • 12 min")),
-        )
-    }
-    LaunchedEffect(subcategory) {
-        tests = ContentRepository.loadTestsForSubcategory(subcategory)
+    var tests by remember(subcategory) { mutableStateOf<List<TestCardNew>>(emptyList()) }
+    var testsLoading by remember(subcategory) { mutableStateOf(true) }
+    var testsLoadError by remember(subcategory) { mutableStateOf(false) }
+    var testsReloadKey by remember(subcategory) { mutableIntStateOf(0) }
+    var navInFlight by remember(subcategory) { mutableStateOf(false) }
+
+    LaunchedEffect(subcategory, testsReloadKey) {
+        testsLoading = true
+        testsLoadError = false
+        try {
+            tests = ContentRepository.loadTestsForSubcategory(subcategory)
+        } catch (_: Exception) {
+            tests = emptyList()
+            testsLoadError = true
+        } finally {
+            testsLoading = false
+        }
     }
 
     Scaffold(
@@ -130,13 +154,85 @@ fun TestsScreenNew(
 
             Spacer(Modifier.height(16.dp))
 
-            Column {
-                tests.forEach { t ->
-                    TestRow(
-                        test = t,
-                        onOpen = { onOpenTest(t.title) },
-                    )
-                    Spacer(Modifier.height(12.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) {
+                when {
+                    testsLoading -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(color = p.accent)
+                        }
+                    }
+                    testsLoadError -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 18.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Text(
+                                text = TESTS_LOAD_ERROR_MESSAGE,
+                                color = p.textSecondary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.height(14.dp))
+                            Button(
+                                onClick = { testsReloadKey += 1 },
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = p.primaryButton,
+                                    contentColor = p.onPrimaryButton,
+                                ),
+                            ) {
+                                Text("Retry", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                    tests.isEmpty() -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = TESTS_EMPTY_MESSAGE,
+                                color = p.textSecondary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                    else -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            tests.forEach { t ->
+                                TestRow(
+                                    test = t,
+                                    openDisabled = navInFlight,
+                                    onOpen = {
+                                        if (!navInFlight && t.title.isNotBlank()) {
+                                            navInFlight = true
+                                            onOpenTest(t.title)
+                                            scope.launch {
+                                                delay(1_500L)
+                                                navInFlight = false
+                                            }
+                                        }
+                                    },
+                                )
+                                Spacer(Modifier.height(12.dp))
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -146,6 +242,7 @@ fun TestsScreenNew(
 @Composable
 private fun TestRow(
     test: TestCardNew,
+    openDisabled: Boolean,
     onOpen: () -> Unit,
 ) {
     val p = mockTestPalette()
@@ -231,15 +328,15 @@ private fun TestRow(
                 Box(
                     modifier = Modifier
                         .clip(pill)
-                        .background(p.systemBlue)
+                        .background(if (openDisabled) p.border else p.systemBlue)
                         .border(1.dp, p.overlaySoft, pill)
-                        .clickable(onClick = onOpen)
+                        .clickable(enabled = !openDisabled, onClick = onOpen)
                         .padding(horizontal = 18.dp, vertical = 10.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = "Start Test Series",
-                        color = Color.White,
+                        color = Color.White.copy(alpha = if (openDisabled) 0.55f else 1f),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                     )

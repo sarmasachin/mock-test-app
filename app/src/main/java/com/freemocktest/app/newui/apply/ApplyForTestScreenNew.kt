@@ -1,5 +1,7 @@
 package com.freemocktest.app.newui.apply
 
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,6 +33,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -100,61 +104,83 @@ fun ApplyForTestScreenNew(
     var startSeriesActiveWindowMs by remember { mutableStateOf(30 * 60 * 1000L) }
     var shouldQueueSeriesOnConfirm by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
     LaunchedEffect(Unit) {
-        val remote = ContentRepository.loadSubmitApplicationContent() ?: return@LaunchedEffect
-        pageTitle = remote.title?.ifBlank { pageTitle } ?: pageTitle
-        benefitsTitle = remote.benefitsTitle?.ifBlank { benefitsTitle } ?: benefitsTitle
-        submitButtonLabel = remote.submitButtonLabel?.ifBlank { submitButtonLabel } ?: submitButtonLabel
-        successMessage = remote.successMessage?.ifBlank { successMessage } ?: successMessage
-        if (remote.bulletItems.isNotEmpty()) {
-            bulletItems = remote.bulletItems
+        // CMS copy for this screen; on failure the built-in defaults stay in effect.
+        try {
+            val remote = ContentRepository.loadSubmitApplicationContent() ?: return@LaunchedEffect
+            pageTitle = remote.title?.ifBlank { pageTitle } ?: pageTitle
+            benefitsTitle = remote.benefitsTitle?.ifBlank { benefitsTitle } ?: benefitsTitle
+            submitButtonLabel = remote.submitButtonLabel?.ifBlank { submitButtonLabel } ?: submitButtonLabel
+            successMessage = remote.successMessage?.ifBlank { successMessage } ?: successMessage
+            if (remote.bulletItems.isNotEmpty()) {
+                bulletItems = remote.bulletItems
+            }
+        } catch (_: Exception) {
+            // Defaults already initialised in `remember { mutableStateOf(...) }` remain in effect.
         }
     }
     LaunchedEffect(Unit) {
-        val home = ContentRepository.loadHomeContent() ?: return@LaunchedEffect
-        startSeriesLockMs = home.startSeriesLockSeconds.coerceAtLeast(0).toLong() * 1000L
-        startSeriesActiveWindowMs = home.startSeriesActiveWindowMinutes.coerceAtLeast(1).toLong() * 60_000L
+        // Lock-window/active-window come from CMS; on failure the safe defaults
+        // (`20_000L`, `30 * 60 * 1000L`) initialised above remain in effect.
+        try {
+            val home = ContentRepository.loadHomeContent() ?: return@LaunchedEffect
+            startSeriesLockMs = home.startSeriesLockSeconds.coerceAtLeast(0).toLong() * 1000L
+            startSeriesActiveWindowMs = home.startSeriesActiveWindowMinutes.coerceAtLeast(1).toLong() * 60_000L
+        } catch (_: Exception) {
+            // Defaults remain in effect.
+        }
     }
     LaunchedEffect(title, refreshTick) {
         isRefreshing = true
-        val directMatch = ContentRepository.loadTestByTitle(title)
-        val test = if (directMatch?.id?.isNotBlank() == true) {
-            directMatch
-        } else {
-            // Some routes pass category/subcategory label instead of exact test title.
-            // Fallback to the first live test in that bucket so submit always has a valid test id.
-            ContentRepository.loadTestsForSubcategory(title)
-                .firstOrNull { it.id.isNotBlank() }
-        }
-        isRefreshing = false
-        testId = test?.id?.trim().orEmpty()
-        resolvedTestName = test?.title?.trim()?.ifBlank { title } ?: title
-        slotInfo = test?.slotLabel?.ifBlank { "Morning Slot" } ?: "Morning Slot"
-        val enrolled = test?.enrolledCount
-        val capacity = test?.capacityTotal
-        val remaining = test?.remainingSeats
-        appliedInfo = if (enrolled != null && capacity != null && capacity > 0) {
-            "${enrolled.coerceAtLeast(0)}/${capacity.coerceAtLeast(0)}"
-        } else {
-            test?.enrolledLabel?.ifBlank { "0" } ?: "0"
-        }
-        remainingSeatsInfo = if (remaining != null) {
-            "${remaining.coerceAtLeast(0)} seats left"
-        } else {
-            test?.remainingSeatsLabel?.ifBlank { "0 seats left" } ?: "0 seats left"
-        }
-        if (testId.isNotBlank()) {
-            AuthRepository.getTestWaitlistStatus(testId).onSuccess { status ->
-                isWaitlisted = status.waitlisted
-                waitingPosition = status.waitingPosition.coerceAtLeast(0)
-                waitingTotal = status.waitingTotal.coerceAtLeast(0)
+        // try/finally guarantees `isRefreshing` is reset even if any repository call throws
+        // (otherwise the "Refreshing latest seats..." text would be stuck on screen forever).
+        // On failure we deliberately KEEP previously-resolved values so the user doesn't
+        // lose a good snapshot just because a single ON_RESUME refresh hit a network blip.
+        try {
+            val directMatch = ContentRepository.loadTestByTitle(title)
+            val test = if (directMatch?.id?.isNotBlank() == true) {
+                directMatch
+            } else {
+                // Some routes pass category/subcategory label instead of exact test title.
+                // Fallback to the first live test in that bucket so submit always has a valid test id.
+                ContentRepository.loadTestsForSubcategory(title)
+                    .firstOrNull { it.id.isNotBlank() }
             }
-        } else {
-            isWaitlisted = false
-            waitingPosition = 0
-            waitingTotal = 0
+            testId = test?.id?.trim().orEmpty()
+            resolvedTestName = test?.title?.trim()?.ifBlank { title } ?: title
+            slotInfo = test?.slotLabel?.ifBlank { "Morning Slot" } ?: "Morning Slot"
+            val enrolled = test?.enrolledCount
+            val capacity = test?.capacityTotal
+            val remaining = test?.remainingSeats
+            appliedInfo = if (enrolled != null && capacity != null && capacity > 0) {
+                "${enrolled.coerceAtLeast(0)}/${capacity.coerceAtLeast(0)}"
+            } else {
+                test?.enrolledLabel?.ifBlank { "0" } ?: "0"
+            }
+            remainingSeatsInfo = if (remaining != null) {
+                "${remaining.coerceAtLeast(0)} seats left"
+            } else {
+                test?.remainingSeatsLabel?.ifBlank { "0 seats left" } ?: "0 seats left"
+            }
+            if (testId.isNotBlank()) {
+                AuthRepository.getTestWaitlistStatus(testId).onSuccess { status ->
+                    isWaitlisted = status.waitlisted
+                    waitingPosition = status.waitingPosition.coerceAtLeast(0)
+                    waitingTotal = status.waitingTotal.coerceAtLeast(0)
+                }
+            } else {
+                isWaitlisted = false
+                waitingPosition = 0
+                waitingTotal = 0
+            }
+        } catch (_: Exception) {
+            // Keep last-good values on screen; the user can pull background→foreground
+            // (DisposableEffect bumps `refreshTick`) to retry.
+        } finally {
+            isRefreshing = false
         }
     }
     DisposableEffect(lifecycleOwner) {
@@ -167,6 +193,18 @@ fun ApplyForTestScreenNew(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
+    }
+
+    // Block accidental Back press while a submission is in flight: the server-side application
+    // may have already been recorded, so navigating away mid-submit could leave the user thinking
+    // they hadn't applied (a "phantom application"). The toast is short feedback only; once
+    // `isSubmitting` flips to false the BackHandler disables itself and Back works normally.
+    BackHandler(enabled = isSubmitting) {
+        Toast.makeText(
+            context,
+            "Submitting your application... please wait.",
+            Toast.LENGTH_SHORT,
+        ).show()
     }
 
     Scaffold(
@@ -259,6 +297,36 @@ fun ApplyForTestScreenNew(
                             .heightIn(min = 18.dp)
                             .graphicsLayer { alpha = if (isRefreshing) 1f else 0f },
                     )
+                    // Manual retry surfaces only when test resolution actually failed
+                    // (no testId resolved AND no refresh currently in flight).
+                    if (testId.isBlank() && !isRefreshing) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "Couldn't load test details.",
+                                color = p.textSecondary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(
+                                onClick = {
+                                    if (isRefreshing) return@TextButton
+                                    refreshTick += 1
+                                },
+                                enabled = !isRefreshing,
+                            ) {
+                                Text(
+                                    text = "Retry",
+                                    color = p.systemBlue,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(10.dp))
 
                     if (!revealSubmitSection) {
@@ -327,8 +395,13 @@ fun ApplyForTestScreenNew(
                                             showSuccessDialog = true
                                         }
                                     }.onFailure { error ->
-                                        submitError = error.message?.ifBlank { "Unable to submit application." }
+                                        val message = error.message?.ifBlank { "Unable to submit application." }
                                             ?: "Unable to submit application."
+                                        submitError = message
+                                        // Inline red text already shows below the button; the toast
+                                        // adds a more glanceable confirmation for users who tap Submit
+                                        // and immediately look elsewhere on screen.
+                                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                                     }
                                 }
                             },
@@ -399,11 +472,18 @@ fun ApplyForTestScreenNew(
                     onClick = {
                         scope.launch {
                             if (shouldQueueSeriesOnConfirm) {
-                                AppPreferencesRepository.addAppliedTestSeries(
-                                    testName = resolvedTestName,
-                                    lockMs = startSeriesLockMs,
-                                    activeWindowMs = startSeriesActiveWindowMs,
-                                )
+                                // DataStore write is best-effort: server already accepted the
+                                // application, so a local failure shouldn't block navigation.
+                                // Next "Start Test" entry will reconcile from server-side state.
+                                try {
+                                    AppPreferencesRepository.addAppliedTestSeries(
+                                        testName = resolvedTestName,
+                                        lockMs = startSeriesLockMs,
+                                        activeWindowMs = startSeriesActiveWindowMs,
+                                    )
+                                } catch (_: Exception) {
+                                    // Swallow: nothing user-actionable here.
+                                }
                             }
                         }
                         showSuccessDialog = false

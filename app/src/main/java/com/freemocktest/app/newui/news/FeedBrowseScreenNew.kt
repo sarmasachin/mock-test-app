@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -55,6 +56,44 @@ import coil.request.ImageRequest
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlin.math.max
+
+private fun categoryMenuTintColor(raw: String): Color {
+    // "Premium" soft accents (background uses low alpha, so these stay subtle).
+    val palette = listOf(
+        Color(0xFF0EA5E9), // sky
+        Color(0xFF06B6D4), // cyan
+        Color(0xFF14B8A6), // teal
+        Color(0xFF10B981), // emerald
+        Color(0xFF22C55E), // green
+        Color(0xFF84CC16), // lime
+        Color(0xFFEAB308), // amber
+        Color(0xFFF59E0B), // orange-amber
+        Color(0xFFF97316), // orange
+        Color(0xFFFB7185), // rose-light
+        Color(0xFFE11D48), // rose
+        Color(0xFFEC4899), // pink
+        Color(0xFFD946EF), // fuchsia
+        Color(0xFFA855F7), // purple
+        Color(0xFF8B5CF6), // violet
+        Color(0xFF7C3AED), // deep violet
+        Color(0xFF6366F1), // indigo
+        Color(0xFF4F46E5), // indigo-deep
+        Color(0xFF3B82F6), // blue
+        Color(0xFF2563EB), // blue-deep
+        Color(0xFF60A5FA), // blue-soft
+        Color(0xFF2DD4BF), // teal-soft
+        Color(0xFF34D399), // emerald-soft
+        Color(0xFFA3E635), // lime-soft
+        Color(0xFFFDE047), // yellow-soft
+        Color(0xFFFDBA74), // orange-soft
+        Color(0xFFF9A8D4), // pink-soft
+        Color(0xFFC4B5FD), // violet-soft
+        Color(0xFF93C5FD), // sky-soft
+    )
+    val key = raw.trim().lowercase()
+    val hash = key.hashCode() and Int.MAX_VALUE
+    return palette[hash % palette.size]
+}
 
 /**
  * Same layout as News: gradient scaffold, top app row, hero pager, dotted indicators,
@@ -78,6 +117,8 @@ fun FeedBrowseScreenNew(
     categoryMenu: List<String> = emptyList(),
     selectedCategory: String? = null,
     onSelectCategory: ((String) -> Unit)? = null,
+    /** Make category menu look like focused tabs (used by Exam categories). */
+    categoryMenuEmphasis: Boolean = false,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -167,17 +208,45 @@ fun FeedBrowseScreenNew(
                     ) {
                         items(categoryMenu) { category ->
                             val selected = selectedCategory == category
+                            val shape = RoundedCornerShape(999.dp)
+                            val tint = remember(category) { categoryMenuTintColor(category) }
+                            val bgColor =
+                                when {
+                                    categoryMenuEmphasis && selected -> tint.copy(alpha = 0.22f)
+                                    categoryMenuEmphasis && !selected -> tint.copy(alpha = 0.12f)
+                                    selected -> p.accent
+                                    else -> Color.Transparent
+                                }
+                            val borderColor =
+                                when {
+                                    categoryMenuEmphasis && selected -> tint.copy(alpha = 0.55f)
+                                    categoryMenuEmphasis && !selected -> tint.copy(alpha = 0.25f)
+                                    else -> p.accent.copy(alpha = 0.45f)
+                                }
+                            val textColor =
+                                when {
+                                    categoryMenuEmphasis && selected -> tint.copy(alpha = 0.95f)
+                                    selected -> Color.White
+                                    categoryMenuEmphasis && !selected -> p.textPrimary
+                                    else -> p.accent
+                                }
                             Text(
                                 text = category,
-                                color = if (selected) Color.White else p.accent,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
+                                color = textColor,
+                                fontSize = if (categoryMenuEmphasis) (if (selected) 14.sp else 13.sp) else 12.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                softWrap = false,
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(if (selected) p.accent else Color.Transparent)
-                                    .border(1.dp, p.accent.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
+                                    .clip(shape)
+                                    .background(bgColor)
+                                    .border(1.dp, borderColor, shape)
                                     .clickable { onSelectCategory(category) }
-                                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                                    .padding(
+                                        horizontal = if (categoryMenuEmphasis) 14.dp else 12.dp,
+                                        vertical = if (categoryMenuEmphasis) 9.dp else 7.dp,
+                                    ),
                             )
                         }
                     }

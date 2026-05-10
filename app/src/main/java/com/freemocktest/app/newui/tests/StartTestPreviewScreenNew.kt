@@ -35,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,6 +45,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,9 +63,9 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeParseException
 import java.util.Locale
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun StartTestPreviewScreenNew(
@@ -75,23 +77,30 @@ fun StartTestPreviewScreenNew(
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
-    var instructionItems by remember(testName) {
-        mutableStateOf(
-            listOf(
-                "Total questions: 100",
-                "Duration: 3 hours",
-                "Each question has one correct answer",
-                "Submit before timer ends",
-            ),
-        )
-    }
+    var instructionItems by remember(testName) { mutableStateOf<List<String>>(emptyList()) }
+    var instructionsLoaded by remember { mutableStateOf(false) }
     var testSnapshot by remember(testName) { mutableStateOf<TestCardNew?>(null) }
     val appliedSnapshots = remember { mutableStateMapOf<String, TestCardNew?>() }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val appliedSeries by AppPreferencesRepository.appliedTestSeries.collectAsState(initial = emptyList())
+    /** True until the first `loadTestByTitle` settles so we can show a spinner instead of a dummy card. */
+    var primaryLoading by remember(testName) { mutableStateOf(true) }
+    /** Click guard so a slow navigation/double-tap cannot fire two transitions. Resets after 1.5s. */
+    var navInFlight by remember { mutableStateOf(false) }
+    /** Bumped by the Retry button to force `LaunchedEffect(testName, reloadKey)` to re-run. */
+    var reloadKey by remember(testName) { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
 
-    LaunchedEffect(testName) {
-        testSnapshot = ContentRepository.loadTestByTitle(testName)
+    LaunchedEffect(testName, reloadKey) {
+        primaryLoading = true
+        try {
+            testSnapshot = ContentRepository.loadTestByTitle(testName)
+        } catch (_: Exception) {
+            // Swallow network/parse errors here; UI shows a Retry button when `testSnapshot == null`.
+            testSnapshot = null
+        } finally {
+            primaryLoading = false
+        }
     }
     LaunchedEffect(appliedSeries) {
         val names = appliedSeries.map { it.testName.trim() }.filter { it.isNotBlank() }.distinct()
@@ -100,14 +109,25 @@ fun StartTestPreviewScreenNew(
         }
         names.forEach { name ->
             if (!appliedSnapshots.containsKey(name)) {
-                appliedSnapshots[name] = ContentRepository.loadTestByTitle(name)
+                // Per-name try/catch so one failed fetch doesn't abort the whole loop.
+                // Network/parse errors fall back to a `null` snapshot (same shape as before),
+                // and the missing key will be retried whenever `appliedSeries` changes again.
+                appliedSnapshots[name] = try {
+                    ContentRepository.loadTestByTitle(name)
+                } catch (_: Exception) {
+                    null
+                }
             }
         }
     }
     LaunchedEffect(Unit) {
-        val remote = ContentRepository.loadInstructionContent()
-        if (remote != null && remote.items.isNotEmpty()) {
-            instructionItems = remote.items
+        try {
+            val remote = ContentRepository.loadInstructionContent()
+            if (remote != null && remote.items.isNotEmpty()) {
+                instructionItems = remote.items
+            }
+        } finally {
+            instructionsLoaded = true
         }
     }
     LaunchedEffect(Unit) {
@@ -202,7 +222,7 @@ fun StartTestPreviewScreenNew(
                     val hours = (remainingMs / 3_600_000L).toInt()
                     val mins = ((remainingMs % 3_600_000L) / 60_000L).toInt()
                     val secs = ((remainingMs % 60_000L) / 1_000L).toInt()
-                    val countdown = String.format("%02d:%02d:%02d", hours, mins, secs)
+                    val countdown = String.format(Locale.US, "%02d:%02d:%02d", hours, mins, secs)
                     val isLocked = remainingMs > 0L
                     val progress = if (isLocked) {
                         1f - (remainingMs.toFloat() / totalLockMs.toFloat()).coerceIn(0f, 1f)
@@ -235,8 +255,16 @@ fun StartTestPreviewScreenNew(
                     )
                     Spacer(Modifier.height(8.dp))
                     Button(
-                        onClick = { onStartTest(card.title) },
-                        enabled = !isLocked,
+                        onClick = {
+                            if (navInFlight || card.title.isBlank()) return@Button
+                            navInFlight = true
+                            scope.launch {
+                                delay(1500)
+                                navInFlight = false
+                            }
+                            onStartTest(card.title)
+                        },
+                        enabled = !isLocked && !navInFlight && card.title.isNotBlank(),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp),
@@ -262,14 +290,52 @@ fun StartTestPreviewScreenNew(
                     }
                     Spacer(Modifier.height(14.dp))
                 }
+            } else if (primaryLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(color = p.accent)
+                }
             } else {
                 PreviewCard(test = test)
                 Spacer(Modifier.height(10.dp))
+                if (testSnapshot == null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Couldn't load latest details.",
+                            color = p.textSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = {
+                                if (primaryLoading) return@TextButton
+                                reloadKey += 1
+                            },
+                            enabled = !primaryLoading,
+                        ) {
+                            Text(
+                                text = "Retry",
+                                color = p.systemBlue,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
                 if (fallbackLocked) {
                     val hours = (fallbackRemainingMs / 3_600_000L).toInt()
                     val mins = ((fallbackRemainingMs % 3_600_000L) / 60_000L).toInt()
                     val secs = ((fallbackRemainingMs % 60_000L) / 1_000L).toInt()
-                    val countdown = String.format("%02d:%02d:%02d", hours, mins, secs)
+                    val countdown = String.format(Locale.US, "%02d:%02d:%02d", hours, mins, secs)
                     Text(
                         text = "Test locked till scheduled time (${test.examDate ?: "upcoming"})",
                         color = p.textSecondary,
@@ -293,7 +359,16 @@ fun StartTestPreviewScreenNew(
                 }
                 Spacer(Modifier.height(8.dp))
                 Button(
-                    onClick = { onApplyForTest(test.title) },
+                    onClick = {
+                        if (navInFlight || test.title.isBlank()) return@Button
+                        navInFlight = true
+                        scope.launch {
+                            delay(1500)
+                            navInFlight = false
+                        }
+                        onApplyForTest(test.title)
+                    },
+                    enabled = !navInFlight && test.title.isNotBlank(),
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
@@ -333,13 +408,38 @@ fun StartTestPreviewScreenNew(
                 border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    instructionItems.forEach { line ->
-                        Text(
-                            text = "\u2022 $line",
-                            color = p.textSecondary,
-                            fontSize = 13.sp,
-                            modifier = Modifier.padding(bottom = 8.dp),
-                        )
+                    when {
+                        !instructionsLoaded -> {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(
+                                    color = p.accent,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                        instructionItems.isEmpty() -> {
+                            Text(
+                                text = "Instructions will appear when published by admin.",
+                                color = p.textSecondary,
+                                fontSize = 13.sp,
+                            )
+                        }
+                        else -> {
+                            instructionItems.forEach { line ->
+                                Text(
+                                    text = "\u2022 $line",
+                                    color = p.textSecondary,
+                                    fontSize = 13.sp,
+                                    modifier = Modifier.padding(bottom = 8.dp),
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -507,7 +607,8 @@ private fun parseUnlockAtMillis(examDate: String?): Long? {
             } else {
                 LocalDate.parse(raw, formatter).atStartOfDay(zone).toInstant().toEpochMilli()
             }
-        } catch (_: DateTimeParseException) {
+        } catch (_: Exception) {
+            // Any parse/format/zone issue: try the next pattern, finally return null.
         }
     }
     return null

@@ -42,6 +42,23 @@ function todayIsoLocal() {
   return `${y}-${m}-${day}`;
 }
 
+// pg driver returns DATE columns as JS Date objects. Convert to a calendar
+// `YYYY-MM-DD` string in the server's local timezone (matches userMapper).
+// Returns null for null/empty/invalid inputs so the column stays NULL.
+function dobToIsoString(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const s = String(value).trim();
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(s);
+  return match ? match[1] : null;
+}
+
 async function ensureDeviceTokensTable() {
   await pool.query(
     `CREATE TABLE IF NOT EXISTS user_device_tokens (
@@ -144,14 +161,15 @@ router.delete('/', async (req, res) => {
 });
 
 router.patch('/profile', async (req, res) => {
-  const { displayName, email, phone, state, district, birthdayDate } = req.body || {};
+  const { displayName, email, phone, state, district, birthdayDate, gender } = req.body || {};
   if (
     displayName === undefined &&
     email === undefined &&
     phone === undefined &&
     state === undefined &&
     district === undefined &&
-    birthdayDate === undefined
+    birthdayDate === undefined &&
+    gender === undefined
   ) {
     return res.status(400).json({ error: 'No updatable fields provided' });
   }
@@ -208,7 +226,7 @@ router.patch('/profile', async (req, res) => {
       nextDistrict = String(district).trim().slice(0, 120);
     }
 
-    let nextBirthdayDate = cur.date_of_birth ? String(cur.date_of_birth).slice(0, 10) : null;
+    let nextBirthdayDate = dobToIsoString(cur.date_of_birth);
     if (birthdayDate !== undefined) {
       if (birthdayDate === null || String(birthdayDate).trim() === '') {
         nextBirthdayDate = null;
@@ -225,6 +243,24 @@ router.patch('/profile', async (req, res) => {
       }
     }
 
+    let nextGender = String(cur.gender || '').trim();
+    if (gender !== undefined) {
+      if (gender === null) {
+        return res.status(400).json({ error: 'gender cannot be null' });
+      }
+      const g = String(gender).trim();
+      if (!g) {
+        nextGender = '';
+      } else {
+        const normalized = g.slice(0, 20);
+        const allowed = new Set(['Male', 'Female', 'Other']);
+        if (!allowed.has(normalized)) {
+          return res.status(400).json({ error: 'gender must be Male, Female, or Other' });
+        }
+        nextGender = normalized;
+      }
+    }
+
     const upd = await pool.query(
       `UPDATE users
        SET display_name = $1,
@@ -233,10 +269,11 @@ router.patch('/profile', async (req, res) => {
            signup_state = $4,
            signup_district = $5,
            date_of_birth = $6::date,
+           gender = $7,
            updated_at = now()
-       WHERE id = $7::uuid
+       WHERE id = $8::uuid
        RETURNING *`,
-      [nextName, nextEmail, nextPhone, nextState, nextDistrict, nextBirthdayDate, req.userId],
+      [nextName, nextEmail, nextPhone, nextState, nextDistrict, nextBirthdayDate, nextGender, req.userId],
     );
     if (isMailConfigured() && String(cur.email || '').trim().toLowerCase() !== String(nextEmail || '').trim().toLowerCase()) {
       sendSecurityAccountAlertEmail({

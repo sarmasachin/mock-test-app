@@ -20,6 +20,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -70,6 +71,8 @@ fun ProfileRouteNew(
     var showLogoutDialog by remember { mutableStateOf(false) }
     val innerNav = rememberNavController()
     val palette = mockTestPalette()
+    val emailVerified by AppPreferencesRepository.emailVerified.collectAsState(initial = false)
+    val phoneVerified by AppPreferencesRepository.phoneVerified.collectAsState(initial = false)
 
     BackHandler(enabled = innerNav.previousBackStackEntry != null) {
         innerNav.popBackStack()
@@ -115,7 +118,15 @@ fun ProfileRouteNew(
                         onBack = onBack,
                         showAppBarBack = showAppBarBack,
                         onEditUsername = { innerNav.navigate(ProfileInnerRoutes.USERNAME) },
-                        onEditEmail = { innerNav.navigate(ProfileInnerRoutes.EMAIL) },
+                        onEditEmail = {
+                            if (emailVerified) {
+                                scope.launch {
+                                    snackbar.showError("Email is locked after verification.")
+                                }
+                            } else {
+                                innerNav.navigate(ProfileInnerRoutes.EMAIL)
+                            }
+                        },
                         onEditMobile = { innerNav.navigate(ProfileInnerRoutes.MOBILE) },
                         onEditDob = { innerNav.navigate(ProfileInnerRoutes.DOB) },
                         onEditGender = { innerNav.navigate(ProfileInnerRoutes.GENDER) },
@@ -154,11 +165,21 @@ fun ProfileRouteNew(
                         },
                         onLogout = { showLogoutDialog = true },
                         onDeleteAccount = { showDeleteDialog = true },
-                        onSendEmailVerification = { innerNav.navigate(ProfileInnerRoutes.EMAIL_VERIFY) },
+                        onSendEmailVerification = {
+                            if (emailVerified) {
+                                scope.launch { snackbar.showSuccess("Email already verified.") }
+                            } else {
+                                innerNav.navigate(ProfileInnerRoutes.EMAIL_VERIFY)
+                            }
+                        },
                         onSendPhoneVerification = {
                             scope.launch {
-                                snackbar.showSuccess("SMS OTP request submitted.")
-                                AppPreferencesRepository.setPhoneVerified(true)
+                                if (phoneVerified) {
+                                    snackbar.showSuccess("Phone number already verified.")
+                                } else {
+                                    snackbar.showSuccess("SMS OTP request submitted.")
+                                    AppPreferencesRepository.setPhoneVerified(true)
+                                }
                             }
                         },
                     )

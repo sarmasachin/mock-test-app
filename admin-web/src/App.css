@@ -472,6 +472,32 @@ textarea {
   font-family: inherit;
 }
 
+.share-textarea {
+  width: 100%;
+  min-height: 320px;
+  max-height: 70vh;
+  resize: both;
+  overflow: auto;
+  min-width: 320px;
+}
+
+.table-scroll-x {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.exam-categories-table .row {
+  grid-template-columns: 1fr 1fr 1fr 1fr 170px 96px 120px 90px 90px;
+  min-width: 1180px;
+}
+
+@media (max-width: 900px) {
+  .exam-categories-table .row {
+    grid-template-columns: 1fr;
+    min-width: 0;
+  }
+}
+
 button {
   cursor: pointer;
   background: linear-gradient(135deg, var(--primary), var(--primary-strong));
@@ -980,6 +1006,16 @@ button:active {
 .all-tests-actions button[type='submit'] {
   min-width: 160px;
   justify-self: end;
+}
+
+.all-tests-add-center {
+  display: flex;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.all-tests-add-center button[type='submit'] {
+  min-width: 180px;
 }
 
 .all-tests-tools {

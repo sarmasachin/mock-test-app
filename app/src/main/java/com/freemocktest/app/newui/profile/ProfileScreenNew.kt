@@ -42,10 +42,13 @@ import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
+import androidx.compose.material3.CircularProgressIndicator
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.Locale
+import kotlinx.coroutines.flow.map
 
 private data class DynamicProfileMenuItem(
     val id: String,
@@ -141,9 +144,14 @@ fun ProfileScreenNew(
     val scroll = rememberScrollState()
     val emailOk by AppPreferencesRepository.emailVerified.collectAsState(initial = false)
     val phoneOk by AppPreferencesRepository.phoneVerified.collectAsState(initial = false)
-    val profile by AppPreferencesRepository.editableProfile.collectAsState(
-        initial = AppPreferencesRepository.EditableProfileState("", "", "", "", ""),
-    )
+    // Avoid rendering placeholder profile values first (looks like "wrong profile then correct profile").
+    // DataStore emits asynchronously; we wait for the first real emission and keep it stable.
+    val profileLive by remember { AppPreferencesRepository.editableProfile.map { it as AppPreferencesRepository.EditableProfileState? } }
+        .collectAsState(initial = null)
+    var profileStable by remember { mutableStateOf<AppPreferencesRepository.EditableProfileState?>(null) }
+    LaunchedEffect(profileLive) {
+        if (profileLive != null) profileStable = profileLive
+    }
     var menuItems by remember { mutableStateOf(defaultDynamicProfileMenuItems()) }
 
     LaunchedEffect(Unit) {
@@ -208,6 +216,30 @@ fun ProfileScreenNew(
                     .fillMaxWidth()
                     .padding(horizontal = 4.dp, vertical = 8.dp),
             ) {
+                val profile = profileStable
+                if (profile == null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = p.textSecondary,
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            text = "Loading profile…",
+                            color = p.textSecondary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                    return@SettingsCard
+                }
+
                 visibleItems.forEachIndexed { index, item ->
                     val resolvedSubtitle = when (item.path) {
                         "/edit-username" -> item.subtitle.replace("{value}", profile.displayName.ifBlank { "Tap to set" })
@@ -243,12 +275,14 @@ fun ProfileScreenNew(
                         "/delete-account" -> onDeleteAccount
                         else -> ({})
                     }
-                    ProfileNavRow(
-                        title = item.title,
-                        subtitle = resolvedSubtitle,
-                        onClick = onClick,
-                        danger = item.path == "/delete-account",
-                    )
+                    key(item.id) {
+                        ProfileNavRow(
+                            title = item.title,
+                            subtitle = resolvedSubtitle,
+                            onClick = onClick,
+                            danger = item.path == "/delete-account",
+                        )
+                    }
                     if (index < visibleItems.lastIndex) DividerLine()
                 }
             }

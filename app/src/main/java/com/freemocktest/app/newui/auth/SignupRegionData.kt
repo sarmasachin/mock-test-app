@@ -54,7 +54,9 @@ object SignupRegionData {
             val state = stateRaw.trim()
             if (state.isBlank()) continue
             val districts = districtsRaw.map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
-            next[state] = if (districts.isNotEmpty()) districts else listOf("Other / Not listed")
+            // Admin is the source of truth. If admin removes "Other / Not listed", the app must not
+            // re-add it implicitly.
+            next[state] = districts
         }
         adminRegionMap = next
     }
@@ -62,9 +64,15 @@ object SignupRegionData {
     fun districtsForState(state: String): List<String> {
         if (state.isBlank()) return emptyList()
         val key = indianStates.firstOrNull { it.equals(state, ignoreCase = true) } ?: return emptyList()
-        val adminDistricts = adminRegionMap.entries.firstOrNull { it.key.equals(key, ignoreCase = true) }?.value.orEmpty()
-        val base = (districtSamples[key] ?: listOf("Other / Not listed"))
-        return (base + adminDistricts).distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+        val adminEntry = adminRegionMap.entries.firstOrNull { it.key.equals(key, ignoreCase = true) }
+        if (adminEntry != null) {
+            // Admin-managed state: show only admin-provided districts (no local fallback).
+            return adminEntry.value.distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+        }
+        // Non-admin state: use built-in samples only. Do not inject "Other / Not listed" implicitly
+        // because admins may remove it from their configuration and expect it to stay removed.
+        val base = (districtSamples[key] ?: emptyList())
+        return base.distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
     }
 
     private val districtSamples: Map<String, List<String>> = mapOf(

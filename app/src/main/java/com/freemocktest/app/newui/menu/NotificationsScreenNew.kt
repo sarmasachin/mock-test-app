@@ -23,8 +23,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +44,9 @@ import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.notifications.LocalNotificationInbox
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -56,6 +61,7 @@ fun NotificationsScreenNew(
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     var notifications by remember { mutableStateOf<List<ContentRepository.PushNotificationItemRemote>>(emptyList()) }
     var loadingNotifications by remember { mutableStateOf(true) }
+    val clearedAtMs by AppPreferencesRepository.notificationsClearedAtMs.collectAsState(initial = 0L)
 
     LaunchedEffect(Unit) {
         loadingNotifications = true
@@ -63,6 +69,10 @@ fun NotificationsScreenNew(
         val localRows = ContentRepository.filterNotificationsForCurrentAccount(LocalNotificationInbox.read(context))
         val rows = (localRows + remoteRows)
             .distinctBy { it.id.trim() }
+            .filter { row ->
+                val createdMs = parseCreatedAtMillis(row.createdAt)
+                createdMs == null || createdMs >= clearedAtMs
+            }
             .sortedByDescending { it.createdAt.orEmpty() }
         notifications = rows
         AppPreferencesRepository.markNotificationsSeen(rows.map { it.id })
@@ -85,6 +95,17 @@ fun NotificationsScreenNew(
                     Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = p.textPrimary)
                 }
                 Text("Notifications", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
+                Spacer(Modifier.weight(1f))
+                TextButton(
+                    onClick = {
+                        LocalNotificationInbox.clearAll(context)
+                        AppPreferencesRepository.clearAllNotificationsInbox()
+                        notifications = emptyList()
+                    },
+                    enabled = !loadingNotifications && notifications.isNotEmpty(),
+                ) {
+                    Text("Clear all", fontWeight = FontWeight.SemiBold)
+                }
             }
             Spacer(Modifier.height(12.dp))
             if (loadingNotifications) {
@@ -158,9 +179,39 @@ private fun formatNotificationDateTime(raw: String?): String {
     val value = raw?.trim().orEmpty()
     if (value.isBlank()) return ""
     val formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a", Locale.US)
+    val zone = ZoneId.systemDefault()
     return runCatching {
-        formatter.format(ZonedDateTime.parse(value))
+        // Prefer Instant parsing (works for "2026-05-09T10:12:30Z" etc).
+        Instant.parse(value).atZone(zone)
+    }.recoverCatching {
+        // Some payloads may be full ISO with offset; normalize to local zone.
+        ZonedDateTime.parse(value).withZoneSameInstant(zone)
+    }.recoverCatching {
+        // If server stored date-only ("YYYY-MM-DD"), assume start-of-day local.
+        if (Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(value)) {
+            LocalDate.parse(value).atStartOfDay(zone)
+        } else {
+            throw IllegalArgumentException("unknown timestamp format")
+        }
+    }.map { zdt ->
+        formatter.format(zdt)
     }.getOrElse {
+        // Fallback: show raw string instead of crashing the UI.
         value
     }
+}
+
+private fun parseCreatedAtMillis(raw: String?): Long? {
+    val value = raw?.trim().orEmpty()
+    if (value.isBlank()) return null
+    return runCatching { Instant.parse(value).toEpochMilli() }
+        .recoverCatching { ZonedDateTime.parse(value).toInstant().toEpochMilli() }
+        .recoverCatching {
+            if (Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(value)) {
+                LocalDate.parse(value).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            } else {
+                throw IllegalArgumentException("unknown timestamp format")
+            }
+        }
+        .getOrNull()
 }

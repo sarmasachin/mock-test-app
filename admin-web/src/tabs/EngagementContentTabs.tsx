@@ -108,6 +108,7 @@ type ShareContentSettings = {
   title: string;
   body: string;
 };
+type DigestShareContentSettings = { title: string; body: string };
 
 export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
@@ -917,16 +918,39 @@ export function ShareContentTabImpl({ apiClient }: { apiClient: ApiClient }) {
     body: 'Check out MockTestApp for practice tests and alerts.\n{storeUrl}',
   });
   const [saving, setSaving] = useState(false);
+  const [dailyDigestShare, setDailyDigestShare] = useState<DigestShareContentSettings>({
+    title: 'Daily Digest',
+    body: 'Try today\'s Daily Digest on Mock Test App!\nDate: {date}\n\n{question}\n\nDownload: {storeUrl}',
+  });
+  const [dailyQuizShare, setDailyQuizShare] = useState<DigestShareContentSettings>({
+    title: 'Daily Quiz Result',
+    body: 'My Daily Quiz result on {date}\n\n{question}\nScore: {score}\n\nDownload: {storeUrl}',
+  });
+  const [savingDailyShare, setSavingDailyShare] = useState(false);
 
   async function load() {
     try {
       const res = await apiClient.get('/admin/settings');
       const s = res.data?.settings?.shareContent || {};
+      const digestShare = res.data?.settings?.dailyDigestShareContent || {};
+      const quizShare = res.data?.settings?.dailyQuizShareContent || {};
       setSettings({
         title: String(s.title || 'Share').trim().slice(0, 120) || 'Share',
         body:
           String(s.body || '').trim() ||
           'Check out MockTestApp for practice tests and alerts.\n{storeUrl}',
+      });
+      setDailyDigestShare({
+        title: String(digestShare.title || 'Daily Digest').trim().slice(0, 120) || 'Daily Digest',
+        body:
+          String(digestShare.body || '').trim() ||
+          'Try today\'s Daily Digest on Mock Test App!\nDate: {date}\n\n{question}\n\nDownload: {storeUrl}',
+      });
+      setDailyQuizShare({
+        title: String(quizShare.title || 'Daily Quiz Result').trim().slice(0, 120) || 'Daily Quiz Result',
+        body:
+          String(quizShare.body || '').trim() ||
+          'My Daily Quiz result on {date}\n\n{question}\nScore: {score}\n\nDownload: {storeUrl}',
       });
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to load share text');
@@ -960,30 +984,109 @@ export function ShareContentTabImpl({ apiClient }: { apiClient: ApiClient }) {
     }
   }
 
+  async function saveDailyShare() {
+    try {
+      const digestBody = String(dailyDigestShare.body || '').trim();
+      const quizBody = String(dailyQuizShare.body || '').trim();
+      if (!digestBody) {
+        pushToast('error', 'Daily Digest share text is required.');
+        return;
+      }
+      if (!quizBody) {
+        pushToast('error', 'Daily Quiz share text is required.');
+        return;
+      }
+      setSavingDailyShare(true);
+      await apiClient.patch('/admin/settings', {
+        dailyDigestShareContent: {
+          title: String(dailyDigestShare.title || 'Daily Digest').trim().slice(0, 120) || 'Daily Digest',
+          body: digestBody,
+        },
+        dailyQuizShareContent: {
+          title: String(dailyQuizShare.title || 'Daily Quiz Result').trim().slice(0, 120) || 'Daily Quiz Result',
+          body: quizBody,
+        },
+      });
+      pushToast('success', 'Daily digest/quiz share text saved.');
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to save daily share text');
+    } finally {
+      setSavingDailyShare(false);
+    }
+  }
+
   return (
-    <section className="panel-card">
-      <div className="panel-head"><h3>Share Text</h3></div>
-      <p className="muted" style={{ marginTop: 0 }}>
-        Is text ko app ke Share action me use kiya jayega. <b>{'{storeUrl}'}</b> placeholder auto Play Store link se replace hoga.
-      </p>
-      <div className="settings-form">
-        <input
-          value={settings.title}
-          onChange={(e) => setSettings((p) => ({ ...p, title: e.target.value }))}
-          placeholder="Title (optional)"
-          maxLength={120}
+    <>
+      <section className="panel-card">
+        <div className="panel-head"><h3>Share Text</h3></div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Is text ko app ke Share action me use kiya jayega. <b>{'{storeUrl}'}</b> placeholder auto Play Store link se replace hoga.
+        </p>
+        <div className="settings-form">
+          <input
+            value={settings.title}
+            onChange={(e) => setSettings((p) => ({ ...p, title: e.target.value }))}
+            placeholder="Title (optional)"
+            maxLength={120}
+          />
+        </div>
+        <textarea
+          value={settings.body}
+          onChange={(e) => setSettings((p) => ({ ...p, body: e.target.value }))}
+          placeholder="Share text"
+          rows={14}
+          className="share-textarea"
         />
-      </div>
-      <textarea
-        value={settings.body}
-        onChange={(e) => setSettings((p) => ({ ...p, body: e.target.value }))}
-        placeholder="Share text"
-        rows={8}
-      />
-      <div className="inline-form">
-        <button type="button" className="ghost" onClick={load} disabled={saving}>Load</button>
-        <button type="button" onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save Share Text'}</button>
-      </div>
-    </section>
+        <div className="inline-form">
+          <button type="button" className="ghost" onClick={load} disabled={saving || savingDailyShare}>Load</button>
+          <button type="button" onClick={save} disabled={saving || savingDailyShare}>{saving ? 'Saving...' : 'Save Share Text'}</button>
+        </div>
+      </section>
+
+      <section className="panel-card" style={{ marginTop: 12 }}>
+        <div className="panel-head"><h3>Daily Digest & Daily Quiz Share Text</h3></div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Placeholders: <b>{'{date}'}</b>, <b>{'{question}'}</b>, <b>{'{storeUrl}'}</b>, <b>{'{score}'}</b>, <b>{'{result}'}</b>
+        </p>
+        <div className="settings-form">
+          <input
+            value={dailyDigestShare.title}
+            onChange={(e) => setDailyDigestShare((p) => ({ ...p, title: e.target.value }))}
+            placeholder="Daily Digest share subject/title"
+            maxLength={120}
+          />
+        </div>
+        <textarea
+          value={dailyDigestShare.body}
+          onChange={(e) => setDailyDigestShare((p) => ({ ...p, body: e.target.value }))}
+          placeholder="Daily Digest share text"
+          rows={6}
+          className="share-textarea"
+        />
+        <div className="settings-form" style={{ marginTop: 10 }}>
+          <input
+            value={dailyQuizShare.title}
+            onChange={(e) => setDailyQuizShare((p) => ({ ...p, title: e.target.value }))}
+            placeholder="Daily Quiz result share subject/title"
+            maxLength={120}
+          />
+        </div>
+        <textarea
+          value={dailyQuizShare.body}
+          onChange={(e) => setDailyQuizShare((p) => ({ ...p, body: e.target.value }))}
+          placeholder="Daily Quiz result share text"
+          rows={6}
+          className="share-textarea"
+        />
+        <div className="inline-form">
+          <button type="button" className="ghost" onClick={load} disabled={saving || savingDailyShare}>
+            Reload
+          </button>
+          <button type="button" onClick={saveDailyShare} disabled={saving || savingDailyShare}>
+            {savingDailyShare ? 'Saving...' : 'Save Share Text'}
+          </button>
+        </div>
+      </section>
+    </>
   );
 }

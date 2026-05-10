@@ -739,10 +739,11 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
         <button type="submit">Add Hierarchy</button>
       </form>
       <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button><button type="button" onClick={() => saveAll(items)} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button></div>
-      <div className="list table">
-        <div className="row row-head" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr 170px 96px 120px 90px 90px' }}><span>Level 1</span><span>Level 2</span><span>Level 3</span><span>Icon Key</span><span>Upload Icon</span><span>Icon Mode</span><span>Enabled</span><span>Update</span><span>Delete</span></div>
-        {visibleItems.map((item) => (
-          <div key={item.id} className="row" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr 170px 96px 120px 90px 90px' }}>
+      <div className="table-scroll-x">
+        <div className="list table exam-categories-table">
+          <div className="row row-head"><span>Level 1</span><span>Level 2</span><span>Level 3</span><span>Icon Key</span><span>Upload Icon</span><span>Icon Mode</span><span>Enabled</span><span>Update</span><span>Delete</span></div>
+          {visibleItems.map((item) => (
+            <div key={item.id} className="row">
             <input value={item.level1} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, level1: e.target.value } : x)))} />
             <input value={item.level2} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, level2: e.target.value } : x)))} />
             <input value={item.level3} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, level3: e.target.value } : x)))} />
@@ -785,8 +786,9 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
             <label className="check-wrap"><input type="checkbox" checked={item.enabled} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, enabled: e.target.checked } : x)))} />{item.enabled ? 'on' : 'off'}</label>
             <button type="button" onClick={() => saveAll(items)}>Save</button>
             <button type="button" className="danger" onClick={() => { const next = items.filter((x) => x.id !== item.id); setItems(next); saveAll(next); }}>Delete</button>
-          </div>
-        ))}
+            </div>
+          ))}
+        </div>
       </div>
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
       <div className="inline-form" style={{ justifyContent: 'flex-end', marginTop: 14 }}>

@@ -24,8 +24,12 @@ import com.freemocktest.app.notifications.PushTokenRegistrar
 import com.google.gson.JsonParser
 import java.io.IOException
 import java.net.UnknownHostException
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -44,6 +48,13 @@ enum class RestoreSessionStatus {
 object AuthRepository {
     private const val TAG = "AuthRepository"
     private const val RESTORE_TIMEOUT_MS = 3500L
+
+    /** Long-lived scope for fire-and-forget background refreshes (e.g. SWR /me sync after instant boot). */
+    private val backgroundScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e ->
+            Log.e(TAG, "Background auth task failed", e)
+        },
+    )
 
     private fun loginDeviceFingerprint(): String {
         return try {
@@ -95,6 +106,17 @@ object AuthRepository {
             return@withContext RestoreSessionStatus.LoggedOut
         }
         val cachedStatus = AppPreferencesRepository.getAuthBootstrapState()
+        // Stale-while-revalidate: if we already know this user is signed in (Ready or
+        // ProfileIncomplete), navigate immediately using the cached bootstrap state and refresh
+        // the server profile in the background. This eliminates the 3.5s cold-start spinner that
+        // was waiting on /me to respond. We never short-circuit when the cached state is missing
+        // or LoggedOut – those still go through the original network-confirm path below.
+        if (cachedStatus == RestoreSessionStatus.Ready ||
+            cachedStatus == RestoreSessionStatus.ProfileIncomplete
+        ) {
+            refreshSessionInBackground()
+            return@withContext cachedStatus
+        }
         return@withContext try {
             val me = withTimeoutOrNull(RESTORE_TIMEOUT_MS) { RetrofitProvider.appApi.me() }
             if (me == null) {
@@ -108,6 +130,7 @@ object AuthRepository {
                 sixDigitPublicId = me.user.sixDigitPublicId,
                 isEmailVerified = !me.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
+                gender = me.user.gender,
                 birthdayDate = me.user.birthdayDate,
                 accountCreatedAtIso = me.user.createdAt,
             )
@@ -129,6 +152,47 @@ object AuthRepository {
         } catch (e: Exception) {
             Log.w(TAG, "restoreSession failed (network?)", e)
             cachedStatus ?: RestoreSessionStatus.Ready
+        }
+    }
+
+    /**
+     * Fire-and-forget /me refresh used by the SWR cold-start path. Updates the local profile
+     * snapshot, syncs the cached bootstrap state, and clears the session on a real 401. Other
+     * failures (timeouts, offline) are intentionally swallowed so the user keeps the cached UI.
+     */
+    private fun refreshSessionInBackground() {
+        backgroundScope.launch {
+            runCatching {
+                val me = withTimeoutOrNull(RESTORE_TIMEOUT_MS) { RetrofitProvider.appApi.me() }
+                    ?: return@runCatching
+                AppPreferencesRepository.applyServerAuthProfile(
+                    displayName = me.user.displayName,
+                    email = me.user.email,
+                    mobile = me.user.phone,
+                    sixDigitPublicId = me.user.sixDigitPublicId,
+                    isEmailVerified = !me.user.emailVerifiedAt.isNullOrBlank(),
+                    passwordPlain = "",
+                    gender = me.user.gender,
+                    birthdayDate = me.user.birthdayDate,
+                    accountCreatedAtIso = me.user.createdAt,
+                )
+                val status = if (me.user.needsProfileCompletion()) {
+                    RestoreSessionStatus.ProfileIncomplete
+                } else {
+                    RestoreSessionStatus.Ready
+                }
+                AppPreferencesRepository.setAuthBootstrapState(status)
+                PushTokenRegistrar.syncInBackground(appContext)
+            }.onFailure { e ->
+                if (e is HttpException && e.code() == 401) {
+                    runCatching { clearSession() }
+                        .onFailure { Log.w(TAG, "background clearSession failed", it) }
+                    runCatching { AppPreferencesRepository.setAuthBootstrapState(RestoreSessionStatus.LoggedOut) }
+                        .onFailure { Log.w(TAG, "background setAuthBootstrapState failed", it) }
+                } else {
+                    Log.w(TAG, "background restoreSession refresh failed", e)
+                }
+            }
         }
     }
 
@@ -162,6 +226,7 @@ object AuthRepository {
                 sixDigitPublicId = resp.user.sixDigitPublicId,
                 isEmailVerified = !resp.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = password,
+                gender = resp.user.gender,
                 birthdayDate = resp.user.birthdayDate,
                 accountCreatedAtIso = resp.user.createdAt,
             )
@@ -194,6 +259,7 @@ object AuthRepository {
                 sixDigitPublicId = resp.user.sixDigitPublicId,
                 isEmailVerified = !resp.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
+                gender = resp.user.gender,
                 birthdayDate = resp.user.birthdayDate,
                 accountCreatedAtIso = resp.user.createdAt,
             )
@@ -240,6 +306,7 @@ object AuthRepository {
                 sixDigitPublicId = resp.user.sixDigitPublicId,
                 isEmailVerified = !resp.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = password,
+                gender = resp.user.gender,
                 birthdayDate = resp.user.birthdayDate,
                 accountCreatedAtIso = resp.user.createdAt,
             )
@@ -287,6 +354,7 @@ object AuthRepository {
                 sixDigitPublicId = me.user.sixDigitPublicId,
                 isEmailVerified = !me.user.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
+                gender = me.user.gender,
                 birthdayDate = me.user.birthdayDate,
                 accountCreatedAtIso = me.user.createdAt,
             )
@@ -304,6 +372,7 @@ object AuthRepository {
         phone: String? = null,
         state: String? = null,
         district: String? = null,
+        gender: String? = null,
         /** Pass `""` to clear on server; `null` = do not send this field. */
         birthdayDate: String? = null,
     ): Result<Unit> = withContext(Dispatchers.IO) {
@@ -311,7 +380,7 @@ object AuthRepository {
         if (accessTokenMem.isNullOrBlank()) {
             return@withContext Result.failure(Exception("Sign in to sync your profile"))
         }
-        if (displayName == null && email == null && phone == null && state == null && district == null && birthdayDate == null) {
+        if (displayName == null && email == null && phone == null && state == null && district == null && gender == null && birthdayDate == null) {
             return@withContext Result.failure(IllegalArgumentException("Nothing to update"))
         }
         try {
@@ -320,6 +389,11 @@ object AuthRepository {
                     null -> null
                     else -> birthdayDate.trim()
                 }
+            val genderPayload: String? =
+                when (gender) {
+                    null -> null
+                    else -> gender.trim()
+                }
             val resp = RetrofitProvider.appApi.patchProfile(
                 PatchProfileRequest(
                     displayName = displayName?.trim()?.takeIf { it.isNotEmpty() },
@@ -327,6 +401,7 @@ object AuthRepository {
                     phone = phone?.filter(Char::isDigit)?.take(10)?.takeIf { it.length == 10 },
                     state = state?.trim()?.takeIf { it.isNotEmpty() },
                     district = district?.trim()?.takeIf { it.isNotEmpty() },
+                    gender = genderPayload,
                     birthdayDate = birthdayPayload,
                 ),
             )
@@ -338,6 +413,7 @@ object AuthRepository {
                 sixDigitPublicId = u.sixDigitPublicId,
                 isEmailVerified = !u.emailVerifiedAt.isNullOrBlank(),
                 passwordPlain = "",
+                gender = u.gender,
                 birthdayDate = u.birthdayDate,
                 accountCreatedAtIso = u.createdAt,
             )

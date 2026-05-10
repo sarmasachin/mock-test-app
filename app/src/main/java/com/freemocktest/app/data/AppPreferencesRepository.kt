@@ -75,6 +75,8 @@ object AppPreferencesRepository {
     private val keyAppliedTestSeries = stringPreferencesKey("applied_test_series")
     /** Single JSON blob: recover quiz after process death / swipe away only (cleared on explicit back/submit). */
     private val keyInProgressQuizJson = stringPreferencesKey("in_progress_quiz_json")
+    /** Last successful CMS home payload, persisted so cold start can render instantly while refresh runs in the background. */
+    private val keyCachedHomeContentJson = stringPreferencesKey("cached_home_content_json")
     private val keyAuthBootstrapState = stringPreferencesKey("auth_bootstrap_state")
     private val keySeenNotificationIds = stringPreferencesKey("seen_notification_ids")
     // Keep "seen" state user-scoped. If a different user signs in on the same device,
@@ -84,6 +86,7 @@ object AppPreferencesRepository {
     private val keySeenPollIdsOwner = stringPreferencesKey("seen_poll_ids_owner")
     private val keyVotedPollIds = stringPreferencesKey("voted_poll_ids")
     private val keyVotedPollIdsOwner = stringPreferencesKey("voted_poll_ids_owner")
+    private val keyNotificationsClearedAtMs = longPreferencesKey("notifications_cleared_at_ms")
 
     private const val DefaultStartSeriesLockMs = 20_000L
     private const val DefaultStartSeriesActiveWindowMs = 30 * 60 * 1000L
@@ -275,6 +278,7 @@ object AppPreferencesRepository {
         sixDigitPublicId: Int,
         isEmailVerified: Boolean,
         passwordPlain: String,
+        gender: String? = null,
         birthdayDate: String? = null,
         accountCreatedAtIso: String? = null,
     ) {
@@ -284,7 +288,8 @@ object AppPreferencesRepository {
                 prefs[keyProfileDisplayName] = displayName.trim()
                 prefs[keyProfileEmail] = email.trim()
                 prefs[keyProfileMobile] = mobile.trim().filter(Char::isDigit).take(10)
-                prefs[keyProfileGender] = prefs[keyProfileGender].orEmpty()
+                val g = (gender ?: prefs[keyProfileGender].orEmpty()).trim()
+                prefs[keyProfileGender] = g
                 prefs[keyProfileBirthdayDate] = normalizeStoredBirthdayDate(birthdayDate)
                 prefs[keyProfileContact] = email.trim()
                 if (isSixDigitPublicId(sixDigitPublicId)) {
@@ -472,6 +477,20 @@ object AppPreferencesRepository {
     val scoreVisibilityEnabled: Flow<Boolean>
         get() = storeOrNull()?.data?.map { (it[keyScoreVisibilityEnabled] ?: 1) == 1 } ?: flowOf(true)
 
+    val notificationsClearedAtMs: Flow<Long>
+        get() = storeOrNull()?.data?.map { it[keyNotificationsClearedAtMs] ?: 0L } ?: flowOf(0L)
+
+    fun clearAllNotificationsInbox() {
+        if (!::appContext.isInitialized) return
+        scope.launch {
+            runCatching {
+                store().edit { prefs ->
+                    prefs[keyNotificationsClearedAtMs] = System.currentTimeMillis()
+                }
+            }.onFailure { Log.e(TAG, "clearAllNotificationsInbox failed", it) }
+        }
+    }
+
     suspend fun notificationsEnabledNow(): Boolean {
         if (!::appContext.isInitialized) return true
         return runCatching {
@@ -625,6 +644,24 @@ object AppPreferencesRepository {
                 }
             }.onFailure { Log.e(TAG, "markPendingResultViewedAndClear failed", it) }
         }
+    }
+
+    /** Persist the last successful CMS home payload for stale-while-revalidate rendering on the next cold start. */
+    suspend fun saveCachedHomeContentNow(json: String) {
+        if (!::appContext.isInitialized) return
+        if (json.isBlank()) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyCachedHomeContentJson] = json
+            }
+        }.onFailure { Log.e(TAG, "saveCachedHomeContentNow failed", it) }
+    }
+
+    /** Returns the last cached CMS home payload (raw JSON) or null if no cache yet / read failed. */
+    suspend fun peekCachedHomeContent(): String? {
+        if (!::appContext.isInitialized) return null
+        val raw = runCatching { store().data.first()[keyCachedHomeContentJson].orEmpty().trim() }.getOrDefault("")
+        return raw.takeIf { it.isNotBlank() }
     }
 
     suspend fun saveInProgressQuizNow(state: InProgressQuizState) {

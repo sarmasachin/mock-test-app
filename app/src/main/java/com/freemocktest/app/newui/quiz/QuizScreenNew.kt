@@ -35,6 +35,11 @@ import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -96,15 +101,31 @@ fun QuizScreenNew(
     val bg = Brush.verticalGradient(colors = p.gradientColors())
 
     var questionsLoaded by remember(testName) { mutableStateOf(false) }
-    val questions by produceState(initialValue = emptyList<QuizQuestion>(), key1 = testName) {
-        value = ContentRepository.loadQuizQuestionsForTest(testName).map {
-            QuizQuestion(
-                title = it.title,
-                options = it.options,
-                correctIndex = it.correctIndex,
-            )
+    var questionsLoadError by remember(testName) { mutableStateOf(false) }
+    var questionsReloadKey by remember(testName) { mutableIntStateOf(0) }
+    val questions by produceState(
+        initialValue = emptyList<QuizQuestion>(),
+        key1 = testName,
+        key2 = questionsReloadKey,
+    ) {
+        // Reset transient flags so a Retry shows the spinner again instead of the error UI.
+        questionsLoaded = false
+        questionsLoadError = false
+        try {
+            value = ContentRepository.loadQuizQuestionsForTest(testName).map {
+                QuizQuestion(
+                    title = it.title,
+                    options = it.options,
+                    correctIndex = it.correctIndex,
+                )
+            }
+        } catch (_: Exception) {
+            // Network/parse failure: surface a Retry UI instead of an infinite spinner.
+            value = emptyList()
+            questionsLoadError = true
+        } finally {
+            questionsLoaded = true
         }
-        questionsLoaded = true
     }
     var current by remember { mutableIntStateOf(0) }
     val answers = remember { mutableStateMapOf<Int, Int>() }
@@ -119,38 +140,59 @@ fun QuizScreenNew(
     var configuredDurationSeconds by remember(testName) { mutableIntStateOf(12 * 60) }
 
     LaunchedEffect(testName) {
-        val instruction = ContentRepository.loadInstructionContent()
-        submitDialogBrand = instruction?.submitDialogBrand?.ifBlank { submitDialogBrand } ?: submitDialogBrand
-        submitDialogTitle = instruction?.submitDialogTitle?.ifBlank { submitDialogTitle } ?: submitDialogTitle
-        submitDialogSubtitle = instruction?.submitDialogSubtitle?.ifBlank { submitDialogSubtitle } ?: submitDialogSubtitle
-        val mode = instruction?.questionNavigationMode
-            ?.trim()
-            ?.lowercase()
-            ?.takeIf { it == "free" || it == "sequential" }
-            ?: "sequential"
-        questionNavigationMode = mode
-        val testCard = ContentRepository.loadTestByTitle(testName)
-        resultReleaseAtMs = parseIsoMillis(testCard?.resultReleaseAt)
-        fullscreenRequired = testCard?.fullscreenRequired == true
-        copyPasteBlocked = testCard?.copyPasteBlocked == true
-        resumeEnabled = testCard?.resumeEnabled != false
-        configuredDurationSeconds = parseDurationSeconds(testCard?.durationLabel).coerceAtLeast(60)
+        // CMS copy + per-test config; on failure the built-in defaults stay in effect
+        // (12-min duration, sequential mode, no fullscreen/copy-paste/resume restrictions).
+        try {
+            val instruction = ContentRepository.loadInstructionContent()
+            submitDialogBrand = instruction?.submitDialogBrand?.ifBlank { submitDialogBrand } ?: submitDialogBrand
+            submitDialogTitle = instruction?.submitDialogTitle?.ifBlank { submitDialogTitle } ?: submitDialogTitle
+            submitDialogSubtitle = instruction?.submitDialogSubtitle?.ifBlank { submitDialogSubtitle } ?: submitDialogSubtitle
+            val mode = instruction?.questionNavigationMode
+                ?.trim()
+                ?.lowercase()
+                ?.takeIf { it == "free" || it == "sequential" }
+                ?: "sequential"
+            questionNavigationMode = mode
+            val testCard = ContentRepository.loadTestByTitle(testName)
+            resultReleaseAtMs = parseIsoMillis(testCard?.resultReleaseAt)
+            fullscreenRequired = testCard?.fullscreenRequired == true
+            copyPasteBlocked = testCard?.copyPasteBlocked == true
+            resumeEnabled = testCard?.resumeEnabled != false
+            configuredDurationSeconds = parseDurationSeconds(testCard?.durationLabel).coerceAtLeast(60)
+        } catch (_: Exception) {
+            // Defaults already initialised above remain in effect.
+        }
     }
 
     var testCatalogId by remember(testName) { mutableStateOf("") }
     LaunchedEffect(testName) {
-        val card = ContentRepository.loadTestByTitle(testName)
-        testCatalogId = card?.id?.trim().orEmpty()
+        // Failure here just leaves `testCatalogId` blank; resume/save still work, only the
+        // server-side catalog id is missing in the persisted snapshot.
+        try {
+            val card = ContentRepository.loadTestByTitle(testName)
+            testCatalogId = card?.id?.trim().orEmpty()
+        } catch (_: Exception) {
+            testCatalogId = ""
+        }
     }
 
     var remainingSeconds by remember(testName) { mutableIntStateOf(12 * 60) }
     var deadlineAtMillis by remember(testName) { mutableLongStateOf(0L) }
     var quizSessionReady by remember(testName) { mutableStateOf(false) }
     var quizSessionInitialized by remember(testName) { mutableStateOf(false) }
+    /** When true, skip ON_PAUSE disk flush so we never resurrect a cleared in-progress snapshot after submit/timeout/exit. */
+    var suppressOnPauseProgressFlush by remember(testName) { mutableStateOf(false) }
 
     fun finishQuizExplicitExit() {
+        suppressOnPauseProgressFlush = true
         scope.launch {
-            AppPreferencesRepository.clearInProgressQuizNow()
+            // DataStore cleanup is best-effort; the user must always be able to navigate back
+            // even if local persistence throws.
+            try {
+                AppPreferencesRepository.clearInProgressQuizNow()
+            } catch (_: Exception) {
+                // Ignore: stale resume snapshot will be overwritten on next quiz start.
+            }
             onBack()
         }
     }
@@ -164,21 +206,30 @@ fun QuizScreenNew(
         quizSessionInitialized = true
         val trimmedName = testName.trim().ifBlank { "Test" }
         val owner = attemptsUserKey.trim().ifBlank { "guest" }
-        val saved = AppPreferencesRepository.getResumableQuizSession(owner, trimmedName)
-        val now = System.currentTimeMillis()
-        if (saved != null) {
-            deadlineAtMillis = saved.deadlineAtMillis
-            questionNavigationMode = saved.questionNavigationMode
-            saved.resultReleaseAtMillis?.let { resultReleaseAtMs = it }
-            val maxIdx = (displayQuestions.size - 1).coerceAtLeast(0)
-            current = saved.currentQuestionIndex.coerceIn(0, maxIdx)
-            answers.clear()
-            saved.answers.forEach { (qi, ai) ->
-                if (qi >= 0 && qi < displayQuestions.size) answers[qi] = ai
+        // Resume snapshot read can throw (DataStore corruption / IO). On any failure we fall
+        // back to a fresh session with the configured duration so the user is never stranded
+        // with `quizSessionReady = false` (which would leave the timer effect inert and the
+        // quiz UI permanently disabled).
+        try {
+            val saved = AppPreferencesRepository.getResumableQuizSession(owner, trimmedName)
+            val now = System.currentTimeMillis()
+            if (saved != null) {
+                deadlineAtMillis = saved.deadlineAtMillis
+                questionNavigationMode = saved.questionNavigationMode
+                saved.resultReleaseAtMillis?.let { resultReleaseAtMs = it }
+                val maxIdx = (displayQuestions.size - 1).coerceAtLeast(0)
+                current = saved.currentQuestionIndex.coerceIn(0, maxIdx)
+                answers.clear()
+                saved.answers.forEach { (qi, ai) ->
+                    if (qi >= 0 && qi < displayQuestions.size) answers[qi] = ai
+                }
+            } else {
+                val durSec = configuredDurationSeconds.coerceAtLeast(60)
+                deadlineAtMillis = now + durSec * 1000L
             }
-        } else {
+        } catch (_: Exception) {
             val durSec = configuredDurationSeconds.coerceAtLeast(60)
-            deadlineAtMillis = now + durSec * 1000L
+            deadlineAtMillis = System.currentTimeMillis() + durSec * 1000L
         }
         quizSessionReady = true
         runCatching {
@@ -209,7 +260,15 @@ fun QuizScreenNew(
             if (rem <= 0) break
             delay(1000)
         }
-        AppPreferencesRepository.clearInProgressQuizNow()
+        suppressOnPauseProgressFlush = true
+        // CRITICAL: cleanup must never block the auto-submit. If clearing the resume snapshot
+        // throws, the user's score still has to reach `onSubmit(...)` — otherwise their
+        // entire timed attempt would be lost.
+        try {
+            AppPreferencesRepository.clearInProgressQuizNow()
+        } catch (_: Exception) {
+            // Stale snapshot will be cleared on the next quiz start; not user-actionable.
+        }
         val correct = answers.count { (q, ans) -> displayQuestions.getOrNull(q)?.correctIndex == ans }
         val answered = answers.size
         val wrong = (answered - correct).coerceAtLeast(0)
@@ -232,20 +291,78 @@ fun QuizScreenNew(
         snapshotFlow { current to answers.toMap() }
             .debounce(400L)
             .collectLatest { (idx, ans) ->
-                AppPreferencesRepository.saveInProgressQuizNow(
-                    AppPreferencesRepository.InProgressQuizState(
-                        ownerUserKey = owner,
-                        testName = trimmedName,
-                        testCatalogId = testCatalogId.trim(),
-                        deadlineAtMillis = deadlineAtMillis,
-                        currentQuestionIndex = idx,
-                        answers = ans,
-                        questionNavigationMode = questionNavigationMode,
-                        resultReleaseAtMillis = resultReleaseAtMs,
-                        configuredDurationSeconds = configuredDurationSeconds.coerceAtLeast(60),
-                    ),
-                )
+                // Per-write try/catch: a single DataStore failure must not cancel the entire
+                // collector flow, otherwise subsequent answer changes would silently stop saving.
+                runCatching {
+                    AppPreferencesRepository.saveInProgressQuizNow(
+                        AppPreferencesRepository.InProgressQuizState(
+                            ownerUserKey = owner,
+                            testName = trimmedName,
+                            testCatalogId = testCatalogId.trim(),
+                            deadlineAtMillis = deadlineAtMillis,
+                            currentQuestionIndex = idx,
+                            answers = ans,
+                            questionNavigationMode = questionNavigationMode,
+                            resultReleaseAtMillis = resultReleaseAtMs,
+                            configuredDurationSeconds = configuredDurationSeconds.coerceAtLeast(60),
+                        ),
+                    )
+                }
             }
+    }
+
+    // Flush immediately on background so the last answer / navigation is not lost inside the
+    // 400ms debounce window (incoming call, Home gesture, split-screen, etc.).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val quizSessionReadyRef = rememberUpdatedState(quizSessionReady)
+    val deadlineAtMillisRef = rememberUpdatedState(deadlineAtMillis)
+    val questionsLoadedRef = rememberUpdatedState(questionsLoaded)
+    val questionsSizeRef = rememberUpdatedState(questions.size)
+    val currentRef = rememberUpdatedState(current)
+    val answersMapRef = rememberUpdatedState(answers.toMap())
+    val questionNavigationModeRef = rememberUpdatedState(questionNavigationMode)
+    val resultReleaseAtMsRef = rememberUpdatedState(resultReleaseAtMs)
+    val configuredDurationSecondsRef = rememberUpdatedState(configuredDurationSeconds)
+    val testCatalogIdRef = rememberUpdatedState(testCatalogId)
+    val testNameRef = rememberUpdatedState(testName)
+    val attemptsUserKeyRef = rememberUpdatedState(attemptsUserKey)
+    val suppressOnPauseProgressFlushRef = rememberUpdatedState(suppressOnPauseProgressFlush)
+    DisposableEffect(lifecycleOwner, scope) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_PAUSE) return@LifecycleEventObserver
+            if (suppressOnPauseProgressFlushRef.value) return@LifecycleEventObserver
+            if (
+                !quizSessionReadyRef.value ||
+                deadlineAtMillisRef.value <= 0L ||
+                !questionsLoadedRef.value ||
+                questionsSizeRef.value == 0
+            ) {
+                return@LifecycleEventObserver
+            }
+            scope.launch {
+                runCatching {
+                    val trimmedName = testNameRef.value.trim().ifBlank { "Test" }
+                    val owner = attemptsUserKeyRef.value.trim().ifBlank { "guest" }
+                    AppPreferencesRepository.saveInProgressQuizNow(
+                        AppPreferencesRepository.InProgressQuizState(
+                            ownerUserKey = owner,
+                            testName = trimmedName,
+                            testCatalogId = testCatalogIdRef.value.trim(),
+                            deadlineAtMillis = deadlineAtMillisRef.value,
+                            currentQuestionIndex = currentRef.value,
+                            answers = answersMapRef.value,
+                            questionNavigationMode = questionNavigationModeRef.value,
+                            resultReleaseAtMillis = resultReleaseAtMsRef.value,
+                            configuredDurationSeconds = configuredDurationSecondsRef.value.coerceAtLeast(60),
+                        ),
+                    )
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     val answeredCount = answers.size
@@ -269,7 +386,8 @@ fun QuizScreenNew(
     }
 
     val isLoadingQuestions = !questionsLoaded
-    val hasNoQuestions = questionsLoaded && questions.isEmpty()
+    val hasLoadError = questionsLoaded && questionsLoadError
+    val hasNoQuestions = questionsLoaded && !questionsLoadError && questions.isEmpty()
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -282,7 +400,7 @@ fun QuizScreenNew(
                 .padding(padding)
                 .verticalScroll(rememberScrollState()),
         ) {
-            if (isLoadingQuestions || hasNoQuestions) {
+            if (isLoadingQuestions || hasNoQuestions || hasLoadError) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -321,24 +439,44 @@ fun QuizScreenNew(
                         modifier = Modifier.padding(18.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
+                        val headlineText = when {
+                            isLoadingQuestions -> "Loading questions..."
+                            hasLoadError -> "Couldn't load questions"
+                            else -> "No questions available"
+                        }
+                        val bodyText = when {
+                            isLoadingQuestions -> "Please wait while this test is prepared."
+                            hasLoadError -> "Check your connection and tap Retry."
+                            else -> "This test has no published questions yet. Contact admin and try again later."
+                        }
                         Text(
-                            text = if (isLoadingQuestions) "Loading questions..." else "No questions available",
+                            text = headlineText,
                             color = p.textPrimary,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            text = if (isLoadingQuestions) {
-                                "Please wait while this test is prepared."
-                            } else {
-                                "This test has no published questions yet. Contact admin and try again later."
-                            },
+                            text = bodyText,
                             color = p.textSecondary,
                             fontSize = 12.sp,
                         )
                         if (isLoadingQuestions) {
                             Spacer(Modifier.height(12.dp))
                             CircularProgressIndicator(color = p.accent)
+                        }
+                        if (hasLoadError) {
+                            Spacer(Modifier.height(14.dp))
+                            Button(
+                                onClick = { questionsReloadKey += 1 },
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = p.primaryButton,
+                                    contentColor = p.onPrimaryButton,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Retry", fontWeight = FontWeight.Bold)
+                            }
                         }
                         Spacer(Modifier.height(14.dp))
                         GhostButton(
@@ -419,14 +557,19 @@ fun QuizScreenNew(
 
             Spacer(Modifier.height(14.dp))
 
-            val activeQuestion = displayQuestions.getOrElse(current) { displayQuestions.first() }
-            val questionTitle = "Q${current + 1}. ${activeQuestion.title}"
-            QuestionCard(
-                title = questionTitle,
-                options = activeQuestion.options,
-                selected = answers[current],
-                onSelect = { option -> answers[current] = option },
-            )
+            // Use chained `getOrNull` so a transient `displayQuestions == emptyList()` snapshot
+            // (e.g. mid-reload) can't trigger NoSuchElementException; we just render an empty
+            // placeholder card for one frame until the upstream guard re-routes the UI.
+            val activeQuestion = displayQuestions.getOrNull(current) ?: displayQuestions.firstOrNull()
+            if (activeQuestion != null) {
+                val questionTitle = "Q${current + 1}. ${activeQuestion.title}"
+                QuestionCard(
+                    title = questionTitle,
+                    options = activeQuestion.options,
+                    selected = answers[current],
+                    onSelect = { option -> answers[current] = option },
+                )
+            }
 
             Spacer(Modifier.height(14.dp))
 
@@ -501,9 +644,17 @@ fun QuizScreenNew(
             onClose = { showSubmitConfirm = false },
             onCancel = { showSubmitConfirm = false },
             onSubmit = {
+                suppressOnPauseProgressFlush = true
                 showSubmitConfirm = false
                 scope.launch {
-                    AppPreferencesRepository.clearInProgressQuizNow()
+                    // CRITICAL: cleanup is best-effort but the score MUST always be forwarded
+                    // to `onSubmit(...)`. A DataStore exception below would otherwise discard
+                    // the user's entire attempt.
+                    try {
+                        AppPreferencesRepository.clearInProgressQuizNow()
+                    } catch (_: Exception) {
+                        // Ignored: stale snapshot will be overwritten on next quiz start.
+                    }
                     val correct = answers.count { (q, ans) -> displayQuestions.getOrNull(q)?.correctIndex == ans }
                     val answered = answers.size
                     val wrong = (answered - correct).coerceAtLeast(0)

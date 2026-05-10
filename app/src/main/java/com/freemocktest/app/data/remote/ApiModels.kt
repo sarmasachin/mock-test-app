@@ -10,6 +10,8 @@ data class AuthUserDto(
     @SerializedName("sixDigitPublicId") val sixDigitPublicId: Int,
     @SerializedName("signupState") val signupState: String? = null,
     @SerializedName("signupDistrict") val signupDistrict: String? = null,
+    /** Server: `users.gender` (Male/Female/Other). */
+    @SerializedName("gender") val gender: String? = null,
     @SerializedName("emailVerifiedAt") val emailVerifiedAt: String? = null,
     @SerializedName("phoneVerifiedAt") val phoneVerifiedAt: String? = null,
     /** Server: `birthdayDate` (YYYY-MM-DD) from `users.date_of_birth`. */
@@ -81,6 +83,8 @@ data class PatchProfileRequest(
     val phone: String? = null,
     val state: String? = null,
     val district: String? = null,
+    /** Allowed: Male/Female/Other. Use "" to clear on server. */
+    @SerializedName("gender") val gender: String? = null,
     /** Set to empty string to clear on server. Omit (null) to leave unchanged. */
     @SerializedName("birthdayDate") val birthdayDate: String? = null,
 )

@@ -43,6 +43,10 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.ExperimentalMaterialApi
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -146,8 +150,8 @@ private val defaultHomeQuickActionSections = listOf(
         title = "Quick actions",
         items = listOf(
             HomeQuickActionItem(title = "Start test", actionKey = "startTest"),
+            HomeQuickActionItem(title = "Result", actionKey = "results"),
             HomeQuickActionItem(title = "Leaderboard", actionKey = "leaderboard"),
-            HomeQuickActionItem(title = "Results", actionKey = "results"),
             HomeQuickActionItem(title = "Tool", actionKey = "bookmarks"),
         ),
     ),
@@ -159,6 +163,7 @@ private data class StartSeriesCardState(
 )
 
 @Composable
+@OptIn(ExperimentalMaterialApi::class)
 fun HomeScreenNew(
     modifier: Modifier = Modifier,
     onLogout: () -> Unit,
@@ -234,6 +239,8 @@ fun HomeScreenNew(
         defaultHomeCategorySections,
         )
     }
+    /** Hide the category strip until the first home CMS fetch settles so dummy chips never flash then swap. */
+    var homeCategoryStripReady by remember { mutableStateOf(false) }
     var homeWelcomeTemplate by remember { mutableStateOf("Welcome {name}") }
     var homeQuickActionsTitle by remember { mutableStateOf("Quick actions") }
     var shareAppTemplate by remember { mutableStateOf("Check out MockTestApp for practice tests and alerts.\n{storeUrl}") }
@@ -397,49 +404,95 @@ fun HomeScreenNew(
         hiddenSessionAt = 0L
     }
     LaunchedEffect(Unit) {
-        val remote = ContentRepository.loadHomeContent(forceRefresh = true) ?: return@LaunchedEffect
-        lastHomeContentFetchAt = System.currentTimeMillis()
-        applyHomeRemote(remote)
-    }
-    LaunchedEffect(Unit) {
-        val share = ContentRepository.loadShareContent() ?: return@LaunchedEffect
-        val text = share.body?.trim().orEmpty()
-        if (text.isNotBlank()) {
-            shareAppTemplate = text
+        // Stale-while-revalidate: hydrate from disk cache instantly so chips/quick actions don't
+        // flash defaults on cold start, then fetch the latest payload in the background and
+        // silently swap. Both paths are independently guarded so a failure in either does not
+        // strand `homeCategoryStripReady` (which would hide the strip forever).
+        var stripReadyMarked = false
+        try {
+            try {
+                val cached = ContentRepository.loadCachedHomeContent()
+                if (cached != null) {
+                    applyHomeRemote(cached)
+                    homeCategoryStripReady = true
+                    stripReadyMarked = true
+                }
+            } catch (_: Exception) {
+                // Fall through to network. We never persist a partial cache, so a parse failure
+                // here just means we render defaults until the fresh fetch returns.
+            }
+            try {
+                val remote = ContentRepository.loadHomeContent(forceRefresh = true)
+                if (remote != null) {
+                    lastHomeContentFetchAt = System.currentTimeMillis()
+                    applyHomeRemote(remote)
+                }
+            } catch (_: Exception) {
+                // Network failed – keep showing whatever is on screen (cache or defaults).
+            }
+        } finally {
+            if (!stripReadyMarked) {
+                homeCategoryStripReady = true
+            }
         }
     }
     LaunchedEffect(Unit) {
-        val pollSettings = ContentRepository.loadPollModalSettings()
-        homePollPopupEnabled = pollSettings.showHomePopup
-        val activePoll = pollSettings.items.firstOrNull()
-        homePollActive = activePoll
-        val votedPollIds = AppPreferencesRepository.getVotedPollIdsNow().map { it.trim() }.toSet()
-        val status = activePoll?.let { ContentRepository.loadPollVoteStatus(it.id) }
-        if (status?.hasVoted == true && activePoll != null) {
-            homePollSelections[activePoll.id] = status.optionIndexes.toSet()
-            homePollResults[activePoll.id] = status.counts
-            AppPreferencesRepository.markPollVoted(activePoll.id)
-        }
-        if (
-            pollSettings.showHomePopup &&
-            activePoll != null &&
-            status?.hasVoted != true &&
-            !votedPollIds.contains(activePoll.id.trim()) &&
-            !activePoll.id.equals(homePollPopupDismissedPollId, ignoreCase = true)
-        ) {
-            homePollPopupVisible = true
+        // Failure here just means the share button keeps its built-in default template.
+        try {
+            val share = ContentRepository.loadShareContent() ?: return@LaunchedEffect
+            val text = share.body?.trim().orEmpty()
+            if (text.isNotBlank()) {
+                shareAppTemplate = text
+            }
+        } catch (_: Exception) {
+            // Default `shareAppTemplate` remains in effect.
         }
     }
     LaunchedEffect(Unit) {
-        val instruction = ContentRepository.loadInstructionContent() ?: return@LaunchedEffect
-        postSubmitCardTitle = instruction.postSubmitCardTitle?.ifBlank { postSubmitCardTitle } ?: postSubmitCardTitle
-        postSubmitCardReadyTitle = instruction.postSubmitCardReadyTitle?.ifBlank { postSubmitCardReadyTitle } ?: postSubmitCardReadyTitle
-        postSubmitCardDateLabel = instruction.postSubmitCardDateLabel?.ifBlank { postSubmitCardDateLabel } ?: postSubmitCardDateLabel
-        postSubmitCardPendingMessage = instruction.postSubmitCardPendingMessage?.ifBlank { postSubmitCardPendingMessage } ?: postSubmitCardPendingMessage
-        postSubmitCardReadyMessage = instruction.postSubmitCardReadyMessage?.ifBlank { postSubmitCardReadyMessage } ?: postSubmitCardReadyMessage
-        postSubmitCardButtonLabel = instruction.postSubmitCardButtonLabel?.ifBlank { postSubmitCardButtonLabel } ?: postSubmitCardButtonLabel
-        if (instruction.postSubmitCardLines.isNotEmpty()) {
-            postSubmitCardLines = instruction.postSubmitCardLines
+        // Poll modal involves a chain of network + prefs calls; if any link fails,
+        // leave all poll state at safe defaults (popup hidden, no selections) instead
+        // of crashing this coroutine and silently breaking subsequent effects.
+        try {
+            val pollSettings = ContentRepository.loadPollModalSettings()
+            homePollPopupEnabled = pollSettings.showHomePopup
+            val activePoll = pollSettings.items.firstOrNull()
+            homePollActive = activePoll
+            val votedPollIds = AppPreferencesRepository.getVotedPollIdsNow().map { it.trim() }.toSet()
+            val status = activePoll?.let { ContentRepository.loadPollVoteStatus(it.id) }
+            if (status?.hasVoted == true && activePoll != null) {
+                homePollSelections[activePoll.id] = status.optionIndexes.toSet()
+                homePollResults[activePoll.id] = status.counts
+                AppPreferencesRepository.markPollVoted(activePoll.id)
+            }
+            if (
+                pollSettings.showHomePopup &&
+                activePoll != null &&
+                status?.hasVoted != true &&
+                !votedPollIds.contains(activePoll.id.trim()) &&
+                !activePoll.id.equals(homePollPopupDismissedPollId, ignoreCase = true)
+            ) {
+                homePollPopupVisible = true
+            }
+        } catch (_: Exception) {
+            // Network/parse/prefs error: keep the popup hidden so the user is not stuck on a half-initialised modal.
+            homePollPopupVisible = false
+        }
+    }
+    LaunchedEffect(Unit) {
+        // Failure here just means the post-submit card keeps its built-in default copy.
+        try {
+            val instruction = ContentRepository.loadInstructionContent() ?: return@LaunchedEffect
+            postSubmitCardTitle = instruction.postSubmitCardTitle?.ifBlank { postSubmitCardTitle } ?: postSubmitCardTitle
+            postSubmitCardReadyTitle = instruction.postSubmitCardReadyTitle?.ifBlank { postSubmitCardReadyTitle } ?: postSubmitCardReadyTitle
+            postSubmitCardDateLabel = instruction.postSubmitCardDateLabel?.ifBlank { postSubmitCardDateLabel } ?: postSubmitCardDateLabel
+            postSubmitCardPendingMessage = instruction.postSubmitCardPendingMessage?.ifBlank { postSubmitCardPendingMessage } ?: postSubmitCardPendingMessage
+            postSubmitCardReadyMessage = instruction.postSubmitCardReadyMessage?.ifBlank { postSubmitCardReadyMessage } ?: postSubmitCardReadyMessage
+            postSubmitCardButtonLabel = instruction.postSubmitCardButtonLabel?.ifBlank { postSubmitCardButtonLabel } ?: postSubmitCardButtonLabel
+            if (instruction.postSubmitCardLines.isNotEmpty()) {
+                postSubmitCardLines = instruction.postSubmitCardLines
+            }
+        } catch (_: Exception) {
+            // Defaults already in `postSubmitCard*` state remain in effect.
         }
     }
     suspend fun refreshUnreadCounts() {
@@ -465,16 +518,42 @@ fun HomeScreenNew(
     LaunchedEffect(Unit) {
         refreshUnreadCounts()
     }
+
+    // Pull-to-refresh: force reload CMS home payload so admin changes reflect without app restart.
+    var pullRefreshing by remember { mutableStateOf(false) }
+    fun triggerPullRefresh() {
+        if (pullRefreshing) return
+        scope.launch {
+            pullRefreshing = true
+            try {
+                refreshUnreadCounts()
+                val remote = ContentRepository.loadHomeContent(forceRefresh = true)
+                if (remote != null) {
+                    lastHomeContentFetchAt = System.currentTimeMillis()
+                    applyHomeRemote(remote)
+                }
+            } finally {
+                pullRefreshing = false
+            }
+        }
+    }
+    val pullRefreshState = rememberPullRefreshState(refreshing = pullRefreshing, onRefresh = ::triggerPullRefresh)
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 scope.launch {
-                    refreshUnreadCounts()
-                    val now = System.currentTimeMillis()
-                    if (now - lastHomeContentFetchAt > 45_000L) {
-                        val remote = ContentRepository.loadHomeContent(forceRefresh = true) ?: return@launch
-                        lastHomeContentFetchAt = System.currentTimeMillis()
-                        applyHomeRemote(remote)
+                    // Foreground refresh must never crash the coroutine; otherwise subsequent
+                    // ON_RESUME events would re-launch into a cancelled scope and silently no-op.
+                    try {
+                        refreshUnreadCounts()
+                        val now = System.currentTimeMillis()
+                        if (now - lastHomeContentFetchAt > 45_000L) {
+                            val remote = ContentRepository.loadHomeContent(forceRefresh = true) ?: return@launch
+                            lastHomeContentFetchAt = System.currentTimeMillis()
+                            applyHomeRemote(remote)
+                        }
+                    } catch (_: Exception) {
+                        // Swallow: pull-to-refresh stays available for the user to retry manually.
                     }
                 }
             }
@@ -578,12 +657,17 @@ fun HomeScreenNew(
                     notificationCount = notificationCount,
                 )
 
-                Column(
+                Box(
                     modifier = Modifier
                         .weight(1f, fill = true)
                         .fillMaxWidth()
-                        .verticalScroll(homeScroll),
+                        .pullRefresh(pullRefreshState),
                 ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(homeScroll),
+                    ) {
                     Spacer(Modifier.height(12.dp))
                     if (promoWidgetEnabled && promoWidgetHtml.isNotBlank()) {
                         Box(modifier = Modifier.padding(horizontal = 14.dp)) {
@@ -667,10 +751,10 @@ fun HomeScreenNew(
                         )
                     }
 
-                    val visibleCategorySections = if (categorySections.isNotEmpty()) {
-                        categorySections
-                    } else {
-                        defaultHomeCategorySections
+                    val visibleCategorySections = when {
+                        !homeCategoryStripReady -> emptyList()
+                        categorySections.isNotEmpty() -> categorySections
+                        else -> defaultHomeCategorySections
                     }
                     if (visibleCategorySections.isNotEmpty()) {
                         Spacer(Modifier.height(18.dp))
@@ -697,10 +781,14 @@ fun HomeScreenNew(
                         }
                     }
 
-                    val visibleQuickActionSections = if (quickActionSections.isNotEmpty()) {
-                        quickActionSections
-                    } else {
-                        defaultHomeQuickActionSections
+                    // Same gate as the category strip: hide Quick actions until the first
+                    // home CMS fetch settles so default chips never flash and then swap to
+                    // admin-configured ones (`loadHomeContent` populates both lists together,
+                    // so the existing flag covers this strip too).
+                    val visibleQuickActionSections = when {
+                        !homeCategoryStripReady -> emptyList()
+                        quickActionSections.isNotEmpty() -> quickActionSections
+                        else -> defaultHomeQuickActionSections
                     }
                     if (visibleQuickActionSections.isNotEmpty()) {
                         Spacer(Modifier.height(18.dp))
@@ -756,6 +844,14 @@ fun HomeScreenNew(
                         Spacer(Modifier.height(18.dp))
                         Divider(color = p.systemBlue.copy(alpha = 0.25f))
                     }
+                    }
+                    PullRefreshIndicator(
+                        refreshing = pullRefreshing,
+                        state = pullRefreshState,
+                        modifier = Modifier.align(Alignment.TopCenter),
+                        backgroundColor = p.surface,
+                        contentColor = p.accent,
+                    )
                 }
             }
         }
@@ -1255,6 +1351,8 @@ private fun HomePollPopupModal(
                             Text(if (submitting) "Submitting..." else "Submit Vote", fontWeight = FontWeight.Bold)
                         }
                     }
+
+                    // No pull-to-refresh indicator.
                 }
             }
         }
@@ -1612,15 +1710,27 @@ private fun ActionsGrid(
         screenWidthDp < 700 -> 2
         else -> 3
     }
-    val normalized = if (actions.isNotEmpty()) {
+    val normalizedBase = if (actions.isNotEmpty()) {
         actions.filterNot { !allowStartTest && it.actionKey.equals("startTest", ignoreCase = true) }
     } else {
         listOfNotNull(
             if (allowStartTest) HomeQuickActionItem(title = "Start test", actionKey = "startTest") else null,
+            HomeQuickActionItem(title = "Result", actionKey = "results"),
             HomeQuickActionItem(title = "Leaderboard", actionKey = "leaderboard"),
-            HomeQuickActionItem(title = "Results", actionKey = "results"),
             HomeQuickActionItem(title = "Tool", actionKey = "bookmarks"),
         )
+    }
+    // Ensure "Result" and "Leaderboard" are swapped regardless of CMS ordering.
+    val normalized = remember(normalizedBase) {
+        val items = normalizedBase.toMutableList()
+        val leaderboardIdx = items.indexOfFirst { it.actionKey.equals("leaderboard", ignoreCase = true) }
+        val resultIdx = items.indexOfFirst { it.actionKey.contains("result", ignoreCase = true) }
+        if (leaderboardIdx >= 0 && resultIdx >= 0 && leaderboardIdx != resultIdx) {
+            val tmp = items[leaderboardIdx]
+            items[leaderboardIdx] = items[resultIdx]
+            items[resultIdx] = tmp
+        }
+        items.toList()
     }
     val rows = normalized.chunked(columns)
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -2023,4 +2133,5 @@ private fun DrawerItem(
         )
     }
 }
+
 

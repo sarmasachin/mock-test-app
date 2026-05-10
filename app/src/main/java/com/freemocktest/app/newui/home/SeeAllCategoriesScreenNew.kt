@@ -35,11 +35,14 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -58,6 +61,7 @@ import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import coil.compose.AsyncImage
 
 private const val NO_EXAMS_MESSAGE = "Mock Test Exam Not Available"
+private const val LOAD_ERROR_MESSAGE = "Couldn't load exam categories. Check your connection and try again."
 
 private data class ExamHierarchyNode(
     val label: String,
@@ -77,35 +81,45 @@ fun SeeAllCategoriesScreenNew(
 
     var hierarchy by remember { mutableStateOf<List<ExamHierarchyNode>>(emptyList()) }
     var hierarchyLoaded by remember { mutableStateOf(false) }
+    var hierarchyFetchError by remember { mutableStateOf(false) }
+    var hierarchyReloadKey by remember { mutableIntStateOf(0) }
     var level1 by remember { mutableStateOf<String?>(null) }
     var level2 by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
-        val remote = ContentRepository.loadExamCategories().filter { it.enabled }
-        if (remote.isNotEmpty()) {
-            val grouped = remote.groupBy { it.level1.trim() }
-            hierarchy = grouped.map { (l1, level1Rows) ->
-                ExamHierarchyNode(
-                    label = l1,
-                    children = level1Rows.groupBy { it.level2.trim() }.map { (l2, level2Rows) ->
-                        ExamHierarchyNode(
-                            label = l2,
-                            iconKey = level2Rows.firstNotNullOfOrNull { it.iconKey?.trim()?.takeIf(String::isNotEmpty) },
-                            children = level2Rows.map {
-                                ExamHierarchyNode(
-                                    label = it.level3.trim(),
-                                    iconKey = it.iconKey?.trim()?.takeIf(String::isNotEmpty),
-                                )
-                            }.distinctBy { it.label },
-                        )
-                    }.sortedBy { it.label },
-                    iconKey = level1Rows.firstNotNullOfOrNull { it.iconKey?.trim()?.takeIf(String::isNotEmpty) },
-                )
-            }.sortedBy { it.label }
-        } else {
+    LaunchedEffect(hierarchyReloadKey) {
+        hierarchyLoaded = false
+        hierarchyFetchError = false
+        try {
+            val remote = ContentRepository.loadExamCategories().filter { it.enabled }
+            if (remote.isNotEmpty()) {
+                val grouped = remote.groupBy { it.level1.trim() }
+                hierarchy = grouped.map { (l1, level1Rows) ->
+                    ExamHierarchyNode(
+                        label = l1,
+                        children = level1Rows.groupBy { it.level2.trim() }.map { (l2, level2Rows) ->
+                            ExamHierarchyNode(
+                                label = l2,
+                                iconKey = level2Rows.firstNotNullOfOrNull { it.iconKey?.trim()?.takeIf(String::isNotEmpty) },
+                                children = level2Rows.map {
+                                    ExamHierarchyNode(
+                                        label = it.level3.trim(),
+                                        iconKey = it.iconKey?.trim()?.takeIf(String::isNotEmpty),
+                                    )
+                                }.distinctBy { it.label },
+                            )
+                        }.sortedBy { it.label },
+                        iconKey = level1Rows.firstNotNullOfOrNull { it.iconKey?.trim()?.takeIf(String::isNotEmpty) },
+                    )
+                }.sortedBy { it.label }
+            } else {
+                hierarchy = emptyList()
+            }
+        } catch (_: Exception) {
             hierarchy = emptyList()
+            hierarchyFetchError = true
+        } finally {
+            hierarchyLoaded = true
         }
-        hierarchyLoaded = true
     }
 
     val navigateUp: () -> Unit = {
@@ -124,7 +138,9 @@ fun SeeAllCategoriesScreenNew(
 
     BackHandler(onBack = navigateUp)
 
-    val showEmptyMessage = hierarchyLoaded && hierarchy.isEmpty() && level1 == null && level2 == null
+    val showEmptyMessage =
+        hierarchyLoaded && !hierarchyFetchError && hierarchy.isEmpty() && level1 == null && level2 == null
+    val showLoadError = hierarchyLoaded && hierarchyFetchError
     val showBackInAppBar = showAppBarBack || level1 != null || level2 != null
 
     val shownItems = when {
@@ -189,6 +205,33 @@ fun SeeAllCategoriesScreenNew(
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
+                }
+            } else if (showLoadError) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(horizontal = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        text = LOAD_ERROR_MESSAGE,
+                        color = p.textSecondary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    Button(
+                        onClick = { hierarchyReloadKey += 1 },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = p.primaryButton,
+                            contentColor = p.onPrimaryButton,
+                        ),
+                    ) {
+                        Text("Retry", fontWeight = FontWeight.Bold)
+                    }
                 }
             } else {
                 LazyColumn(

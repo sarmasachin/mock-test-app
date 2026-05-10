@@ -142,6 +142,7 @@ fun ExamAlertScreenNew(
         categoryMenu = allCategories,
         selectedCategory = selectedCategory,
         onSelectCategory = { selectedCategory = it },
+        categoryMenuEmphasis = true,
         modifier = modifier,
     )
 }
