@@ -2,6 +2,8 @@
 
 const { createTransportForPrefix } = require('../transport');
 const { buildAdminLoginSecurityEmail } = require('../templates/adminLoginSecurityTemplate');
+const { marketingFooterAppend } = require('../emailMarketingFooter');
+const { buildMarketingUnsubscribeUrl } = require('../../lib/marketingEmailUnsubscribe');
 
 async function sendSecurityAccountAlertEmail(opts) {
   const to = String(opts?.to || '').trim();
@@ -22,12 +24,16 @@ async function sendSecurityAccountAlertEmail(opts) {
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || from || '').trim();
   const accountActionUrl = String(process.env.MAIL_SECURITY_ACTION_URL || '').trim();
   const brandName = String(process.env.MAIL_BRAND_NAME || 'MockTest').trim();
-  const tpl = buildAdminLoginSecurityEmail({
+  let tpl = buildAdminLoginSecurityEmail({
     displayName,
     eventType,
     eventDetail,
     supportEmail,
     accountActionUrl,
+    brandName,
+  });
+  tpl = marketingFooterAppend(tpl, {
+    unsubscribeUrl: buildMarketingUnsubscribeUrl(opts.userId),
     brandName,
   });
   await transporter.sendMail({

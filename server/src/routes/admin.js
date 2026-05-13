@@ -8,7 +8,12 @@ const { normalizeFeedKindSlug, FEED_KIND_INVALID_HINT } = require('../constants/
 const { getArticleFeedKindList, setArticleFeedKindList } = require('../lib/articleFeedKindOptions');
 const { getArticleCategoryList, setArticleCategoryList } = require('../lib/articleCategoryOptions');
 const { sendPushToToken } = require('../notificationDispatch');
-const { isMailConfigured, sendAdminContentAlertEmail, sendSupportJourneyEmail } = require('../mail');
+const {
+  isMailConfigured,
+  sendAdminContentAlertEmail,
+  sendSupportJourneyEmail,
+  sendAdminRoleGrantedEmail,
+} = require('../mail');
 const {
   INPUT_MIME_TO_EXT,
   normalizeAdminImageExportFormats,
@@ -119,6 +124,7 @@ const DEFAULT_EMAIL_EVENT_TOGGLES = {
   new_content_by_interest: true,
   re_engagement: true,
   birthday: true,
+  admin_role_granted: true,
 };
 
 function normalizeProfileMenuItems(value) {
@@ -841,10 +847,11 @@ async function sendContentAnnouncementEmails({
 }) {
   if (!isMailConfigured()) return;
   const { rows } = await pool.query(
-    `SELECT email, display_name
+    `SELECT id::text AS user_id, email, display_name
      FROM users
      WHERE is_banned = false
        AND trim(COALESCE(email, '')) <> ''
+       AND marketing_emails_unsubscribed_at IS NULL
      ORDER BY created_at DESC
      LIMIT 2000`,
   );
@@ -853,6 +860,7 @@ async function sendContentAnnouncementEmails({
     if (!to) continue;
     try {
       await sendAdminContentAlertEmail({
+        userId: String(row.user_id || '').trim(),
         to,
         displayName: String(row.display_name || '').trim(),
         kind,
@@ -2335,6 +2343,7 @@ router.patch('/settings', async (req, res) => {
           if (!email) continue;
           if (status === 'in_progress' && prev !== 'in_progress') {
             await sendSupportJourneyEmail({
+              userId: String(item.userId || '').trim(),
               to: email,
               status: 'in_progress',
               subject: String(item.subject || 'Support Request'),
@@ -2346,6 +2355,7 @@ router.patch('/settings', async (req, res) => {
           }
           if (status === 'resolved' && prev !== 'resolved') {
             await sendSupportJourneyEmail({
+              userId: String(item.userId || '').trim(),
               to: email,
               status: 'resolved',
               subject: String(item.subject || 'Support Request'),
@@ -3710,6 +3720,31 @@ router.patch('/users/:id/admin', async (req, res) => {
       isAdmin: rows[0].is_admin,
       isSuperAdmin: rows[0].is_super_admin,
     });
+    const wasAdmin = Boolean(existing.rows[0].is_admin);
+    const wasSuper = Boolean(existing.rows[0].is_super_admin);
+    const nowAdmin = Boolean(rows[0].is_admin);
+    const nowSuper = Boolean(rows[0].is_super_admin);
+    const grantEmail = String(rows[0].email || '').trim();
+    if (grantEmail && isMailConfigured()) {
+      if (nowAdmin && !wasAdmin) {
+        const variant = nowSuper ? 'admin_and_super' : 'admin_only';
+        sendAdminRoleGrantedEmail({
+          to: grantEmail,
+          displayName: rows[0].display_name,
+          variant,
+        }).catch((mailErr) =>
+          console.error('admin_role_granted_email_failed', id, mailErr && (mailErr.message || mailErr)),
+        );
+      } else if (nowAdmin && wasAdmin && hasSuperAdminUpdate && nowSuper && !wasSuper) {
+        sendAdminRoleGrantedEmail({
+          to: grantEmail,
+          displayName: rows[0].display_name,
+          variant: 'super_only',
+        }).catch((mailErr) =>
+          console.error('admin_role_granted_email_failed', id, mailErr && (mailErr.message || mailErr)),
+        );
+      }
+    }
     return res.json({ item: rows[0] });
   } catch (e) {
     console.error(e);

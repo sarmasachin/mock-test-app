@@ -2,6 +2,8 @@
 
 const { createTransportForPrefix } = require('../transport');
 const { buildResultUnlockedEmail } = require('../templates/resultUnlockedTemplate');
+const { marketingFooterAppend } = require('../emailMarketingFooter');
+const { buildMarketingUnsubscribeUrl } = require('../../lib/marketingEmailUnsubscribe');
 
 async function sendResultUnlockedEmail(opts) {
   const to = String(opts?.to || '').trim();
@@ -18,7 +20,8 @@ async function sendResultUnlockedEmail(opts) {
 
   const appUrl = String(process.env.MAIL_APP_URL || 'https://play.google.com/store').trim();
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || process.env.MAIL_FROM || resultUser).trim();
-  const tpl = buildResultUnlockedEmail({
+  const brandName = String(process.env.MAIL_BRAND_NAME || 'MockTestApp').trim();
+  let tpl = buildResultUnlockedEmail({
     displayName,
     testTitle,
     correct: Number(opts?.correct || 0),
@@ -28,6 +31,10 @@ async function sendResultUnlockedEmail(opts) {
     unlockAtIso: String(opts?.unlockAtIso || '').trim(),
     appUrl,
     supportEmail,
+  });
+  tpl = marketingFooterAppend(tpl, {
+    unsubscribeUrl: buildMarketingUnsubscribeUrl(opts.userId),
+    brandName,
   });
   const transporter = createTransportForPrefix('SMTP_RESULT_UNLOCKED_');
   await transporter.sendMail({

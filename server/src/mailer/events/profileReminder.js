@@ -2,6 +2,8 @@
 
 const { createTransportForPrefix } = require('../transport');
 const { buildProfileReminderEmail } = require('../templates/profileReminderTemplate');
+const { marketingFooterAppend } = require('../emailMarketingFooter');
+const { buildMarketingUnsubscribeUrl } = require('../../lib/marketingEmailUnsubscribe');
 
 async function sendCompleteProfileReminderEmail(opts) {
   const to = String(opts?.to || '').trim();
@@ -22,7 +24,11 @@ async function sendCompleteProfileReminderEmail(opts) {
   const fallbackLink = appUrl || 'https://play.google.com/store';
   const subject = String(process.env.MAIL_SUBJECT_PROFILE_REMINDER || `Complete your profile on ${brandName}`).trim();
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || process.env.MAIL_FROM || reminderUser).trim();
-  const tpl = buildProfileReminderEmail({ displayName, brandName, ctaLink, fallbackLink, supportEmail });
+  let tpl = buildProfileReminderEmail({ displayName, brandName, ctaLink, fallbackLink, supportEmail });
+  tpl = marketingFooterAppend(tpl, {
+    unsubscribeUrl: buildMarketingUnsubscribeUrl(opts.userId),
+    brandName,
+  });
 
   await transporter.sendMail({
     from: String(process.env.MAIL_FROM_PROFILE_REMINDER || process.env.MAIL_FROM || reminderUser).trim(),

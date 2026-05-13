@@ -2,6 +2,8 @@
 
 const { createTransportForPrefix } = require('../transport');
 const { buildWelcomeEmail } = require('../templates/welcomeTemplate');
+const { marketingFooterAppend } = require('../emailMarketingFooter');
+const { buildMarketingUnsubscribeUrl } = require('../../lib/marketingEmailUnsubscribe');
 
 async function sendWelcomeEmail(opts) {
   const to = String(opts?.to || '').trim();
@@ -18,7 +20,11 @@ async function sendWelcomeEmail(opts) {
   const ctaLabel = appUrl ? 'Open Dashboard' : 'Start Your First Test';
   const subject = String(process.env.MAIL_SUBJECT_WELCOME || `Welcome to ${brand}`).trim();
   const transporter = createTransportForPrefix('SMTP_WELCOME_');
-  const tpl = buildWelcomeEmail({ displayName, brandName: brand, ctaLink, ctaLabel, supportEmail });
+  let tpl = buildWelcomeEmail({ displayName, brandName: brand, ctaLink, ctaLabel, supportEmail });
+  tpl = marketingFooterAppend(tpl, {
+    unsubscribeUrl: buildMarketingUnsubscribeUrl(opts.userId),
+    brandName: brand,
+  });
   await transporter.sendMail({
     from: String(process.env.MAIL_FROM_WELCOME || process.env.MAIL_FROM || welcomeUser).trim(),
     replyTo: String(process.env.MAIL_REPLY_TO_WELCOME || process.env.MAIL_SUPPORT_EMAIL || welcomeUser).trim(),

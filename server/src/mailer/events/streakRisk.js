@@ -2,6 +2,8 @@
 
 const { createTransportForPrefix } = require('../transport');
 const { buildStreakRiskAlertEmail } = require('../templates/streakRiskTemplate');
+const { marketingFooterAppend } = require('../emailMarketingFooter');
+const { buildMarketingUnsubscribeUrl } = require('../../lib/marketingEmailUnsubscribe');
 
 async function sendStreakRiskAlertEmail(opts) {
   const to = String(opts?.to || '').trim();
@@ -19,12 +21,16 @@ async function sendStreakRiskAlertEmail(opts) {
   const appUrl = String(process.env.MAIL_APP_URL || 'https://play.google.com/store').trim();
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || process.env.MAIL_FROM || streakUser).trim();
   const subject = String(process.env.MAIL_SUBJECT_STREAK_RISK || 'Your Streak Is At Risk').trim();
-  const tpl = buildStreakRiskAlertEmail({
+  let tpl = buildStreakRiskAlertEmail({
     displayName,
     brandName: brand,
     inactiveDays,
     ctaLink: appUrl,
     supportEmail,
+  });
+  tpl = marketingFooterAppend(tpl, {
+    unsubscribeUrl: buildMarketingUnsubscribeUrl(opts.userId),
+    brandName: brand,
   });
   const transporter = createTransportForPrefix('SMTP_STREAK_RISK_');
   await transporter.sendMail({

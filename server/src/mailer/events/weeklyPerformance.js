@@ -2,6 +2,8 @@
 
 const { createTransportForPrefix } = require('../transport');
 const { buildWeeklyPerformanceReportEmail } = require('../templates/weeklyPerformanceTemplate');
+const { marketingFooterAppend } = require('../emailMarketingFooter');
+const { buildMarketingUnsubscribeUrl } = require('../../lib/marketingEmailUnsubscribe');
 
 async function sendWeeklyPerformanceReportEmail(opts) {
   const to = String(opts?.to || '').trim();
@@ -21,7 +23,7 @@ async function sendWeeklyPerformanceReportEmail(opts) {
   const appUrl = String(process.env.MAIL_APP_URL || 'https://play.google.com/store').trim();
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || process.env.MAIL_FROM || weeklyUser).trim();
   const subject = String(process.env.MAIL_SUBJECT_WEEKLY_PERF || 'Your Weekly Performance Report').trim();
-  const tpl = buildWeeklyPerformanceReportEmail({
+  let tpl = buildWeeklyPerformanceReportEmail({
     displayName,
     brandName: brand,
     attempts,
@@ -29,6 +31,10 @@ async function sendWeeklyPerformanceReportEmail(opts) {
     weakTopic,
     ctaLink: appUrl,
     supportEmail,
+  });
+  tpl = marketingFooterAppend(tpl, {
+    unsubscribeUrl: buildMarketingUnsubscribeUrl(opts.userId),
+    brandName: brand,
   });
   const transporter = createTransportForPrefix('SMTP_WEEKLY_PERF_');
   await transporter.sendMail({

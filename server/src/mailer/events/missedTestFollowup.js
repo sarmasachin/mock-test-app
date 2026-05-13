@@ -2,6 +2,8 @@
 
 const { createTransportForPrefix } = require('../transport');
 const { buildMissedTestFollowupEmail } = require('../templates/missedTestFollowupTemplate');
+const { marketingFooterAppend } = require('../emailMarketingFooter');
+const { buildMarketingUnsubscribeUrl } = require('../../lib/marketingEmailUnsubscribe');
 
 async function sendMissedTestFollowupEmail(opts) {
   const to = String(opts?.to || '').trim();
@@ -19,12 +21,16 @@ async function sendMissedTestFollowupEmail(opts) {
   const appUrl = String(process.env.MAIL_APP_URL || 'https://play.google.com/store').trim();
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || process.env.MAIL_FROM || missedUser).trim();
   const subject = String(process.env.MAIL_SUBJECT_MISSED_TEST || `You Missed a Test: ${testTitle}`).trim();
-  const tpl = buildMissedTestFollowupEmail({
+  let tpl = buildMissedTestFollowupEmail({
     displayName,
     brandName: brand,
     testTitle,
     ctaLink: appUrl,
     supportEmail,
+  });
+  tpl = marketingFooterAppend(tpl, {
+    unsubscribeUrl: buildMarketingUnsubscribeUrl(opts.userId),
+    brandName: brand,
   });
   const transporter = createTransportForPrefix('SMTP_MISSED_TEST_');
   await transporter.sendMail({

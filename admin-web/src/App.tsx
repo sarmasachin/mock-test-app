@@ -284,6 +284,7 @@ const EMAIL_EVENT_TOGGLE_FIELDS: Array<{ key: string; label: string }> = [
   { key: 'new_content_by_interest', label: 'New Content By Interest' },
   { key: 're_engagement', label: 'Re-engagement' },
   { key: 'birthday', label: 'Birthday Wish' },
+  { key: 'admin_role_granted', label: 'Admin role invitation email' },
 ];
 const DEFAULT_EMAIL_EVENT_TOGGLES: Record<string, boolean> = EMAIL_EVENT_TOGGLE_FIELDS.reduce((acc, item) => {
   acc[item.key] = true;

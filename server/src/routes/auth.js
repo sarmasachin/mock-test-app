@@ -178,7 +178,7 @@ router.post('/register', async (req, res) => {
     }
     const tokens = await issueTokens(userRow.id);
     if (isMailConfigured()) {
-      sendWelcomeEmail({ to: em, displayName: name }).catch((mailErr) => {
+      sendWelcomeEmail({ to: em, displayName: name, userId: String(userRow.id) }).catch((mailErr) => {
         console.error('welcome_email_failed', mailErr && (mailErr.message || mailErr));
       });
     }
@@ -230,6 +230,7 @@ router.post('/login', async (req, res) => {
     }
     if (shouldSendNewDeviceAlert && isMailConfigured() && row.email) {
       sendSecurityAccountAlertEmail({
+        userId: String(row.id),
         to: String(row.email || '').trim(),
         displayName: String(row.display_name || '').trim(),
         subject: 'Security Alert: New login on your account',
@@ -591,6 +592,7 @@ router.post('/password-reset/complete', async (req, res) => {
     await client.query('COMMIT');
     if (isMailConfigured()) {
       sendSecurityAccountAlertEmail({
+        userId: String(userId),
         to: em,
         displayName: String(em.split('@')[0] || 'User'),
         subject: 'Password changed successfully',

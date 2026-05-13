@@ -2,6 +2,8 @@
 
 const { createTransportForPrefix } = require('../transport');
 const { buildMockTestStartingSoonEmail } = require('../templates/mockTestStartingSoonTemplate');
+const { marketingFooterAppend } = require('../emailMarketingFooter');
+const { buildMarketingUnsubscribeUrl } = require('../../lib/marketingEmailUnsubscribe');
 
 async function sendMockTestStartingSoonEmail(opts) {
   const to = String(opts?.to || '').trim();
@@ -22,7 +24,7 @@ async function sendMockTestStartingSoonEmail(opts) {
   const appUrl = String(process.env.MAIL_APP_URL || 'https://play.google.com/store').trim();
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || process.env.MAIL_FROM || mockStartUser).trim();
   const subject = String(process.env.MAIL_SUBJECT_MOCK_STARTING_SOON || `Starting Soon: ${testTitle}`).trim();
-  const tpl = buildMockTestStartingSoonEmail({
+  let tpl = buildMockTestStartingSoonEmail({
     displayName,
     brandName: brand,
     testTitle,
@@ -31,6 +33,10 @@ async function sendMockTestStartingSoonEmail(opts) {
     startAtIso,
     ctaLink: appUrl,
     supportEmail,
+  });
+  tpl = marketingFooterAppend(tpl, {
+    unsubscribeUrl: buildMarketingUnsubscribeUrl(opts.userId),
+    brandName: brand,
   });
   const transporter = createTransportForPrefix('SMTP_MOCK_START_');
   await transporter.sendMail({

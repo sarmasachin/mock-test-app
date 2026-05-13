@@ -277,6 +277,7 @@ router.patch('/profile', async (req, res) => {
     );
     if (isMailConfigured() && String(cur.email || '').trim().toLowerCase() !== String(nextEmail || '').trim().toLowerCase()) {
       sendSecurityAccountAlertEmail({
+        userId: String(req.userId),
         to: String(nextEmail || '').trim(),
         displayName: String(nextName || '').trim(),
         subject: 'Email updated on your account',
@@ -325,6 +326,7 @@ router.patch('/password', async (req, res) => {
       const dn = String(userRes.rows[0]?.display_name || '').trim();
       if (em) {
         sendSecurityAccountAlertEmail({
+          userId: String(req.userId),
           to: em,
           displayName: dn,
           subject: 'Password changed from profile',
@@ -478,6 +480,7 @@ router.post('/support', async (req, res) => {
     }, req.userId);
     if (isMailConfigured() && String(user.email || '').trim()) {
       sendSupportJourneyEmail({
+        userId: String(req.userId),
         to: String(user.email || '').trim(),
         status: 'received',
         subject: 'Help & Support',
@@ -517,6 +520,7 @@ router.post('/feedback', async (req, res) => {
     }, req.userId);
     if (isMailConfigured() && String(user.email || '').trim()) {
       sendSupportJourneyEmail({
+        userId: String(req.userId),
         to: String(user.email || '').trim(),
         status: 'received',
         subject: 'Feedback',
@@ -561,6 +565,7 @@ router.post('/report-issue', async (req, res) => {
     }, req.userId);
     if (isMailConfigured() && String(user.email || '').trim()) {
       sendSupportJourneyEmail({
+        userId: String(req.userId),
         to: String(user.email || '').trim(),
         status: 'received',
         subject: 'Issue Report',

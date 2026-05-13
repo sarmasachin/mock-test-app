@@ -2,6 +2,8 @@
 
 const { createTransportForPrefix } = require('../transport');
 const { buildBirthdayEmail } = require('../templates/birthdayTemplate');
+const { marketingFooterAppend } = require('../emailMarketingFooter');
+const { buildMarketingUnsubscribeUrl } = require('../../lib/marketingEmailUnsubscribe');
 
 async function sendBirthdayEmail(opts) {
   const to = String(opts?.to || '').trim();
@@ -18,11 +20,15 @@ async function sendBirthdayEmail(opts) {
   const appUrl = String(process.env.MAIL_APP_URL || 'https://play.google.com/store').trim();
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || process.env.MAIL_FROM || birthdayUser).trim();
   const subject = String(process.env.MAIL_SUBJECT_BIRTHDAY || 'Happy Birthday from MockTestApp').trim();
-  const tpl = buildBirthdayEmail({
+  let tpl = buildBirthdayEmail({
     displayName,
     brandName: brand,
     ctaLink: appUrl,
     supportEmail,
+  });
+  tpl = marketingFooterAppend(tpl, {
+    unsubscribeUrl: buildMarketingUnsubscribeUrl(opts.userId),
+    brandName: brand,
   });
 
   const transporter = createTransportForPrefix('SMTP_BIRTHDAY_');

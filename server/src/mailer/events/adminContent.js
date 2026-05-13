@@ -2,6 +2,8 @@
 
 const { createTransportForPrefix } = require('../transport');
 const { buildAdminContentAlertEmail } = require('../templates/adminContentTemplate');
+const { marketingFooterAppend } = require('../emailMarketingFooter');
+const { buildMarketingUnsubscribeUrl } = require('../../lib/marketingEmailUnsubscribe');
 
 async function sendAdminContentAlertEmail(opts) {
   const to = String(opts?.to || '').trim();
@@ -23,7 +25,8 @@ async function sendAdminContentAlertEmail(opts) {
   const ctaUrl = String(opts?.ctaUrl || appUrl).trim() || appUrl;
   const ctaLabel = String(opts?.ctaLabel || 'Open App').trim() || 'Open App';
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || process.env.MAIL_FROM || adminUser).trim();
-  const tpl = buildAdminContentAlertEmail({
+  const brandName = String(process.env.MAIL_BRAND_NAME || 'MockTestApp').trim();
+  let tpl = buildAdminContentAlertEmail({
     displayName,
     kind,
     title,
@@ -31,6 +34,10 @@ async function sendAdminContentAlertEmail(opts) {
     ctaUrl,
     ctaLabel,
     supportEmail,
+  });
+  tpl = marketingFooterAppend(tpl, {
+    unsubscribeUrl: buildMarketingUnsubscribeUrl(opts.userId),
+    brandName,
   });
   const transporter = createTransportForPrefix('SMTP_ADMIN_CONTENT_');
   await transporter.sendMail({

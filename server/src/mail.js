@@ -14,6 +14,9 @@ const { sendWeeklyPerformanceReportEmail: sendWeeklyPerfEvent } = require('./mai
 const { sendRankMilestoneEmail: sendRankMilestoneEvent } = require('./mailer/events/rankMilestone');
 const { sendBirthdayEmail: sendBirthdayEvent } = require('./mailer/events/birthday');
 const { buildSupportJourneyEmail } = require('./mailer/templates/supportJourneyTemplate');
+const { buildAdminRoleGrantedEmail } = require('./mailer/templates/adminRoleGrantedTemplate');
+const { marketingFooterAppend } = require('./mailer/emailMarketingFooter');
+const { buildMarketingUnsubscribeUrl } = require('./lib/marketingEmailUnsubscribe');
 
 const EMAIL_EVENT_KEYS = {
   welcome: 'welcome',
@@ -33,6 +36,7 @@ const EMAIL_EVENT_KEYS = {
   newContentByInterest: 'new_content_by_interest',
   reEngagement: 're_engagement',
   birthday: 'birthday',
+  adminRoleGranted: 'admin_role_granted',
 };
 
 let emailEventTogglesCache = null;
@@ -357,13 +361,17 @@ async function sendSupportJourneyEmail(opts) {
   }
   const brandName = String(process.env.MAIL_BRAND_NAME || 'MockTest').trim();
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || resolveFromAddress() || '').trim();
-  const tpl = buildSupportJourneyEmail({
+  let tpl = buildSupportJourneyEmail({
     displayName,
     subject: rawSubject,
     statusMessage,
     journeyStatus,
     userMessage,
     supportEmail,
+    brandName,
+  });
+  tpl = marketingFooterAppend(tpl, {
+    unsubscribeUrl: buildMarketingUnsubscribeUrl(opts.userId),
     brandName,
   });
   await sendMail({
@@ -414,6 +422,42 @@ async function sendBirthdayEmail(opts) {
   if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.birthday))) return undefined;
   return sendBirthdayEvent(opts);
 }
+
+/**
+ * Transactional notice when a user receives admin or super-admin privileges.
+ * @param {{ to: string, displayName?: string, variant?: 'admin_only'|'admin_and_super'|'super_only' }} opts
+ */
+async function sendAdminRoleGrantedEmail(opts) {
+  if (!(await isEmailEventEnabled(EMAIL_EVENT_KEYS.adminRoleGranted))) return undefined;
+  const to = String(opts?.to || '').trim();
+  if (!to) return undefined;
+  if (!isMailConfigured()) return undefined;
+  const brand = String(process.env.MAIL_BRAND_NAME || 'MockTestApp').trim();
+  const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || resolveFromAddress() || '').trim();
+  const variantRaw = String(opts?.variant || 'admin_only').trim();
+  const variant =
+    variantRaw === 'admin_and_super' || variantRaw === 'super_only' ? variantRaw : 'admin_only';
+  const displayName = String(opts?.displayName || '').trim();
+  const subjectBase =
+    variant === 'super_only'
+      ? `You are now a Super Admin on ${brand}`
+      : variant === 'admin_and_super'
+        ? `Admin & Super Admin access on ${brand}`
+        : `You are invited as an Admin on ${brand}`;
+  const subject = String(process.env.MAIL_SUBJECT_ADMIN_ROLE || subjectBase).trim();
+  const tpl = buildAdminRoleGrantedEmail({
+    displayName,
+    brandName: brand,
+    supportEmail,
+    variant,
+  });
+  await sendMail({
+    to,
+    subject,
+    text: tpl.text,
+    html: tpl.html,
+  });
+}
 const sendNewContentByInterestEmail = noop;
 const sendReEngagementEmail = noop;
 
@@ -463,6 +507,7 @@ module.exports = {
   sendWeeklyPerformanceReportEmail,
   sendRankMilestoneEmail,
   sendBirthdayEmail,
+  sendAdminRoleGrantedEmail,
   sendNewContentByInterestEmail,
   sendReEngagementEmail,
   sendSecurityAccountAlertEmail,

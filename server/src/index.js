@@ -17,6 +17,7 @@ const testsCatalogRouter = require('./routes/tests');
 const leaderboardRouter = require('./routes/leaderboard');
 const homeRouter = require('./routes/home');
 const adminRouter = require('./routes/admin');
+const emailPreferencesRouter = require('./routes/emailPreferences');
 const { PROTECTED_SUPER_ADMIN_EMAIL_LIST } = require('./constants/protectedSuperAdminEmails');
 const pollsRouter = require('./routes/polls');
 const { pool } = require('./db');
@@ -79,6 +80,7 @@ app.use(async (req, res, next) => {
   const path = String(req.path || '');
   if (
     path === '/health' ||
+    path.startsWith('/v1/email/') ||
     path.startsWith('/v1/admin') ||
     path.startsWith('/v1/auth/')
   ) {
@@ -106,6 +108,8 @@ app.use(async (req, res, next) => {
 app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
+
+app.use('/v1/email', emailPreferencesRouter);
 
 app.use('/v1/auth', authRouter);
 app.use('/v1/me', requireAuth, meRouter);
@@ -213,6 +217,10 @@ async function ensureOptionalColumns() {
     await pool.query(
       `ALTER TABLE users
        ADD COLUMN IF NOT EXISTS gender VARCHAR(20) NOT NULL DEFAULT ''`,
+    );
+    await pool.query(
+      `ALTER TABLE users
+       ADD COLUMN IF NOT EXISTS marketing_emails_unsubscribed_at TIMESTAMPTZ`,
     );
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(255)`);
     await pool.query(
@@ -690,6 +698,7 @@ async function processProfileReminderEmails() {
       `SELECT id, email, display_name
        FROM users
        WHERE is_banned = false
+         AND marketing_emails_unsubscribed_at IS NULL
          AND created_at <= (now() - interval '10 minutes')
          AND (
            length(regexp_replace(COALESCE(phone, ''), '\D', '', 'g')) <> 10
@@ -706,6 +715,7 @@ async function processProfileReminderEmails() {
       if (!userId || !email || sent.has(userId)) continue;
       try {
         await sendCompleteProfileReminderEmail({
+          userId,
           to: email,
           displayName: String(row.display_name || '').trim(),
         });
@@ -788,6 +798,7 @@ async function processUnlockedResultEmails() {
          LEFT JOIN tests t ON t.id = ta.test_catalog_id
          WHERE u.is_banned = false
            AND trim(COALESCE(u.email, '')) <> ''
+           AND u.marketing_emails_unsubscribed_at IS NULL
        ),
        ranked AS (
          SELECT
@@ -823,6 +834,7 @@ async function processUnlockedResultEmails() {
       if (!attemptId || sent.has(attemptId)) continue;
       try {
         await sendResultUnlockedEmail({
+          userId: String(row.user_id || '').trim(),
           to: String(row.email || '').trim(),
           displayName: String(row.display_name || '').trim(),
           testTitle: String(row.test_title || '').trim() || 'Mock Test',
@@ -926,6 +938,7 @@ async function processMockTestStartReminderEmails() {
        FROM users
        WHERE is_banned = false
          AND trim(COALESCE(email, '')) <> ''
+         AND marketing_emails_unsubscribed_at IS NULL
        ORDER BY created_at DESC
        LIMIT 8000`,
     );
@@ -945,6 +958,7 @@ async function processMockTestStartReminderEmails() {
         if (!email) continue;
         try {
           await sendMockTestStartingSoonEmail({
+            userId: String(userRow.user_id || '').trim(),
             to: email,
             displayName: String(userRow.display_name || '').trim(),
             testTitle: String(testRow.title || '').trim() || 'Mock Test',
@@ -1250,6 +1264,7 @@ async function processMissedTestFollowupEmails() {
        FROM users u
        WHERE u.is_banned = false
          AND trim(COALESCE(u.email, '')) <> ''
+         AND u.marketing_emails_unsubscribed_at IS NULL
          AND NOT EXISTS (
            SELECT 1 FROM test_attempts ta
            WHERE ta.user_id = u.id AND ta.test_catalog_id = $1::uuid AND ta.completed_at::date = now()::date
@@ -1262,6 +1277,7 @@ async function processMissedTestFollowupEmails() {
       const userId = String(row.user_id || '');
       if (!userId || sent.has(userId)) continue;
       await sendMissedTestFollowupEmail({
+        userId,
         to: String(row.email || ''),
         displayName: String(row.display_name || ''),
         testTitle: String(todayTest.title || 'Today Mock Test'),
@@ -1291,6 +1307,7 @@ async function processStreakRiskEmails() {
        FROM users u
        LEFT JOIN test_attempts ta ON ta.user_id = u.id
        WHERE u.is_banned = false AND trim(COALESCE(u.email, '')) <> ''
+         AND u.marketing_emails_unsubscribed_at IS NULL
        GROUP BY u.id, u.email, u.display_name, u.created_at
        HAVING (now() - COALESCE(MAX(ta.completed_at), u.created_at)) BETWEEN interval '2 days' AND interval '3 days'
        LIMIT 3000`,
@@ -1302,6 +1319,7 @@ async function processStreakRiskEmails() {
       if (lastSent && Date.now() - Date.parse(lastSent) < 36 * 60 * 60 * 1000) continue;
       const days = Math.max(2, Math.floor((Date.now() - Date.parse(String(row.last_active || new Date().toISOString()))) / 86400000));
       await sendStreakRiskAlertEmail({
+        userId,
         to: String(row.email || ''),
         displayName: String(row.display_name || ''),
         inactiveDays: days,
@@ -1357,6 +1375,7 @@ async function processWeeklyPerformanceReportEmails() {
        INNER JOIN users u ON u.id = us.user_id
        LEFT JOIN weak w ON w.user_id = us.user_id
        WHERE u.is_banned = false AND trim(COALESCE(u.email, '')) <> ''
+         AND u.marketing_emails_unsubscribed_at IS NULL
        LIMIT 4000`,
     );
     let changed = false;
@@ -1364,6 +1383,7 @@ async function processWeeklyPerformanceReportEmails() {
       const userId = String(row.user_id || '');
       if (!userId || sent.has(userId)) continue;
       await sendWeeklyPerformanceReportEmail({
+        userId,
         to: String(row.email || ''),
         displayName: String(row.display_name || ''),
         attempts: Number(row.attempts || 0),
@@ -1418,6 +1438,7 @@ async function processRankMilestoneEmails() {
        INNER JOIN users u ON u.id = tr.user_id
        WHERE u.is_banned = false
          AND trim(COALESCE(u.email, '')) <> ''
+         AND u.marketing_emails_unsubscribed_at IS NULL
          AND tr.completed_at >= now() - interval '2 days'
          AND (tr.rank <= 100 OR (COALESCE(tr.prev_rank, tr.rank) - tr.rank) >= 20)
        ORDER BY tr.completed_at DESC
@@ -1430,6 +1451,7 @@ async function processRankMilestoneEmails() {
       const improvedBy = Math.max(0, Number(row.prev_rank || row.rank) - Number(row.rank || 0));
       const reason = Number(row.rank || 0) <= 100 ? 'You entered Top 100.' : `You improved by ${improvedBy} ranks.`;
       await sendRankMilestoneEmail({
+        userId: String(row.user_id || '').trim(),
         to: String(row.email || ''),
         displayName: String(row.display_name || ''),
         testTitle: String(row.test_title || 'Mock Test'),
@@ -1470,6 +1492,7 @@ async function processInterestContentEmails() {
        FROM users u
        LEFT JOIN top_interest ti ON ti.user_id = u.id
        WHERE u.is_banned = false AND trim(COALESCE(u.email, '')) <> ''
+         AND u.marketing_emails_unsubscribed_at IS NULL
        LIMIT 4000`,
     );
     const testsRes = await pool.query(
@@ -1488,6 +1511,7 @@ async function processInterestContentEmails() {
       const pair = `${String(user.user_id)}:${String(matched.id)}`;
       if (sent.has(pair)) continue;
       await sendNewContentByInterestEmail({
+        userId: String(user.user_id || '').trim(),
         to: String(user.email || ''),
         displayName: String(user.display_name || ''),
         interestLabel: `Interest: ${String(matched.subcategory || '').trim()}`,
@@ -1516,6 +1540,7 @@ async function processReEngagementEmails() {
        FROM users u
        LEFT JOIN test_attempts ta ON ta.user_id = u.id
        WHERE u.is_banned = false AND trim(COALESCE(u.email, '')) <> ''
+         AND u.marketing_emails_unsubscribed_at IS NULL
        GROUP BY u.id, u.email, u.display_name, u.created_at
        LIMIT 6000`,
     );
@@ -1528,6 +1553,7 @@ async function processReEngagementEmails() {
       const sentMilestones = new Set(Array.isArray(sentByUser[userId]) ? sentByUser[userId].map((x) => Number(x)) : []);
       if (sentMilestones.has(targetMilestone)) continue;
       await sendReEngagementEmail({
+        userId,
         to: String(row.email || ''),
         displayName: String(row.display_name || ''),
         inactiveDays: targetMilestone,
@@ -1555,6 +1581,7 @@ async function processBirthdayEmails() {
        FROM users
        WHERE is_banned = false
          AND trim(COALESCE(email, '')) <> ''
+         AND marketing_emails_unsubscribed_at IS NULL
          AND date_of_birth IS NOT NULL
          AND EXTRACT(MONTH FROM date_of_birth) = EXTRACT(MONTH FROM now())
          AND EXTRACT(DAY FROM date_of_birth) = EXTRACT(DAY FROM now())
@@ -1566,6 +1593,7 @@ async function processBirthdayEmails() {
       if (!userId) continue;
       if (String(sentByUserYear[userId] || '') === currentYear) continue;
       await sendBirthdayEmail({
+        userId,
         to: String(row.email || ''),
         displayName: String(row.display_name || ''),
       }).catch((e) => console.error('birthday_email_failed', userId, e && (e.message || e)));

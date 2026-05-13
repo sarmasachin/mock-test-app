@@ -60,15 +60,17 @@ async function main() {
 
   const gap = Math.max(0, parseInt(process.env.MAIL_E2E_DELAY_MS || '2500', 10) || 0);
   const displayName = 'E2E Mail Test';
+  const e2eUserId = String(process.env.MAIL_E2E_USER_ID || '00000000-0000-4000-8000-000000000001').trim();
 
   const tests = [
     ['OTP password reset template', () => mail.sendPasswordResetOtp({ to, otp: '111111' })],
     ['OTP email verification template', () => mail.sendEmailVerificationOtp({ to, otp: '222222' })],
-    ['Welcome', () => mail.sendWelcomeEmail({ to, displayName })],
+    ['Welcome', () => mail.sendWelcomeEmail({ to, displayName, userId: e2eUserId })],
     [
       'Security: new login (user)',
       () =>
         mail.sendSecurityAccountAlertEmail({
+          userId: e2eUserId,
           to,
           displayName,
           subject: 'Security Alert: New login on your account',
@@ -80,6 +82,7 @@ async function main() {
       'Security: password changed',
       () =>
         mail.sendSecurityAccountAlertEmail({
+          userId: e2eUserId,
           to,
           displayName,
           subject: 'Password changed (E2E)',
@@ -87,11 +90,12 @@ async function main() {
           eventDetail: 'E2E mail live script — safe to ignore.',
         }),
     ],
-    ['Profile reminder', () => mail.sendCompleteProfileReminderEmail({ to, displayName })],
+    ['Profile reminder', () => mail.sendCompleteProfileReminderEmail({ to, displayName, userId: e2eUserId })],
     [
       'Admin content alert',
       () =>
         mail.sendAdminContentAlertEmail({
+          userId: e2eUserId,
           to,
           displayName,
           kind: 'exam',
@@ -103,6 +107,7 @@ async function main() {
       'Result unlocked',
       () =>
         mail.sendResultUnlockedEmail({
+          userId: e2eUserId,
           to,
           displayName,
           testTitle: 'E2E Mock Test',
@@ -117,6 +122,7 @@ async function main() {
       'Mock test starting soon',
       () =>
         mail.sendMockTestStartingSoonEmail({
+          userId: e2eUserId,
           to,
           displayName,
           testTitle: 'E2E Starting Soon',
@@ -129,16 +135,18 @@ async function main() {
       'Missed test follow-up',
       () =>
         mail.sendMissedTestFollowupEmail({
+          userId: e2eUserId,
           to,
           displayName,
           testTitle: 'E2E Missed Test',
         }),
     ],
-    ['Streak risk', () => mail.sendStreakRiskAlertEmail({ to, displayName, inactiveDays: 2 })],
+    ['Streak risk', () => mail.sendStreakRiskAlertEmail({ userId: e2eUserId, to, displayName, inactiveDays: 2 })],
     [
       'Weekly performance',
       () =>
         mail.sendWeeklyPerformanceReportEmail({
+          userId: e2eUserId,
           to,
           displayName,
           attempts: 5,
@@ -150,6 +158,7 @@ async function main() {
       'Rank milestone',
       () =>
         mail.sendRankMilestoneEmail({
+          userId: e2eUserId,
           to,
           displayName,
           testTitle: 'E2E Rank Test',
@@ -158,11 +167,12 @@ async function main() {
           reason: 'E2E automated check.',
         }),
     ],
-    ['Birthday wish', () => mail.sendBirthdayEmail({ to, displayName })],
+    ['Birthday wish', () => mail.sendBirthdayEmail({ userId: e2eUserId, to, displayName })],
     [
       'Support journey (help ack style)',
       () =>
         mail.sendSupportJourneyEmail({
+          userId: e2eUserId,
           to,
           displayName,
           subject: 'Help request',

@@ -2,6 +2,8 @@
 
 const { createTransportForPrefix } = require('../transport');
 const { buildRankMilestoneEmail } = require('../templates/rankMilestoneTemplate');
+const { marketingFooterAppend } = require('../emailMarketingFooter');
+const { buildMarketingUnsubscribeUrl } = require('../../lib/marketingEmailUnsubscribe');
 
 async function sendRankMilestoneEmail(opts) {
   const to = String(opts?.to || '').trim();
@@ -22,7 +24,7 @@ async function sendRankMilestoneEmail(opts) {
   const appUrl = String(process.env.MAIL_APP_URL || 'https://play.google.com/store').trim();
   const supportEmail = String(process.env.MAIL_SUPPORT_EMAIL || process.env.MAIL_FROM || rankUser).trim();
   const subject = String(process.env.MAIL_SUBJECT_RANK_MILESTONE || `Rank Milestone: #${Math.max(0, Math.round(rank))}`).trim();
-  const tpl = buildRankMilestoneEmail({
+  let tpl = buildRankMilestoneEmail({
     displayName,
     brandName: brand,
     testTitle,
@@ -31,6 +33,10 @@ async function sendRankMilestoneEmail(opts) {
     reason,
     ctaLink: appUrl,
     supportEmail,
+  });
+  tpl = marketingFooterAppend(tpl, {
+    unsubscribeUrl: buildMarketingUnsubscribeUrl(opts.userId),
+    brandName: brand,
   });
   const transporter = createTransportForPrefix('SMTP_RANK_MILESTONE_');
   await transporter.sendMail({
