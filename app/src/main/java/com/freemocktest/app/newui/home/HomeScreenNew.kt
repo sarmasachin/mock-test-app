@@ -21,8 +21,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.LocalOverscrollConfiguration
 import androidx.compose.foundation.rememberScrollState
@@ -100,6 +100,7 @@ import kotlin.math.roundToInt
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
@@ -307,6 +308,8 @@ fun HomeScreenNew(
 
     /** Wall-clock of last successful home CMS fetch; used to throttle resume refreshes. */
     var lastHomeContentFetchAt by remember { mutableLongStateOf(0L) }
+    /** True when the latest server home payload could not be applied (null or exception). */
+    var homeRemoteRefreshFailed by remember { mutableStateOf(false) }
 
     fun applyHomeRemote(remote: ContentRepository.HomeContentRemote) {
         applyColorPresetFromRemote(remote.themePreset)
@@ -410,26 +413,23 @@ fun HomeScreenNew(
         // strand `homeCategoryStripReady` (which would hide the strip forever).
         var stripReadyMarked = false
         try {
-            try {
-                val cached = ContentRepository.loadCachedHomeContent()
-                if (cached != null) {
-                    applyHomeRemote(cached)
-                    homeCategoryStripReady = true
-                    stripReadyMarked = true
-                }
-            } catch (_: Exception) {
-                // Fall through to network. We never persist a partial cache, so a parse failure
-                // here just means we render defaults until the fresh fetch returns.
+            val cacheResult = runCatching { ContentRepository.loadCachedHomeContent() }
+            cacheResult.getOrNull()?.let { cached ->
+                applyHomeRemote(cached)
+                homeCategoryStripReady = true
+                stripReadyMarked = true
             }
-            try {
-                val remote = ContentRepository.loadHomeContent(forceRefresh = true)
-                if (remote != null) {
-                    lastHomeContentFetchAt = System.currentTimeMillis()
-                    applyHomeRemote(remote)
-                }
-            } catch (_: Exception) {
-                // Network failed – keep showing whatever is on screen (cache or defaults).
+            val remoteResult = runCatching { ContentRepository.loadHomeContent(forceRefresh = true) }
+            val remote = remoteResult.getOrNull()
+            if (remote != null) {
+                lastHomeContentFetchAt = System.currentTimeMillis()
+                applyHomeRemote(remote)
+                homeRemoteRefreshFailed = false
+            } else {
+                homeRemoteRefreshFailed = remoteResult.isFailure || remote == null
             }
+        } catch (e: CancellationException) {
+            throw e
         } finally {
             if (!stripReadyMarked) {
                 homeCategoryStripReady = true
@@ -444,6 +444,8 @@ fun HomeScreenNew(
             if (text.isNotBlank()) {
                 shareAppTemplate = text
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             // Default `shareAppTemplate` remains in effect.
         }
@@ -473,6 +475,8 @@ fun HomeScreenNew(
             ) {
                 homePollPopupVisible = true
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             // Network/parse/prefs error: keep the popup hidden so the user is not stuck on a half-initialised modal.
             homePollPopupVisible = false
@@ -491,6 +495,8 @@ fun HomeScreenNew(
             if (instruction.postSubmitCardLines.isNotEmpty()) {
                 postSubmitCardLines = instruction.postSubmitCardLines
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             // Defaults already in `postSubmitCard*` state remain in effect.
         }
@@ -527,11 +533,17 @@ fun HomeScreenNew(
             pullRefreshing = true
             try {
                 refreshUnreadCounts()
-                val remote = ContentRepository.loadHomeContent(forceRefresh = true)
+                val remoteResult = runCatching { ContentRepository.loadHomeContent(forceRefresh = true) }
+                val remote = remoteResult.getOrNull()
                 if (remote != null) {
                     lastHomeContentFetchAt = System.currentTimeMillis()
                     applyHomeRemote(remote)
+                    homeRemoteRefreshFailed = false
+                } else {
+                    homeRemoteRefreshFailed = remoteResult.isFailure || remote == null
                 }
+            } catch (e: CancellationException) {
+                throw e
             } finally {
                 pullRefreshing = false
             }
@@ -548,12 +560,20 @@ fun HomeScreenNew(
                         refreshUnreadCounts()
                         val now = System.currentTimeMillis()
                         if (now - lastHomeContentFetchAt > 45_000L) {
-                            val remote = ContentRepository.loadHomeContent(forceRefresh = true) ?: return@launch
-                            lastHomeContentFetchAt = System.currentTimeMillis()
-                            applyHomeRemote(remote)
+                            val remoteResult = runCatching { ContentRepository.loadHomeContent(forceRefresh = true) }
+                            val remote = remoteResult.getOrNull()
+                            if (remote != null) {
+                                lastHomeContentFetchAt = System.currentTimeMillis()
+                                applyHomeRemote(remote)
+                                homeRemoteRefreshFailed = false
+                            } else {
+                                homeRemoteRefreshFailed = remoteResult.isFailure || remote == null
+                            }
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (_: Exception) {
-                        // Swallow: pull-to-refresh stays available for the user to retry manually.
+                        homeRemoteRefreshFailed = true
                     }
                 }
             }
@@ -656,6 +676,13 @@ fun HomeScreenNew(
                     pollCount = pollCount,
                     notificationCount = notificationCount,
                 )
+
+                if (homeRemoteRefreshFailed) {
+                    HomeRefreshFailedBanner(
+                        refreshing = pullRefreshing,
+                        onRefreshClick = { triggerPullRefresh() },
+                    )
+                }
 
                 Box(
                     modifier = Modifier
@@ -889,16 +916,22 @@ fun HomeScreenNew(
                         scope.launch {
                             homePollSubmitting = true
                             homePollMessage = null
-                            val result = ContentRepository.submitPollVote(pollId, optionIndexes.toList())
-                            if (result?.ok == true) {
-                                homePollResults[pollId] = result.counts
-                                AppPreferencesRepository.markPollVoted(pollId)
-                                homePollMessage = "Vote submitted successfully."
-                                homePollPopupDismissedPollId = pollId
-                                homePollPopupVisible = false
-                                refreshUnreadCounts()
-                            } else {
-                                homePollMessage = "Failed to submit vote."
+                            runCatching {
+                                ContentRepository.submitPollVote(pollId, optionIndexes.toList())
+                            }.onSuccess { result ->
+                                if (result?.ok == true) {
+                                    homePollResults[pollId] = result.counts
+                                    AppPreferencesRepository.markPollVoted(pollId)
+                                    homePollMessage = "Vote submitted successfully."
+                                    homePollPopupDismissedPollId = pollId
+                                    homePollPopupVisible = false
+                                    refreshUnreadCounts()
+                                } else {
+                                    homePollMessage = "Failed to submit vote."
+                                }
+                            }.onFailure {
+                                homePollMessage =
+                                    "Failed to submit vote. Check your connection and try again."
                             }
                             homePollSubmitting = false
                         }
@@ -906,10 +939,49 @@ fun HomeScreenNew(
                 )
             }
         }
+        }
 
     }
 }
 
+@Composable
+private fun HomeRefreshFailedBanner(
+    refreshing: Boolean,
+    onRefreshClick: () -> Unit,
+) {
+    val p = mockTestPalette()
+    val shape = RoundedCornerShape(12.dp)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp)
+            .padding(top = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = p.error.copy(alpha = 0.12f)),
+        shape = shape,
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                modifier = Modifier.weight(1f),
+                text = "Couldn't refresh home from the server. Pull down or tap Refresh.",
+                color = p.textPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            TextButton(
+                onClick = onRefreshClick,
+                enabled = !refreshing,
+            ) {
+                Text("Refresh", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
 }
 
 @Composable

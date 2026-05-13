@@ -77,6 +77,16 @@ object AppPreferencesRepository {
     private val keyInProgressQuizJson = stringPreferencesKey("in_progress_quiz_json")
     /** Last successful CMS home payload, persisted so cold start can render instantly while refresh runs in the background. */
     private val keyCachedHomeContentJson = stringPreferencesKey("cached_home_content_json")
+    /** Last successful news list payloads per feed kind (all / job / exam) for stale-while-revalidate on feed screens. */
+    private val keyCachedNewsFeedAllJson = stringPreferencesKey("cached_news_feed_all_json")
+    private val keyCachedNewsFeedJobJson = stringPreferencesKey("cached_news_feed_job_json")
+    private val keyCachedNewsFeedExamJson = stringPreferencesKey("cached_news_feed_exam_json")
+    /** Last successful CMS profile menu (from home payload) for instant Profile screen paint. */
+    private val keyCachedProfileMenuJson = stringPreferencesKey("cached_profile_menu_json_v1")
+    /** Last successful tests lists per subcategory (bottom Tests tab + Apply fallback). */
+    private val keyCachedTestsListsBlob = stringPreferencesKey("cached_tests_lists_blob_v1")
+    /** Per-test-title quiz question lists from last successful API (answer key / review / result). */
+    private val keyCachedQuizQuestionsBlob = stringPreferencesKey("cached_quiz_questions_blob_v1")
     private val keyAuthBootstrapState = stringPreferencesKey("auth_bootstrap_state")
     private val keySeenNotificationIds = stringPreferencesKey("seen_notification_ids")
     // Keep "seen" state user-scoped. If a different user signs in on the same device,
@@ -87,6 +97,10 @@ object AppPreferencesRepository {
     private val keyVotedPollIds = stringPreferencesKey("voted_poll_ids")
     private val keyVotedPollIdsOwner = stringPreferencesKey("voted_poll_ids_owner")
     private val keyNotificationsClearedAtMs = longPreferencesKey("notifications_cleared_at_ms")
+    /** 1 after user finishes post-login test multi-select (cleared on logout). */
+    private val keyLoginTestPickDone = intPreferencesKey("login_test_pick_done")
+    /** JSON array of test titles the user selected after login. */
+    private val keyLoginTestPickTitles = stringPreferencesKey("login_test_pick_titles")
 
     private const val DefaultStartSeriesLockMs = 20_000L
     private const val DefaultStartSeriesActiveWindowMs = 30 * 60 * 1000L
@@ -108,24 +122,35 @@ object AppPreferencesRepository {
         val birthdayDate: String,
     )
 
+    private fun mapPrefsToEditableProfile(prefs: Preferences): EditableProfileState {
+        val legacyContact = prefs[keyProfileContact].orEmpty()
+        val emailStored = prefs[keyProfileEmail].orEmpty()
+        val email = emailStored.ifBlank {
+            if (legacyContact.contains('@')) legacyContact else ""
+        }
+        val mobile = prefs[keyProfileMobile].orEmpty().ifBlank {
+            if (legacyContact.isNotBlank() && !legacyContact.contains('@')) legacyContact else ""
+        }
+        return EditableProfileState(
+            displayName = prefs[keyProfileDisplayName].orEmpty(),
+            email = email,
+            mobile = mobile,
+            gender = prefs[keyProfileGender].orEmpty(),
+            birthdayDate = prefs[keyProfileBirthdayDate].orEmpty(),
+        )
+    }
+
     val editableProfile: Flow<EditableProfileState>
-        get() = storeOrNull()?.data?.map { prefs ->
-            val legacyContact = prefs[keyProfileContact].orEmpty()
-            val emailStored = prefs[keyProfileEmail].orEmpty()
-            val email = emailStored.ifBlank {
-                if (legacyContact.contains('@')) legacyContact else ""
-            }
-            val mobile = prefs[keyProfileMobile].orEmpty().ifBlank {
-                if (legacyContact.isNotBlank() && !legacyContact.contains('@')) legacyContact else ""
-            }
-            EditableProfileState(
-                displayName = prefs[keyProfileDisplayName].orEmpty(),
-                email = email,
-                mobile = mobile,
-                gender = prefs[keyProfileGender].orEmpty(),
-                birthdayDate = prefs[keyProfileBirthdayDate].orEmpty(),
-            )
-        } ?: flowOf(EditableProfileState("", "", "", "", ""))
+        get() = storeOrNull()?.data?.map { mapPrefsToEditableProfile(it) }
+            ?: flowOf(EditableProfileState("", "", "", "", ""))
+
+    /** One-shot read for Profile screen so DataStore-backed fields paint before first Flow emission. */
+    suspend fun peekEditableProfileNow(): EditableProfileState {
+        if (!::appContext.isInitialized) return EditableProfileState("", "", "", "", "")
+        val prefs = runCatching { store().data.first() }.getOrNull()
+            ?: return EditableProfileState("", "", "", "", "")
+        return mapPrefsToEditableProfile(prefs)
+    }
 
     data class DrawerUserProfile(
         /** Username from signup / profile (shown first in drawer). */
@@ -480,15 +505,13 @@ object AppPreferencesRepository {
     val notificationsClearedAtMs: Flow<Long>
         get() = storeOrNull()?.data?.map { it[keyNotificationsClearedAtMs] ?: 0L } ?: flowOf(0L)
 
-    fun clearAllNotificationsInbox() {
+    suspend fun clearAllNotificationsInbox() {
         if (!::appContext.isInitialized) return
-        scope.launch {
-            runCatching {
-                store().edit { prefs ->
-                    prefs[keyNotificationsClearedAtMs] = System.currentTimeMillis()
-                }
-            }.onFailure { Log.e(TAG, "clearAllNotificationsInbox failed", it) }
-        }
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyNotificationsClearedAtMs] = System.currentTimeMillis()
+            }
+        }.onFailure { Log.e(TAG, "clearAllNotificationsInbox failed", it) }
     }
 
     suspend fun notificationsEnabledNow(): Boolean {
@@ -520,6 +543,16 @@ object AppPreferencesRepository {
     val appliedTestSeries: Flow<List<AppliedTestSeriesEntry>>
         get() = storeOrNull()?.data?.map { prefs ->
             parseAppliedTestSeries(prefs[keyAppliedTestSeries]).filter { it.testName.isNotBlank() }
+        } ?: flowOf(emptyList())
+
+    /** Titles saved from post-login test picker (empty until picker submitted with picks). */
+    val loginPickedTestTitles: Flow<List<String>>
+        get() = storeOrNull()?.data?.map { prefs ->
+            if ((prefs[keyLoginTestPickDone] ?: 0) != 1) {
+                emptyList()
+            } else {
+                parseLoginPickedTestTitlesJson(prefs[keyLoginTestPickTitles].orEmpty())
+            }
         } ?: flowOf(emptyList())
 
     fun rememberTestOpened(testName: String) {
@@ -664,6 +697,98 @@ object AppPreferencesRepository {
         return raw.takeIf { it.isNotBlank() }
     }
 
+    private fun cachedNewsFeedKey(feedKind: String): Preferences.Key<String> = when (feedKind.lowercase(Locale.US)) {
+        "job" -> keyCachedNewsFeedJobJson
+        "exam" -> keyCachedNewsFeedExamJson
+        else -> keyCachedNewsFeedAllJson
+    }
+
+    /** Persist last successful API news list for [feedKind] (all / job / exam). */
+    suspend fun saveCachedNewsFeedNow(feedKind: String, json: String) {
+        if (!::appContext.isInitialized) return
+        if (json.isBlank()) return
+        val key = cachedNewsFeedKey(feedKind)
+        runCatching {
+            store().edit { prefs ->
+                prefs[key] = json
+            }
+        }.onFailure { Log.e(TAG, "saveCachedNewsFeedNow failed", it) }
+    }
+
+    suspend fun peekCachedNewsFeed(feedKind: String): String? {
+        if (!::appContext.isInitialized) return null
+        val key = cachedNewsFeedKey(feedKind)
+        val raw = runCatching { store().data.first()[key].orEmpty().trim() }.getOrDefault("")
+        return raw.takeIf { it.isNotBlank() }
+    }
+
+    /** JSON blob: last resolved test cards by normalized title (LRU, for Start Test preview cold start). */
+    private val keyCachedTestCardsBlob = stringPreferencesKey("cached_test_cards_blob_v1")
+
+    suspend fun saveCachedTestCardsBlobNow(json: String) {
+        if (!::appContext.isInitialized) return
+        if (json.isBlank()) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyCachedTestCardsBlob] = json
+            }
+        }.onFailure { Log.e(TAG, "saveCachedTestCardsBlobNow failed", it) }
+    }
+
+    suspend fun peekCachedTestCardsBlob(): String? {
+        if (!::appContext.isInitialized) return null
+        val raw = runCatching { store().data.first()[keyCachedTestCardsBlob].orEmpty().trim() }.getOrDefault("")
+        return raw.takeIf { it.isNotBlank() }
+    }
+
+    suspend fun saveCachedProfileMenuJsonNow(json: String) {
+        if (!::appContext.isInitialized) return
+        if (json.isBlank()) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyCachedProfileMenuJson] = json
+            }
+        }.onFailure { Log.e(TAG, "saveCachedProfileMenuJsonNow failed", it) }
+    }
+
+    suspend fun peekCachedProfileMenuJson(): String? {
+        if (!::appContext.isInitialized) return null
+        val raw = runCatching { store().data.first()[keyCachedProfileMenuJson].orEmpty().trim() }.getOrDefault("")
+        return raw.takeIf { it.isNotBlank() }
+    }
+
+    suspend fun saveCachedTestsListsBlobNow(json: String) {
+        if (!::appContext.isInitialized) return
+        if (json.isBlank()) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyCachedTestsListsBlob] = json
+            }
+        }.onFailure { Log.e(TAG, "saveCachedTestsListsBlobNow failed", it) }
+    }
+
+    suspend fun peekCachedTestsListsBlob(): String? {
+        if (!::appContext.isInitialized) return null
+        val raw = runCatching { store().data.first()[keyCachedTestsListsBlob].orEmpty().trim() }.getOrDefault("")
+        return raw.takeIf { it.isNotBlank() }
+    }
+
+    suspend fun saveCachedQuizQuestionsBlobNow(json: String) {
+        if (!::appContext.isInitialized) return
+        if (json.isBlank()) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyCachedQuizQuestionsBlob] = json
+            }
+        }.onFailure { Log.e(TAG, "saveCachedQuizQuestionsBlobNow failed", it) }
+    }
+
+    suspend fun peekCachedQuizQuestionsBlob(): String? {
+        if (!::appContext.isInitialized) return null
+        val raw = runCatching { store().data.first()[keyCachedQuizQuestionsBlob].orEmpty().trim() }.getOrDefault("")
+        return raw.takeIf { it.isNotBlank() }
+    }
+
     suspend fun saveInProgressQuizNow(state: InProgressQuizState) {
         if (!::appContext.isInitialized) return
         runCatching {
@@ -792,6 +917,22 @@ object AppPreferencesRepository {
                 }
             }
         }.getOrElse { emptyList() }
+    }
+
+    private fun parseLoginPickedTestTitlesJson(raw: String): List<String> {
+        if (raw.isBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            val seen = mutableSetOf<String>()
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val t = arr.optString(i).trim()
+                    if (t.isNotBlank() && seen.add(t.lowercase(Locale.US))) {
+                        add(t)
+                    }
+                }
+            }
+        }.getOrDefault(emptyList())
     }
 
     private fun encodeAppliedTestSeries(items: List<AppliedTestSeriesEntry>): String {
@@ -1026,8 +1167,40 @@ object AppPreferencesRepository {
                 prefs[keySeenPollIdsOwner] = ""
                 prefs[keyVotedPollIdsOwner] = ""
                 prefs[keyAccountCreatedAtIso] = ""
+                prefs[keyLoginTestPickDone] = 0
+                prefs[keyLoginTestPickTitles] = "[]"
             }
         }.onFailure { Log.e(TAG, "clearAuthSessionPrefs failed", it) }
+    }
+
+    /** True until the user submits the post-login test picker (once per session after install / logout). */
+    suspend fun shouldShowLoginTestPicker(): Boolean {
+        if (!::appContext.isInitialized) return false
+        return runCatching {
+            val prefs = store().data.first()
+            (prefs[keyLoginTestPickDone] ?: 0) != 1
+        }.getOrDefault(false)
+    }
+
+    suspend fun saveLoginTestPick(selectedTitles: List<String>): Boolean {
+        if (!::appContext.isInitialized) return false
+        val arr = JSONArray()
+        selectedTitles.map { it.trim() }.filter { it.isNotBlank() }.distinct().forEach { arr.put(it) }
+        return runCatching {
+            store().edit { prefs ->
+                prefs[keyLoginTestPickTitles] = arr.toString()
+                prefs[keyLoginTestPickDone] = 1
+            }
+            true
+        }.onFailure { Log.e(TAG, "saveLoginTestPick failed", it) }
+            .getOrDefault(false)
+    }
+
+    suspend fun peekLoginPickedTestTitles(): List<String> {
+        if (!::appContext.isInitialized) return emptyList()
+        val prefs = runCatching { store().data.first() }.getOrNull() ?: return emptyList()
+        if ((prefs[keyLoginTestPickDone] ?: 0) != 1) return emptyList()
+        return parseLoginPickedTestTitlesJson(prefs[keyLoginTestPickTitles].orEmpty())
     }
 
     suspend fun setAuthBootstrapState(status: RestoreSessionStatus) {

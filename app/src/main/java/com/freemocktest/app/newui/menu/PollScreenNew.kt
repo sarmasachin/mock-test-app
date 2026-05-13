@@ -23,6 +23,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
@@ -30,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +50,7 @@ import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 private val PollOptionFillPalette: List<Color> = listOf(
@@ -80,6 +84,9 @@ private fun pollSortedOptionIndices(
     )
 }
 
+private const val POLLS_LOAD_ERROR_MESSAGE =
+    "Couldn't load polls. Check your connection and try again."
+
 @Composable
 fun PollScreenNew(
     onBack: () -> Unit,
@@ -87,31 +94,49 @@ fun PollScreenNew(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     var polls by remember { mutableStateOf<List<ContentRepository.PollItemRemote>>(emptyList()) }
-    var selected by remember { mutableStateOf(0) }
+    var selected by remember { mutableIntStateOf(0) }
     val voted = remember { mutableStateMapOf<String, Set<Int>>() }
     val pollResultCounts = remember { mutableStateMapOf<String, List<Int>>() }
     val pollSubmitted = remember { mutableStateMapOf<String, Boolean>() }
     var loadingPolls by remember { mutableStateOf(true) }
+    var pollsLoadFailed by remember { mutableStateOf(false) }
+    var pollListReloadKey by remember { mutableIntStateOf(0) }
     var submitMessage by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(pollListReloadKey) {
         loadingPolls = true
-        val rows = runCatching { ContentRepository.loadPollItems() }.getOrDefault(emptyList())
-        polls = rows
-        AppPreferencesRepository.markPollsSeen(rows.map { it.id })
-        loadingPolls = false
+        pollsLoadFailed = false
+        try {
+            val loadResult = runCatching { ContentRepository.loadPollItems() }
+            val rows = loadResult.getOrElse { emptyList() }
+            pollsLoadFailed = loadResult.isFailure
+            polls = rows
+            if (rows.isNotEmpty()) {
+                selected = selected.coerceIn(0, rows.lastIndex)
+            }
+            runCatching { AppPreferencesRepository.markPollsSeen(rows.map { it.id }) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            polls = emptyList()
+            pollsLoadFailed = true
+        } finally {
+            loadingPolls = false
+        }
     }
 
     val active = polls.getOrNull(selected)
-    LaunchedEffect(active?.id) {
+    LaunchedEffect(active?.id, pollListReloadKey) {
         val current = active ?: return@LaunchedEffect
-        val status = ContentRepository.loadPollVoteStatus(current.id) ?: return@LaunchedEffect
-        if (status.hasVoted) {
-            voted[current.id] = status.optionIndexes.toSet()
-            pollResultCounts[current.id] = status.counts
-            pollSubmitted[current.id] = true
+        runCatching {
+            val status = ContentRepository.loadPollVoteStatus(current.id) ?: return@runCatching
+            if (status.hasVoted) {
+                voted[current.id] = status.optionIndexes.toSet()
+                pollResultCounts[current.id] = status.counts
+                pollSubmitted[current.id] = true
+            }
         }
     }
 
@@ -149,6 +174,40 @@ fun PollScreenNew(
                         .padding(14.dp),
                 ) {
                     Text("Loading poll...", color = p.textSecondary, fontSize = 14.sp)
+                }
+                return@Column
+            }
+
+            if (pollsLoadFailed && polls.isEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            text = POLLS_LOAD_ERROR_MESSAGE,
+                            color = p.textPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Button(
+                            onClick = { pollListReloadKey += 1 },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.primaryButton,
+                                contentColor = p.onPrimaryButton,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Retry", fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
                 return@Column
             }
@@ -305,14 +364,19 @@ fun PollScreenNew(
                                 scope.launch {
                                     submitting = true
                                     submitMessage = null
-                                    val result = ContentRepository.submitPollVote(active.id, currentVotes.toList())
-                                    if (result?.ok == true) {
-                                        pollResultCounts[active.id] = result.counts
-                                        pollSubmitted[active.id] = true
-                                        AppPreferencesRepository.markPollVoted(active.id)
-                                        submitMessage = "Vote submitted successfully."
-                                    } else {
-                                        submitMessage = "Failed to submit vote."
+                                    runCatching {
+                                        val result = ContentRepository.submitPollVote(active.id, currentVotes.toList())
+                                        if (result?.ok == true) {
+                                            pollResultCounts[active.id] = result.counts
+                                            pollSubmitted[active.id] = true
+                                            AppPreferencesRepository.markPollVoted(active.id)
+                                            submitMessage = "Vote submitted successfully."
+                                        } else {
+                                            submitMessage = "Failed to submit vote."
+                                        }
+                                    }.onFailure {
+                                        submitMessage =
+                                            "Failed to submit vote. Check your connection and try again."
                                     }
                                     submitting = false
                                 }

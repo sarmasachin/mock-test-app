@@ -31,16 +31,17 @@ router.get('/', async (req, res) => {
   const limit = Math.min(Math.max(parseInt(String(req.query.limit || '30'), 10) || 30, 1), 100);
   const offset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
   try {
+    // Sort by updated_at so admin edits surface at the top (trigger maintains updated_at on PATCH).
     const queryText = isAllKinds
       ? `SELECT id, feed_kind, external_id, headline, summary, category, body, link_url, feature_image_url, published_at
          FROM news_articles
          WHERE is_published = true
-         ORDER BY published_at DESC
+         ORDER BY updated_at DESC
          LIMIT $1 OFFSET $2`
       : `SELECT id, feed_kind, external_id, headline, summary, category, body, link_url, feature_image_url, published_at
          FROM news_articles
          WHERE is_published = true AND feed_kind = $1
-         ORDER BY published_at DESC
+         ORDER BY updated_at DESC
          LIMIT $2 OFFSET $3`;
     const queryParams = isAllKinds ? [limit, offset] : [kind, limit, offset];
     const { rows } = await pool.query(queryText, queryParams);

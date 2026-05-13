@@ -21,6 +21,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -30,8 +32,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -46,7 +48,14 @@ import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+
+private const val ANSWER_KEY_META_LOAD_ERROR_MESSAGE =
+    "Couldn't load unlock schedule. Check your connection and try again."
+
+private const val ANSWER_KEY_QUESTIONS_LOAD_ERROR_MESSAGE =
+    "Couldn't load answer key. Check your connection and try again."
 
 @Composable
 fun AnswerKeyScreenNew(
@@ -59,10 +68,26 @@ fun AnswerKeyScreenNew(
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var answerKeyReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
     var resultReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
-    LaunchedEffect(testName) {
-        val snapshot = ContentRepository.loadTestByTitle(testName)
-        answerKeyReleaseAtMs = parseIsoMillis(snapshot?.answerKeyReleaseAt)
-        resultReleaseAtMs = parseIsoMillis(snapshot?.resultReleaseAt)
+    var metaLoadFailed by remember(testName) { mutableStateOf(false) }
+    var answerKeyReloadKey by remember(testName) { mutableIntStateOf(0) }
+
+    var items by remember(testName) { mutableStateOf<List<AnswerKeyItem>>(emptyList()) }
+    var questionsLoading by remember(testName) { mutableStateOf(false) }
+    var questionsLoadFailed by remember(testName) { mutableStateOf(false) }
+
+    LaunchedEffect(testName, answerKeyReloadKey) {
+        runCatching { ContentRepository.loadTestByTitle(testName) }.fold(
+            onSuccess = { snapshot ->
+                metaLoadFailed = false
+                answerKeyReleaseAtMs = parseIsoMillis(snapshot?.answerKeyReleaseAt)
+                resultReleaseAtMs = parseIsoMillis(snapshot?.resultReleaseAt)
+            },
+            onFailure = {
+                metaLoadFailed = true
+                answerKeyReleaseAtMs = null
+                resultReleaseAtMs = null
+            },
+        )
     }
     LaunchedEffect(Unit) {
         while (true) {
@@ -73,6 +98,35 @@ fun AnswerKeyScreenNew(
     val effectiveUnlockAtMs = maxOf(answerKeyReleaseAtMs ?: 0L, resultReleaseAtMs ?: 0L)
     val isLocked = effectiveUnlockAtMs > nowMs
     val countdown = formatCountdown(effectiveUnlockAtMs - nowMs)
+
+    LaunchedEffect(testName, answerKeyReloadKey, isLocked) {
+        if (isLocked) {
+            items = emptyList()
+            questionsLoading = false
+            questionsLoadFailed = false
+            return@LaunchedEffect
+        }
+        questionsLoading = true
+        questionsLoadFailed = false
+        try {
+            val result = runCatching { ContentRepository.loadQuizQuestionsForTest(testName) }
+            items = result.getOrElse { emptyList() }.mapIndexed { index, q ->
+                AnswerKeyItem(
+                    label = "Q${index + 1}",
+                    title = q.title,
+                    correctAnswer = q.options.getOrNull(q.correctIndex).orEmpty().ifBlank { "Not available" },
+                )
+            }
+            questionsLoadFailed = result.isFailure
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            items = emptyList()
+            questionsLoadFailed = true
+        } finally {
+            questionsLoading = false
+        }
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -134,17 +188,118 @@ fun AnswerKeyScreenNew(
                         )
                     }
                 }
+                if (metaLoadFailed) {
+                    Spacer(Modifier.height(12.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = p.surfaceElevated),
+                        border = BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Text(
+                                text = ANSWER_KEY_META_LOAD_ERROR_MESSAGE,
+                                color = p.textPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Button(
+                                onClick = { answerKeyReloadKey += 1 },
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = p.primaryButton,
+                                    contentColor = p.onPrimaryButton,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Retry", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
                 return@Scaffold
             }
 
-            val items by produceState(initialValue = emptyList<AnswerKeyItem>(), key1 = testName) {
-                value = ContentRepository.loadQuizQuestionsForTest(testName).mapIndexed { index, q ->
-                    AnswerKeyItem(
-                        label = "Q${index + 1}",
-                        title = q.title,
-                        correctAnswer = q.options.getOrNull(q.correctIndex).orEmpty().ifBlank { "Not available" },
-                    )
+            if (metaLoadFailed) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surfaceElevated),
+                    border = BorderStroke(1.dp, p.border.copy(alpha = 0.16f)),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text(
+                            text = ANSWER_KEY_META_LOAD_ERROR_MESSAGE,
+                            color = p.textSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Button(
+                            onClick = { answerKeyReloadKey += 1 },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.primaryButton,
+                                contentColor = p.onPrimaryButton,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Retry", fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
+                Spacer(Modifier.height(12.dp))
+            }
+
+            if (questionsLoading) {
+                Text(
+                    text = "Loading answer key…",
+                    color = p.textSecondary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                return@Scaffold
+            }
+
+            if (questionsLoadFailed) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surface),
+                    border = BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            text = ANSWER_KEY_QUESTIONS_LOAD_ERROR_MESSAGE,
+                            color = p.textPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                        )
+                        Button(
+                            onClick = { answerKeyReloadKey += 1 },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.primaryButton,
+                                contentColor = p.onPrimaryButton,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Retry", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                return@Scaffold
             }
 
             if (items.isEmpty()) {

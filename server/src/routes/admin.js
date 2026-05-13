@@ -3213,7 +3213,7 @@ router.get('/articles', async (req, res) => {
       `SELECT id, feed_kind, headline, summary, category, body, link_url, feature_image_url, published_at, is_published
        FROM news_articles
        ${whereSql}
-       ORDER BY published_at DESC
+       ORDER BY updated_at DESC
        LIMIT ${limitPlaceholder}`,
       params,
     );

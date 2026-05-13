@@ -3,6 +3,7 @@ package com.freemocktest.app.newui.instructions
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -42,6 +44,10 @@ import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
+import kotlinx.coroutines.CancellationException
+
+private const val INSTRUCTIONS_SNAPSHOT_LOAD_ERROR_MESSAGE =
+    "Couldn't load test details. Check your connection and try again."
 
 @Composable
 fun InstructionsScreenNew(
@@ -56,7 +62,7 @@ fun InstructionsScreenNew(
     var cardTitle by remember { mutableStateOf("Please read carefully") }
     var startButtonLabel by remember { mutableStateOf("Start Test") }
     LaunchedEffect(testName) {
-        AppPreferencesRepository.rememberTestOpened(testName)
+        runCatching { AppPreferencesRepository.rememberTestOpened(testName) }
     }
     var info by remember(testName) {
         mutableStateOf(
@@ -71,20 +77,34 @@ fun InstructionsScreenNew(
     var testSnapshot by remember(testName) { mutableStateOf<com.freemocktest.app.newui.tests.TestCardNew?>(null) }
     var showMoreDetails by remember(testName) { mutableStateOf(false) }
     var isSnapshotLoading by remember(testName) { mutableStateOf(true) }
+    var snapshotLoadFailed by remember(testName) { mutableStateOf(false) }
+    var snapshotReloadKey by remember(testName) { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
-        val remote = ContentRepository.loadInstructionContent() ?: return@LaunchedEffect
-        pageTitle = remote.pageTitle?.ifBlank { pageTitle } ?: pageTitle
-        cardTitle = remote.cardTitle?.ifBlank { cardTitle } ?: cardTitle
-        startButtonLabel = remote.startButtonLabel?.ifBlank { startButtonLabel } ?: startButtonLabel
-        if (remote.items.isNotEmpty()) {
-            info = remote.items
+        runCatching { ContentRepository.loadInstructionContent() }.getOrNull()?.let { remote ->
+            pageTitle = remote.pageTitle?.ifBlank { pageTitle } ?: pageTitle
+            cardTitle = remote.cardTitle?.ifBlank { cardTitle } ?: cardTitle
+            startButtonLabel = remote.startButtonLabel?.ifBlank { startButtonLabel } ?: startButtonLabel
+            if (remote.items.isNotEmpty()) {
+                info = remote.items
+            }
         }
     }
-    LaunchedEffect(testName) {
+    LaunchedEffect(testName, snapshotReloadKey) {
         isSnapshotLoading = true
-        testSnapshot = ContentRepository.loadTestByTitle(testName)
-        isSnapshotLoading = false
+        snapshotLoadFailed = false
+        try {
+            val result = runCatching { ContentRepository.loadTestByTitle(testName) }
+            testSnapshot = result.getOrNull()
+            snapshotLoadFailed = result.isFailure
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            testSnapshot = null
+            snapshotLoadFailed = true
+        } finally {
+            isSnapshotLoading = false
+        }
     }
 
     Scaffold(
@@ -157,6 +177,40 @@ fun InstructionsScreenNew(
                     fontWeight = FontWeight.Medium,
                 )
                 Spacer(Modifier.height(10.dp))
+            } else if (snapshotLoadFailed) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .border(1.dp, p.border.copy(alpha = 0.18f), RoundedCornerShape(16.dp)),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surfaceElevated),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            text = INSTRUCTIONS_SNAPSHOT_LOAD_ERROR_MESSAGE,
+                            color = p.textPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Button(
+                            onClick = { snapshotReloadKey += 1 },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.primaryButton,
+                                contentColor = p.onPrimaryButton,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Retry", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
             }
 
             testSnapshot?.let { snapshot ->

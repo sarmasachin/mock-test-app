@@ -7,10 +7,15 @@ import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
+import android.os.Build
 import android.view.MotionEvent
 import android.widget.Toast
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
@@ -43,6 +48,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,8 +57,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -272,6 +279,52 @@ private fun ToolComingSoonCard(
 }
 
 @Composable
+private fun PdfToolStatusCard(
+    modifier: Modifier = Modifier,
+    title: String,
+    message: String,
+    primaryActionLabel: String,
+    onPrimaryAction: () -> Unit,
+) {
+    val p = mockTestPalette()
+    val shape = RoundedCornerShape(22.dp)
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(p.surface)
+            .border(1.dp, p.border.copy(alpha = 0.16f), shape)
+            .padding(22.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text = title,
+            color = p.textPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = message,
+            color = p.textSecondary,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = onPrimaryAction,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = p.primaryButton,
+                contentColor = p.onPrimaryButton,
+            ),
+        ) {
+            Text(primaryActionLabel)
+        }
+    }
+}
+
+@Composable
 private fun PdfToolWebViewCard(
     modifier: Modifier = Modifier,
     context: Context,
@@ -280,9 +333,15 @@ private fun PdfToolWebViewCard(
 ) {
     val p = mockTestPalette()
     val shape = RoundedCornerShape(22.dp)
+    var networkRecheckKey by remember { mutableIntStateOf(0) }
+    val isOnline = remember(networkRecheckKey) { isNetworkAvailable(context) }
+
     var isLoading by remember { mutableStateOf(true) }
+    var loadFailed by remember { mutableStateOf(false) }
     var lastTouchY by remember { mutableStateOf(0f) }
     var filePathCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+    var webViewHolder by remember { mutableStateOf<WebView?>(null) }
+
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult(),
     ) { result ->
@@ -297,11 +356,22 @@ private fun PdfToolWebViewCard(
         }
         callback.onReceiveValue(uris)
     }
-    if (!isNetworkAvailable(context)) {
-        LaunchedEffect(Unit) {
-            Toast.makeText(context, "Internet required to open PDF Tool", Toast.LENGTH_SHORT).show()
+
+    if (!isOnline) {
+        DisposableEffect(Unit) {
+            onDispose {
+                filePathCallback?.onReceiveValue(null)
+                filePathCallback = null
+                onWebViewReady(null)
+            }
         }
-        ToolComingSoonCard(toolName = "PDF Tools")
+        PdfToolStatusCard(
+            modifier = modifier,
+            title = "PDF Tools",
+            message = "Internet is required to use this tool.",
+            primaryActionLabel = "Check connection",
+            onPrimaryAction = { networkRecheckKey++ },
+        )
         return
     }
 
@@ -349,17 +419,67 @@ private fun PdfToolWebViewCard(
                     }
                     webViewClient = object : WebViewClient() {
                         override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                            loadFailed = false
                             isLoading = true
                         }
 
                         override fun onPageFinished(view: WebView?, url: String?) {
-                            isLoading = false
+                            if (!loadFailed) {
+                                isLoading = false
+                            }
+                        }
+
+                        override fun onReceivedHttpError(
+                            view: WebView?,
+                            request: WebResourceRequest?,
+                            errorResponse: WebResourceResponse?,
+                        ) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                                request?.isForMainFrame == true &&
+                                (errorResponse?.statusCode ?: 0) >= 400
+                            ) {
+                                isLoading = false
+                                loadFailed = true
+                            }
+                        }
+
+                        override fun onReceivedError(
+                            view: WebView?,
+                            request: WebResourceRequest?,
+                            error: WebResourceError?,
+                        ) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && request?.isForMainFrame == true) {
+                                isLoading = false
+                                loadFailed = true
+                            }
+                        }
+
+                        @Suppress("DEPRECATION")
+                        override fun onReceivedError(
+                            view: WebView?,
+                            errorCode: Int,
+                            description: String?,
+                            failingUrl: String?,
+                        ) {
+                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                                isLoading = false
+                                loadFailed = true
+                            }
+                        }
+
+                        override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                isLoading = false
+                                loadFailed = true
+                                return true
+                            }
+                            return super.onRenderProcessGone(view, detail)
                         }
                     }
                     setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
                         when {
-                            scrollY < oldScrollY -> onScrollDirectionChanged(true)  // scrolling up
-                            scrollY > oldScrollY -> onScrollDirectionChanged(false) // scrolling down
+                            scrollY < oldScrollY -> onScrollDirectionChanged(true)
+                            scrollY > oldScrollY -> onScrollDirectionChanged(false)
                         }
                     }
                     setOnTouchListener { _, event ->
@@ -370,7 +490,6 @@ private fun PdfToolWebViewCard(
                             MotionEvent.ACTION_MOVE -> {
                                 val dy = event.y - lastTouchY
                                 if (abs(dy) > 6f) {
-                                    // Finger moves up -> content scrolls down -> hide header.
                                     onScrollDirectionChanged(dy > 0f)
                                     lastTouchY = event.y
                                 }
@@ -378,13 +497,17 @@ private fun PdfToolWebViewCard(
                         }
                         false
                     }
-                    loadUrl(PdfToolUrl)
+                    webViewHolder = this
                     onWebViewReady(this)
+                    runCatching { loadUrl(PdfToolUrl) }.onFailure {
+                        isLoading = false
+                        loadFailed = true
+                    }
                 }
             },
             update = { onWebViewReady(it) },
         )
-        if (isLoading) {
+        if (isLoading && !loadFailed) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -394,20 +517,81 @@ private fun PdfToolWebViewCard(
                 CircularProgressIndicator(color = p.accent)
             }
         }
+        if (loadFailed) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(p.surface.copy(alpha = 0.96f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(horizontal = 22.dp),
+                ) {
+                    Text(
+                        text = "Couldn't load PDF Tools",
+                        color = p.textPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Check your connection and try again.",
+                        color = p.textSecondary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Button(
+                        onClick = {
+                            if (!isNetworkAvailable(context)) {
+                                Toast.makeText(
+                                    context,
+                                    "Internet required to open PDF Tool",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                return@Button
+                            }
+                            loadFailed = false
+                            isLoading = true
+                            val w = webViewHolder
+                            if (w != null) {
+                                runCatching { w.reload() }.onFailure {
+                                    isLoading = false
+                                    loadFailed = true
+                                }
+                            } else {
+                                isLoading = false
+                                loadFailed = true
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = p.primaryButton,
+                            contentColor = p.onPrimaryButton,
+                        ),
+                    ) {
+                        Text("Try again")
+                    }
+                }
+            }
+        }
     }
     DisposableEffect(Unit) {
         onDispose {
             filePathCallback?.onReceiveValue(null)
             filePathCallback = null
+            webViewHolder = null
             onWebViewReady(null)
         }
     }
 }
 
 private fun isNetworkAvailable(context: Context): Boolean {
-    val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        ?: return false
-    val network = manager.activeNetwork ?: return false
-    val capabilities = manager.getNetworkCapabilities(network) ?: return false
-    return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    return runCatching {
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return@runCatching false
+        val network = manager.activeNetwork ?: return@runCatching false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return@runCatching false
+        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }.getOrDefault(false)
 }

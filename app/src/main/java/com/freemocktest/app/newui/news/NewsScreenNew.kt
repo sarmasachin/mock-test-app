@@ -28,12 +28,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.freemocktest.app.data.ContentRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.supervisorScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -57,6 +59,9 @@ import com.freemocktest.app.newui.theme.palette.mockTestPalette
 
 const val NewsFeedImageSeedPrefix = "mocktest_news"
 
+private const val NEWS_LOAD_ERROR_MESSAGE =
+    "Couldn't load news. Check your connection and try again."
+
 @Composable
 fun NewsScreenNew(
     modifier: Modifier = Modifier,
@@ -67,20 +72,54 @@ fun NewsScreenNew(
     var newsMenuCategories by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedCategory by remember { mutableStateOf<String?>(null) }
     var feedLoading by remember { mutableStateOf(true) }
-    LaunchedEffect(Unit) {
-        feedLoading = true
+    var feedLoadFailed by remember { mutableStateOf(false) }
+    var newsFeedReloadKey by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(newsFeedReloadKey) {
+        feedLoadFailed = false
         try {
-            coroutineScope {
-                val feedDeferred = async { ContentRepository.loadNewsFeed("all") }
-                val menuDeferred = async {
-                    ContentRepository.loadHomeContent()
-                        ?.newsCategoryMenu
-                        ?.filter { it.isNotBlank() }
-                        .orEmpty()
-                        .distinctBy { it.lowercase() }
+            runCatching { ContentRepository.loadCachedHomeContent() }.getOrNull()?.let { cachedHome ->
+                val menu = cachedHome.newsCategoryMenu
+                    .filter { it.isNotBlank() }
+                    .distinctBy { it.lowercase() }
+                if (menu.isNotEmpty()) {
+                    newsMenuCategories = menu
                 }
-                articles = feedDeferred.await()
-                newsMenuCategories = menuDeferred.await()
+            }
+            val cachedArticles = runCatching { ContentRepository.loadCachedNewsFeed("all") }.getOrDefault(emptyList())
+            if (cachedArticles.isNotEmpty()) {
+                articles = cachedArticles
+            }
+            val hadArticlesFromCache = cachedArticles.isNotEmpty()
+            feedLoading = !hadArticlesFromCache
+            supervisorScope {
+                val feedDeferred = async { runCatching { ContentRepository.loadNewsFeed("all") } }
+                val menuDeferred = async { runCatching { ContentRepository.loadHomeContent() } }
+                val feedOutcome = feedDeferred.await()
+                val menuOutcome = menuDeferred.await()
+                articles = if (feedOutcome.isSuccess) {
+                    feedOutcome.getOrNull() ?: emptyList()
+                } else if (hadArticlesFromCache) {
+                    articles
+                } else {
+                    emptyList()
+                }
+                val netMenu = menuOutcome.getOrNull()
+                    ?.newsCategoryMenu
+                    ?.filter { it.isNotBlank() }
+                    .orEmpty()
+                    .distinctBy { it.lowercase() }
+                if (netMenu.isNotEmpty()) {
+                    newsMenuCategories = netMenu
+                }
+                feedLoadFailed = feedOutcome.isFailure && articles.isEmpty()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            if (articles.isEmpty()) {
+                newsMenuCategories = emptyList()
+                feedLoadFailed = true
             }
         } finally {
             feedLoading = false
@@ -107,13 +146,16 @@ fun NewsScreenNew(
         feedIcon = Icons.Rounded.Newspaper,
         items = visibleArticles,
         imageSeedPrefix = NewsFeedImageSeedPrefix,
-        loading = feedLoading && articles.isEmpty(),
+        loading = feedLoading && articles.isEmpty() && !feedLoadFailed,
         onBack = onBack,
         onOpenItem = onOpenArticle,
         categoryMenu = menuCategories,
         selectedCategory = selectedCategory,
         onSelectCategory = { selectedCategory = it },
         modifier = modifier,
+        loadFailed = feedLoadFailed,
+        loadFailedMessage = NEWS_LOAD_ERROR_MESSAGE,
+        onRetryLoad = { newsFeedReloadKey += 1 },
     )
 }
 

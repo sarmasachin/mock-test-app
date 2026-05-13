@@ -48,6 +48,7 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.map
 
 private data class DynamicProfileMenuItem(
@@ -149,26 +150,52 @@ fun ProfileScreenNew(
     val profileLive by remember { AppPreferencesRepository.editableProfile.map { it as AppPreferencesRepository.EditableProfileState? } }
         .collectAsState(initial = null)
     var profileStable by remember { mutableStateOf<AppPreferencesRepository.EditableProfileState?>(null) }
-    LaunchedEffect(profileLive) {
-        if (profileLive != null) profileStable = profileLive
-    }
     var menuItems by remember { mutableStateOf(defaultDynamicProfileMenuItems()) }
 
     LaunchedEffect(Unit) {
-        val remote = ContentRepository.loadProfileMenuItems()
-        if (remote.isNotEmpty()) {
-            val mapped =
-                remote.map {
-                    DynamicProfileMenuItem(
-                        id = it.id,
-                        title = it.title,
-                        subtitle = it.subtitle,
-                        path = it.path,
-                        enabled = it.enabled,
+        try {
+            profileStable = AppPreferencesRepository.peekEditableProfileNow()
+            val cachedMenu = runCatching { ContentRepository.loadCachedProfileMenuItems() }.getOrDefault(emptyList())
+            if (cachedMenu.isNotEmpty()) {
+                menuItems = mergeRemoteMenuWithDobIfMissing(
+                    cachedMenu.map {
+                        DynamicProfileMenuItem(
+                            id = it.id,
+                            title = it.title,
+                            subtitle = it.subtitle,
+                            path = it.path,
+                            enabled = it.enabled,
+                        )
+                    },
+                )
+            }
+            val remote = runCatching { ContentRepository.loadProfileMenuItems(forceRefresh = true) }.getOrDefault(emptyList())
+            when {
+                remote.isNotEmpty() -> {
+                    menuItems = mergeRemoteMenuWithDobIfMissing(
+                        remote.map {
+                            DynamicProfileMenuItem(
+                                id = it.id,
+                                title = it.title,
+                                subtitle = it.subtitle,
+                                path = it.path,
+                                enabled = it.enabled,
+                            )
+                        },
                     )
                 }
-            menuItems = mergeRemoteMenuWithDobIfMissing(mapped)
+                cachedMenu.isEmpty() -> {
+                    menuItems = defaultDynamicProfileMenuItems()
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Keep peeked profile + any menu already applied from cache/defaults.
         }
+    }
+    LaunchedEffect(profileLive) {
+        if (profileLive != null) profileStable = profileLive
     }
 
     Column(

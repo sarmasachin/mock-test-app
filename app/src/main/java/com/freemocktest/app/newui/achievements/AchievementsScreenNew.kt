@@ -20,6 +20,8 @@ import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -30,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -46,6 +49,7 @@ import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.remote.RetrofitProvider
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -57,6 +61,9 @@ private data class Badge(
     val icon: ImageVector,
 )
 
+private const val ACHIEVEMENTS_INTRO_LOAD_ERROR_MESSAGE =
+    "Couldn't load announcement from the server. Check your connection and try again."
+
 @Composable
 fun AchievementsScreenNew(
     modifier: Modifier = Modifier,
@@ -67,19 +74,38 @@ fun AchievementsScreenNew(
     val streak by AppPreferencesRepository.streakDays.collectAsState(initial = 0)
 
     var adminIntro by remember { mutableStateOf<Pair<String?, String>?>(null) }
-    LaunchedEffect(Unit) {
-        adminIntro = withContext(Dispatchers.IO) {
-            try {
-                val ac = RetrofitProvider.publicApi.getHomeContent().achievementContent
+    var introLoading by remember { mutableStateOf(true) }
+    var introLoadFailed by remember { mutableStateOf(false) }
+    var introReloadKey by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(introReloadKey) {
+        introLoading = true
+        introLoadFailed = false
+        try {
+            val loaded = withContext(Dispatchers.IO) {
+                runCatching { RetrofitProvider.publicApi.getHomeContent().achievementContent }
+            }
+            if (loaded.isFailure) {
+                adminIntro = null
+                introLoadFailed = true
+            } else {
+                val ac = loaded.getOrNull()
                 val body = ac?.body?.trim().orEmpty()
                 if (body.isBlank()) {
-                    null
+                    adminIntro = null
+                    introLoadFailed = false
                 } else {
-                    Pair(ac?.title?.trim()?.takeIf { it.isNotBlank() }, body)
+                    adminIntro = Pair(ac?.title?.trim()?.takeIf { it.isNotBlank() }, body)
+                    introLoadFailed = false
                 }
-            } catch (_: Exception) {
-                null
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            adminIntro = null
+            introLoadFailed = true
+        } finally {
+            introLoading = false
         }
     }
 
@@ -151,6 +177,47 @@ fun AchievementsScreenNew(
                 fontSize = 13.sp,
             )
             Spacer(Modifier.height(14.dp))
+
+            if (introLoading) {
+                Text(
+                    text = "Loading announcement…",
+                    color = p.textSecondary,
+                    fontSize = 13.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+            } else if (introLoadFailed) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            text = ACHIEVEMENTS_INTRO_LOAD_ERROR_MESSAGE,
+                            color = p.textPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Button(
+                            onClick = { introReloadKey += 1 },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.primaryButton,
+                                contentColor = p.onPrimaryButton,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Retry", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+            }
 
             adminIntro?.let { (heading, bodyText) ->
                 Card(

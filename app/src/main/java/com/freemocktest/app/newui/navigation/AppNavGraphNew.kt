@@ -3,7 +3,9 @@ package com.freemocktest.app.newui.navigation
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -13,8 +15,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.data.RestoreSessionStatus
 import androidx.navigation.compose.NavHost
@@ -22,13 +26,18 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.freemocktest.app.newui.auth.AuthRouteNew
 import com.freemocktest.app.newui.auth.CompleteProfileScreenNew
+import com.freemocktest.app.newui.auth.SelectLoginTestsScreenNew
 import com.freemocktest.app.newui.auth.ForgotPasswordScreenNew
 import com.freemocktest.app.newui.legal.TermsOfServiceScreenNew
+import com.freemocktest.app.newui.components.NetworkConnectivityBanner
 import com.freemocktest.app.notifications.PushNavigationBridge
+import kotlinx.coroutines.launch
 
 internal object RoutesNew {
     const val BOOTSTRAP = "bootstrap"
     const val AUTH = "auth"
+    /** One-time test multi-select after login / restored session. */
+    const val SELECT_LOGIN_TESTS = "select_login_tests"
     const val HOME = "home"
     const val CATEGORY = "category"
     const val TESTS = "tests"
@@ -75,13 +84,18 @@ fun AppNavGraphNew() {
         if (!pendingNavigateToHome) return@LaunchedEffect
         // Never clear the flag before navigate(): setting false changes this effect's key and can
         // cancel this coroutine before navigate() runs — that looked like "app closes on login".
+        val dest = if (AppPreferencesRepository.shouldShowLoginTestPicker()) {
+            RoutesNew.SELECT_LOGIN_TESTS
+        } else {
+            RoutesNew.HOME
+        }
         runCatching {
-            navController.navigate(RoutesNew.HOME) {
+            navController.navigate(dest) {
                 popUpTo(RoutesNew.AUTH) { inclusive = true }
                 launchSingleTop = true
             }
         }.onFailure { e ->
-            Log.e("AppNav", "Auth -> Home navigation failed", e)
+            Log.e("AppNav", "Auth -> post-login navigation failed", e)
         }
         pendingNavigateToHome = false
     }
@@ -97,15 +111,18 @@ fun AppNavGraphNew() {
         PushNavigationBridge.consume()
     }
 
-    Box(
+    Column(
         Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
+        NetworkConnectivityBanner()
         NavHost(
             navController = navController,
             startDestination = RoutesNew.BOOTSTRAP,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .weight(1f, fill = true)
+                .fillMaxWidth(),
         ) {
         composable(RoutesNew.BOOTSTRAP) {
             Box(
@@ -117,7 +134,12 @@ fun AppNavGraphNew() {
             LaunchedEffect(Unit) {
                 when (AuthRepository.restoreSession()) {
                     RestoreSessionStatus.Ready -> {
-                        navController.navigate(RoutesNew.HOME) {
+                        val dest = if (AppPreferencesRepository.shouldShowLoginTestPicker()) {
+                            RoutesNew.SELECT_LOGIN_TESTS
+                        } else {
+                            RoutesNew.HOME
+                        }
+                        navController.navigate(dest) {
                             popUpTo(RoutesNew.BOOTSTRAP) { inclusive = true }
                             launchSingleTop = true
                         }
@@ -156,11 +178,19 @@ fun AppNavGraphNew() {
             )
         }
         composable(RoutesNew.COMPLETE_PROFILE) {
+            val scope = rememberCoroutineScope()
             CompleteProfileScreenNew(
                 onFinished = {
-                    navController.navigate(RoutesNew.HOME) {
-                        popUpTo(RoutesNew.COMPLETE_PROFILE) { inclusive = true }
-                        launchSingleTop = true
+                    scope.launch {
+                        val dest = if (AppPreferencesRepository.shouldShowLoginTestPicker()) {
+                            RoutesNew.SELECT_LOGIN_TESTS
+                        } else {
+                            RoutesNew.HOME
+                        }
+                        navController.navigate(dest) {
+                            popUpTo(RoutesNew.COMPLETE_PROFILE) { inclusive = true }
+                            launchSingleTop = true
+                        }
                     }
                 },
                 onSignOut = {
@@ -176,10 +206,21 @@ fun AppNavGraphNew() {
                 onBack = { navController.popBackStack() },
             )
         }
+        composable(RoutesNew.SELECT_LOGIN_TESTS) {
+            SelectLoginTestsScreenNew(
+                onFinished = {
+                    navController.navigate(RoutesNew.HOME) {
+                        popUpTo(RoutesNew.SELECT_LOGIN_TESTS) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+            )
+        }
         composable(RoutesNew.HOME) {
             MainBottomNavHost(rootNavController = navController)
         }
         }
     }
 }
+
 

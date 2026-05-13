@@ -45,7 +45,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,8 +63,8 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 @Composable
 fun StartTestPreviewScreenNew(
@@ -79,53 +78,77 @@ fun StartTestPreviewScreenNew(
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     var instructionItems by remember(testName) { mutableStateOf<List<String>>(emptyList()) }
     var instructionsLoaded by remember { mutableStateOf(false) }
-    var testSnapshot by remember(testName) { mutableStateOf<TestCardNew?>(null) }
     val appliedSnapshots = remember { mutableStateMapOf<String, TestCardNew?>() }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val appliedSeries by AppPreferencesRepository.appliedTestSeries.collectAsState(initial = emptyList())
+    val loginPickedTitles by AppPreferencesRepository.loginPickedTestTitles.collectAsState(initial = emptyList())
+    val pickedTitlesForApply = remember(loginPickedTitles) {
+        loginPickedTitles
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase(Locale.US) }
+    }
+    /**
+     * When home sends a generic title ("Test") but the user saved picks at login, load the first
+     * picked catalog title so Apply / Start match that selection. Specific route names are unchanged.
+     */
+    val effectiveTestName = remember(testName, pickedTitlesForApply) {
+        val route = testName.trim()
+        val routeGeneric = route.isBlank() || route.equals("Test", ignoreCase = true)
+        if (routeGeneric && pickedTitlesForApply.isNotEmpty()) {
+            pickedTitlesForApply.first()
+        } else {
+            route.ifBlank { "Test" }
+        }
+    }
+    var testSnapshot by remember(effectiveTestName) { mutableStateOf<TestCardNew?>(null) }
     /** True until the first `loadTestByTitle` settles so we can show a spinner instead of a dummy card. */
-    var primaryLoading by remember(testName) { mutableStateOf(true) }
-    /** Click guard so a slow navigation/double-tap cannot fire two transitions. Resets after 1.5s. */
-    var navInFlight by remember { mutableStateOf(false) }
-    /** Bumped by the Retry button to force `LaunchedEffect(testName, reloadKey)` to re-run. */
-    var reloadKey by remember(testName) { mutableStateOf(0) }
-    val scope = rememberCoroutineScope()
-
-    LaunchedEffect(testName, reloadKey) {
-        primaryLoading = true
+    var primaryLoading by remember(effectiveTestName) { mutableStateOf(true) }
+    /** Debounce rapid taps without toggling `enabled` (disabled styling was causing visible blink). */
+    var lastPrimaryNavAt by remember { mutableLongStateOf(0L) }
+    /** Bumped by the Retry button to force `LaunchedEffect(effectiveTestName, reloadKey)` to re-run. */
+    var reloadKey by remember(effectiveTestName) { mutableStateOf(0) }
+    LaunchedEffect(effectiveTestName, reloadKey) {
         try {
-            testSnapshot = ContentRepository.loadTestByTitle(testName)
-        } catch (_: Exception) {
-            // Swallow network/parse errors here; UI shows a Retry button when `testSnapshot == null`.
-            testSnapshot = null
+            val cached = runCatching { ContentRepository.loadCachedTestByTitle(effectiveTestName) }.getOrNull()
+            if (cached != null) {
+                testSnapshot = cached
+            }
+            primaryLoading = cached == null
+            testSnapshot = runCatching {
+                ContentRepository.loadTestByTitle(effectiveTestName, forceRefresh = true)
+            }.getOrNull() ?: testSnapshot
+        } catch (e: CancellationException) {
+            throw e
         } finally {
             primaryLoading = false
         }
     }
     LaunchedEffect(appliedSeries) {
-        val names = appliedSeries.map { it.testName.trim() }.filter { it.isNotBlank() }.distinct()
-        appliedSnapshots.keys.toList().forEach { existing ->
-            if (existing !in names) appliedSnapshots.remove(existing)
-        }
-        names.forEach { name ->
-            if (!appliedSnapshots.containsKey(name)) {
-                // Per-name try/catch so one failed fetch doesn't abort the whole loop.
-                // Network/parse errors fall back to a `null` snapshot (same shape as before),
-                // and the missing key will be retried whenever `appliedSeries` changes again.
-                appliedSnapshots[name] = try {
-                    ContentRepository.loadTestByTitle(name)
-                } catch (_: Exception) {
-                    null
+        try {
+            val names = appliedSeries.map { it.testName.trim() }.filter { it.isNotBlank() }.distinct()
+            appliedSnapshots.keys.toList().forEach { existing ->
+                if (existing !in names) appliedSnapshots.remove(existing)
+            }
+            names.forEach { name ->
+                if (!appliedSnapshots.containsKey(name)) {
+                    appliedSnapshots[name] = runCatching {
+                        ContentRepository.loadTestByTitle(name)
+                    }.getOrNull()
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         }
     }
     LaunchedEffect(Unit) {
         try {
-            val remote = ContentRepository.loadInstructionContent()
+            val remote = runCatching { ContentRepository.loadInstructionContent() }.getOrNull()
             if (remote != null && remote.items.isNotEmpty()) {
                 instructionItems = remote.items
             }
+        } catch (e: CancellationException) {
+            throw e
         } finally {
             instructionsLoaded = true
         }
@@ -138,7 +161,7 @@ fun StartTestPreviewScreenNew(
     }
 
     val test = testSnapshot ?: TestCardNew(
-        title = testName,
+        title = effectiveTestName,
         meta = "Test details are currently unavailable",
         examDate = null,
         durationLabel = null,
@@ -188,6 +211,28 @@ fun StartTestPreviewScreenNew(
                 )
             }
             Spacer(Modifier.height(12.dp))
+
+            if (pickedTitlesForApply.isNotEmpty()) {
+                val label = if (pickedTitlesForApply.size == 1) {
+                    "Your selected test"
+                } else {
+                    "Your selected tests"
+                }
+                Text(
+                    text = label,
+                    color = p.textPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = pickedTitlesForApply.joinToString(separator = " · "),
+                    color = p.textSecondary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(12.dp))
+            }
 
             if (activeAppliedEntries.isNotEmpty()) {
                 Text(
@@ -256,15 +301,13 @@ fun StartTestPreviewScreenNew(
                     Spacer(Modifier.height(8.dp))
                     Button(
                         onClick = {
-                            if (navInFlight || card.title.isBlank()) return@Button
-                            navInFlight = true
-                            scope.launch {
-                                delay(1500)
-                                navInFlight = false
-                            }
+                            if (card.title.isBlank()) return@Button
+                            val now = System.currentTimeMillis()
+                            if (now - lastPrimaryNavAt < 600L) return@Button
+                            lastPrimaryNavAt = now
                             onStartTest(card.title)
                         },
-                        enabled = !isLocked && !navInFlight && card.title.isNotBlank(),
+                        enabled = !isLocked && card.title.isNotBlank(),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp),
@@ -360,15 +403,13 @@ fun StartTestPreviewScreenNew(
                 Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = {
-                        if (navInFlight || test.title.isBlank()) return@Button
-                        navInFlight = true
-                        scope.launch {
-                            delay(1500)
-                            navInFlight = false
-                        }
+                        if (test.title.isBlank()) return@Button
+                        val now = System.currentTimeMillis()
+                        if (now - lastPrimaryNavAt < 600L) return@Button
+                        lastPrimaryNavAt = now
                         onApplyForTest(test.title)
                     },
-                    enabled = !navInFlight && test.title.isNotBlank(),
+                    enabled = test.title.isNotBlank(),
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()

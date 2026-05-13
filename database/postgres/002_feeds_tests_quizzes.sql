@@ -26,8 +26,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_news_articles_kind_external
     ON news_articles (feed_kind, external_id)
     WHERE external_id IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_news_articles_kind_published
-    ON news_articles (feed_kind, published_at DESC)
+CREATE INDEX IF NOT EXISTS idx_news_articles_kind_updated
+    ON news_articles (feed_kind, updated_at DESC)
+    WHERE is_published;
+
+CREATE INDEX IF NOT EXISTS idx_news_articles_published_updated
+    ON news_articles (is_published, updated_at DESC)
     WHERE is_published;
 
 DROP TRIGGER IF EXISTS trg_news_articles_updated_at ON news_articles;

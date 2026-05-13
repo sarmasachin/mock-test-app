@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.freemocktest.app.data.ContentRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
@@ -110,13 +111,33 @@ fun TestsScreenNew(
     var navInFlight by remember(subcategory) { mutableStateOf(false) }
 
     LaunchedEffect(subcategory, testsReloadKey) {
-        testsLoading = true
         testsLoadError = false
         try {
-            tests = ContentRepository.loadTestsForSubcategory(subcategory)
+            val cached = runCatching { ContentRepository.loadCachedTestsForSubcategory(subcategory) }
+                .getOrDefault(emptyList())
+            if (cached.isNotEmpty()) {
+                tests = cached
+            }
+            val hadCache = cached.isNotEmpty()
+            testsLoading = !hadCache
+
+            val refreshOutcome = runCatching {
+                ContentRepository.loadTestsForSubcategory(subcategory, forceRefresh = true)
+            }
+            tests = if (refreshOutcome.isSuccess) {
+                refreshOutcome.getOrNull() ?: tests
+            } else if (hadCache) {
+                tests
+            } else {
+                emptyList()
+            }
+            testsLoadError = refreshOutcome.isFailure && tests.isEmpty()
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
-            tests = emptyList()
-            testsLoadError = true
+            if (tests.isEmpty()) {
+                testsLoadError = true
+            }
         } finally {
             testsLoading = false
         }
@@ -160,7 +181,7 @@ fun TestsScreenNew(
                     .weight(1f),
             ) {
                 when {
-                    testsLoading -> {
+                    testsLoading && tests.isEmpty() && !testsLoadError -> {
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center,

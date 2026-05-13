@@ -25,6 +25,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -53,47 +55,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.freemocktest.app.newui.theme.palette.categoryLabelTintColor
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlin.math.max
-
-private fun categoryMenuTintColor(raw: String): Color {
-    // "Premium" soft accents (background uses low alpha, so these stay subtle).
-    val palette = listOf(
-        Color(0xFF0EA5E9), // sky
-        Color(0xFF06B6D4), // cyan
-        Color(0xFF14B8A6), // teal
-        Color(0xFF10B981), // emerald
-        Color(0xFF22C55E), // green
-        Color(0xFF84CC16), // lime
-        Color(0xFFEAB308), // amber
-        Color(0xFFF59E0B), // orange-amber
-        Color(0xFFF97316), // orange
-        Color(0xFFFB7185), // rose-light
-        Color(0xFFE11D48), // rose
-        Color(0xFFEC4899), // pink
-        Color(0xFFD946EF), // fuchsia
-        Color(0xFFA855F7), // purple
-        Color(0xFF8B5CF6), // violet
-        Color(0xFF7C3AED), // deep violet
-        Color(0xFF6366F1), // indigo
-        Color(0xFF4F46E5), // indigo-deep
-        Color(0xFF3B82F6), // blue
-        Color(0xFF2563EB), // blue-deep
-        Color(0xFF60A5FA), // blue-soft
-        Color(0xFF2DD4BF), // teal-soft
-        Color(0xFF34D399), // emerald-soft
-        Color(0xFFA3E635), // lime-soft
-        Color(0xFFFDE047), // yellow-soft
-        Color(0xFFFDBA74), // orange-soft
-        Color(0xFFF9A8D4), // pink-soft
-        Color(0xFFC4B5FD), // violet-soft
-        Color(0xFF93C5FD), // sky-soft
-    )
-    val key = raw.trim().lowercase()
-    val hash = key.hashCode() and Int.MAX_VALUE
-    return palette[hash % palette.size]
-}
 
 /**
  * Same layout as News: gradient scaffold, top app row, hero pager, dotted indicators,
@@ -119,6 +84,10 @@ fun FeedBrowseScreenNew(
     onSelectCategory: ((String) -> Unit)? = null,
     /** Make category menu look like focused tabs (used by Exam categories). */
     categoryMenuEmphasis: Boolean = false,
+    /** When [loading] is false, [items] empty, and load failed — show inline error instead of an empty feed. */
+    loadFailed: Boolean = false,
+    loadFailedMessage: String = "",
+    onRetryLoad: (() -> Unit)? = null,
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -209,7 +178,7 @@ fun FeedBrowseScreenNew(
                         items(categoryMenu) { category ->
                             val selected = selectedCategory == category
                             val shape = RoundedCornerShape(999.dp)
-                            val tint = remember(category) { categoryMenuTintColor(category) }
+                            val tint = remember(category) { categoryLabelTintColor(category) }
                             val bgColor =
                                 when {
                                     categoryMenuEmphasis && selected -> tint.copy(alpha = 0.22f)
@@ -268,6 +237,49 @@ fun FeedBrowseScreenNew(
                         onPrev = { },
                         onNext = { },
                     )
+                }
+                return@LazyColumn
+            }
+
+            if (!loading && loadFailed && items.isEmpty()) {
+                val message = loadFailedMessage.ifBlank {
+                    "Couldn't load this feed. Check your connection and try again."
+                }
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = p.surface),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.16f)),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Text(
+                                text = message,
+                                color = p.textPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            if (onRetryLoad != null) {
+                                Button(
+                                    onClick = onRetryLoad,
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = p.primaryButton,
+                                        contentColor = p.onPrimaryButton,
+                                    ),
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("Retry", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
                 }
                 return@LazyColumn
             }

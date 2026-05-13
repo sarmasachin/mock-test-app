@@ -29,11 +29,12 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -54,6 +55,7 @@ import java.io.FileOutputStream
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
 @Composable
@@ -90,10 +92,21 @@ fun ResultScreenNew(
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var answerKeyReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
     var resultReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
+    var questionCount by remember(testName) { mutableStateOf<Int?>(null) }
+    var questionsLoadFailed by remember(testName) { mutableStateOf(false) }
+    var questionsReloadKey by remember(testName) { mutableIntStateOf(0) }
+
     LaunchedEffect(testName) {
-        val snapshot = ContentRepository.loadTestByTitle(testName)
-        answerKeyReleaseAtMs = parseIsoMillis(snapshot?.answerKeyReleaseAt)
-        resultReleaseAtMs = parseIsoMillis(snapshot?.resultReleaseAt)
+        val cached = runCatching { ContentRepository.loadCachedTestByTitle(testName) }.getOrNull()
+        cached?.let {
+            answerKeyReleaseAtMs = parseIsoMillis(it.answerKeyReleaseAt)
+            resultReleaseAtMs = parseIsoMillis(it.resultReleaseAt)
+        }
+        val remote = runCatching { ContentRepository.loadTestByTitle(testName, forceRefresh = true) }.getOrNull()
+        remote?.let {
+            answerKeyReleaseAtMs = parseIsoMillis(it.answerKeyReleaseAt)
+            resultReleaseAtMs = parseIsoMillis(it.resultReleaseAt)
+        }
     }
     LaunchedEffect(Unit) {
         while (true) {
@@ -110,21 +123,49 @@ fun ResultScreenNew(
     val isAnswerKeyLocked = (answerKeyReleaseAtMs ?: 0L) > nowMs
     val resultCountdown = formatCountdown(effectiveResultReleaseAt - nowMs)
     val answerKeyCountdown = formatCountdown((answerKeyReleaseAtMs ?: 0L) - nowMs)
-    val questionCountState by produceState<Int?>(initialValue = null, key1 = testName) {
-        val count = ContentRepository.loadQuizQuestionsForTest(testName).size
-        value = count
+    LaunchedEffect(testName, questionsReloadKey) {
+        questionsLoadFailed = false
+        try {
+            val cachedQs = runCatching { ContentRepository.loadCachedQuizQuestionsForTest(testName) }
+                .getOrDefault(emptyList())
+            val hadCache = cachedQs.isNotEmpty()
+            if (hadCache) {
+                questionCount = cachedQs.size
+            } else {
+                questionCount = null
+            }
+            val outcome = runCatching { ContentRepository.loadQuizQuestionsForTest(testName, forceRefresh = true) }
+            when {
+                outcome.isSuccess -> {
+                    questionCount = outcome.getOrNull()?.size ?: 0
+                }
+                hadCache -> {
+                    questionCount = cachedQs.size
+                }
+                else -> {
+                    questionCount = 0
+                    questionsLoadFailed = true
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            questionsLoadFailed = questionCount == null || questionCount == 0
+        }
     }
-    val isQuestionDataLoading = questionCountState == null
-    val hasQuestionData = (questionCountState ?: 0) > 0
+    val isQuestionDataLoading = questionCount == null && !questionsLoadFailed
+    val hasQuestionData = (questionCount ?: 0) > 0
     val canOpenDetailViews = !isQuestionDataLoading && hasQuestionData
     val answerKeyButtonText = when {
         isQuestionDataLoading -> "Answer Key • Loading..."
+        questionsLoadFailed -> "Answer Key • Unavailable"
         !hasQuestionData -> "Answer Key • Not available"
         isAnswerKeyLocked -> "Answer Key • $answerKeyCountdown"
         else -> "Answer Key"
     }
     val reviewButtonText = when {
         isQuestionDataLoading -> "Review • Loading..."
+        questionsLoadFailed -> "Review • Unavailable"
         !hasQuestionData -> "Review • Not available"
         else -> "Review"
     }
@@ -312,12 +353,30 @@ fun ResultScreenNew(
                     }
                     if (!hasQuestionData && !isQuestionDataLoading) {
                         Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "Answer key and review will be enabled after questions are published for this test.",
-                            color = Color(0xFF64748B),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
+                        if (questionsLoadFailed) {
+                            Text(
+                                text = "Couldn't load question data. Check your connection and try again.",
+                                color = Color(0xFFB91C1C),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            TextButton(onClick = { questionsReloadKey += 1 }) {
+                                Text(
+                                    text = "Retry",
+                                    color = Color(0xFF2563EB),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = "Answer key and review will be enabled after questions are published for this test.",
+                                color = Color(0xFF64748B),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
                     }
 
                     Spacer(Modifier.height(12.dp))

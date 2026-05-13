@@ -23,6 +23,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
@@ -35,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,6 +58,7 @@ import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 @Composable
@@ -71,6 +77,12 @@ fun LeaderboardScreenNew(
     var showFilterSheet by remember { mutableStateOf(false) }
     val filterSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+    var leaderboardReloadKey by remember { mutableIntStateOf(0) }
+    var filtersLoadFailed by remember { mutableStateOf(false) }
+    var testsLoading by remember { mutableStateOf(true) }
+    var testsLoadFailed by remember { mutableStateOf(false) }
+    val expandLoadFailed = remember { mutableStateMapOf<String, Boolean>() }
+
     var cities by remember { mutableStateOf<List<String>>(emptyList()) }
     var states by remember { mutableStateOf<List<String>>(emptyList()) }
     var leaderboardTestRows by remember { mutableStateOf<List<ContentRepository.LeaderboardTestSummaryRemote>>(emptyList()) }
@@ -87,16 +99,24 @@ fun LeaderboardScreenNew(
     val scoreVisible by AppPreferencesRepository.scoreVisibilityEnabled.collectAsState(initial = true)
     val currentDisplayNameKey = profile.displayName.trim().lowercase()
 
-    LaunchedEffect(Unit) {
-        val filters = ContentRepository.loadLeaderboardFilters()
-        cities = filters.cities
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && it.lowercase() != "other" && it.lowercase() != "not listed" && it.lowercase() != "notlisted" }
-            .distinctBy { it.lowercase() }
-        states = filters.states
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && it.lowercase() != "other" && it.lowercase() != "not listed" && it.lowercase() != "notlisted" }
-            .distinctBy { it.lowercase() }
+    LaunchedEffect(leaderboardReloadKey) {
+        val result = runCatching { ContentRepository.loadLeaderboardFilters() }
+        if (result.isSuccess) {
+            filtersLoadFailed = false
+            val filters = result.getOrThrow()
+            cities = filters.cities
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && it.lowercase() != "other" && it.lowercase() != "not listed" && it.lowercase() != "notlisted" }
+                .distinctBy { it.lowercase() }
+            states = filters.states
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && it.lowercase() != "other" && it.lowercase() != "not listed" && it.lowercase() != "notlisted" }
+                .distinctBy { it.lowercase() }
+        } else {
+            filtersLoadFailed = true
+            cities = emptyList()
+            states = emptyList()
+        }
     }
 
     LaunchedEffect(cities, states) {
@@ -107,24 +127,45 @@ fun LeaderboardScreenNew(
             selectedState = "All states"
         }
     }
-    LaunchedEffect(selectedRange, selectedCity, selectedState) {
-        leaderboardTestRows = ContentRepository.loadLeaderboardTests(
-            range = if (selectedRange == TimeRangeFilter.Weekly) "weekly" else "monthly",
-            city = selectedCity.takeUnless { it == "All cities" },
-            state = selectedState.takeUnless { it == "All states" },
-        )
-        expandedRows.clear()
-        val first = leaderboardTestRows.firstOrNull()
-        expandedTestId = first?.testId
-        if (first != null) {
-            scope.launch {
-                expandedRows[first.testId] = ContentRepository.loadLeaderboardByTest(
-                    testId = first.testId,
+    LaunchedEffect(selectedRange, selectedCity, selectedState, leaderboardReloadKey) {
+        testsLoading = true
+        testsLoadFailed = false
+        try {
+            val tResult = runCatching {
+                ContentRepository.loadLeaderboardTests(
                     range = if (selectedRange == TimeRangeFilter.Weekly) "weekly" else "monthly",
                     city = selectedCity.takeUnless { it == "All cities" },
                     state = selectedState.takeUnless { it == "All states" },
                 )
             }
+            leaderboardTestRows = tResult.getOrElse { emptyList() }
+            testsLoadFailed = tResult.isFailure
+            expandedRows.clear()
+            expandLoadFailed.clear()
+            val first = leaderboardTestRows.firstOrNull()
+            expandedTestId = if (testsLoadFailed) null else first?.testId
+            if (first != null && !testsLoadFailed) {
+                val r = runCatching {
+                    ContentRepository.loadLeaderboardByTest(
+                        testId = first.testId,
+                        range = if (selectedRange == TimeRangeFilter.Weekly) "weekly" else "monthly",
+                        city = selectedCity.takeUnless { it == "All cities" },
+                        state = selectedState.takeUnless { it == "All states" },
+                    )
+                }
+                expandedRows[first.testId] = r.getOrElse { emptyList() }
+                expandLoadFailed[first.testId] = r.isFailure
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            leaderboardTestRows = emptyList()
+            testsLoadFailed = true
+            expandedRows.clear()
+            expandLoadFailed.clear()
+            expandedTestId = null
+        } finally {
+            testsLoading = false
         }
     }
 
@@ -202,9 +243,23 @@ fun LeaderboardScreenNew(
                 )
             }
 
+            if (filtersLoadFailed) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "City and state filters couldn't be loaded. You can still use \"All cities\" and \"All states\".",
+                    color = p.textSecondary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "Showing ${leaderboardTestRows.size} tests",
+                text = when {
+                    testsLoading -> "Loading tests…"
+                    testsLoadFailed -> "Couldn't load tests"
+                    else -> "Showing ${leaderboardTestRows.size} tests"
+                },
                 color = p.textSecondary,
                 fontSize = 12.sp,
             )
@@ -219,46 +274,96 @@ fun LeaderboardScreenNew(
 
             Spacer(Modifier.height(16.dp))
 
-            val queryKey = searchQuery.trim().lowercase()
-            val visibleTests = leaderboardTestRows.filter { testRow ->
-                if (queryKey.isBlank()) return@filter true
-                if (testRow.testTitle.lowercase().contains(queryKey)) return@filter true
-                expandedRows[testRow.testId].orEmpty().any { u ->
-                    u.name.lowercase().contains(queryKey)
-                }
-            }
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                itemsIndexed(visibleTests) { _, testRow ->
-                    val isExpanded = expandedTestId == testRow.testId
-                    LeaderboardTestCard(
-                        testTitle = testRow.testTitle,
-                        participants = testRow.participantsCount,
-                        attempts = testRow.attemptsCount,
-                        expanded = isExpanded,
-                        onToggle = {
-                            if (isExpanded) {
-                                expandedTestId = null
-                            } else {
-                                expandedTestId = testRow.testId
-                                if (!expandedRows.containsKey(testRow.testId)) {
-                                    scope.launch {
-                                        expandedRows[testRow.testId] = ContentRepository.loadLeaderboardByTest(
-                                            testId = testRow.testId,
-                                            range = if (selectedRange == TimeRangeFilter.Weekly) "weekly" else "monthly",
-                                            city = selectedCity.takeUnless { it == "All cities" },
-                                            state = selectedState.takeUnless { it == "All states" },
-                                        )
-                                    }
-                                }
-                            }
-                        },
-                        rows = expandedRows[testRow.testId].orEmpty(),
-                        currentDisplayNameKey = currentDisplayNameKey,
-                        scoreVisible = scoreVisible,
+            when {
+                testsLoading -> {
+                    Text(
+                        text = "Loading leaderboard…",
+                        color = p.textSecondary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
                     )
+                }
+                testsLoadFailed -> {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = p.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text(
+                                text = "Something went wrong while loading the leaderboard. Check your connection and try again.",
+                                color = p.textPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Button(
+                                onClick = { leaderboardReloadKey++ },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = p.primaryButton,
+                                    contentColor = p.onPrimaryButton,
+                                ),
+                            ) {
+                                Text("Retry")
+                            }
+                        }
+                    }
+                }
+                else -> {
+                    val queryKey = searchQuery.trim().lowercase()
+                    val visibleTests = leaderboardTestRows.filter { testRow ->
+                        if (queryKey.isBlank()) return@filter true
+                        if (testRow.testTitle.lowercase().contains(queryKey)) return@filter true
+                        expandedRows[testRow.testId].orEmpty().any { u ->
+                            u.name.lowercase().contains(queryKey)
+                        }
+                    }
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        itemsIndexed(visibleTests) { _, testRow ->
+                            val isExpanded = expandedTestId == testRow.testId
+                            LeaderboardTestCard(
+                                testTitle = testRow.testTitle,
+                                participants = testRow.participantsCount,
+                                attempts = testRow.attemptsCount,
+                                expanded = isExpanded,
+                                detailLoadFailed = expandLoadFailed[testRow.testId] == true,
+                                onToggle = {
+                                    if (isExpanded) {
+                                        expandedTestId = null
+                                    } else {
+                                        expandedTestId = testRow.testId
+                                        val needsFetch =
+                                            !expandedRows.containsKey(testRow.testId) ||
+                                                expandLoadFailed[testRow.testId] == true
+                                        if (needsFetch) {
+                                            scope.launch {
+                                                expandLoadFailed[testRow.testId] = false
+                                                val r = runCatching {
+                                                    ContentRepository.loadLeaderboardByTest(
+                                                        testId = testRow.testId,
+                                                        range = if (selectedRange == TimeRangeFilter.Weekly) "weekly" else "monthly",
+                                                        city = selectedCity.takeUnless { it == "All cities" },
+                                                        state = selectedState.takeUnless { it == "All states" },
+                                                    )
+                                                }
+                                                expandedRows[testRow.testId] = r.getOrElse { emptyList() }
+                                                expandLoadFailed[testRow.testId] = r.isFailure
+                                            }
+                                        }
+                                    }
+                                },
+                                rows = expandedRows[testRow.testId].orEmpty(),
+                                currentDisplayNameKey = currentDisplayNameKey,
+                                scoreVisible = scoreVisible,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -447,6 +552,7 @@ private fun LeaderboardTestCard(
     participants: Int,
     attempts: Int,
     expanded: Boolean,
+    detailLoadFailed: Boolean,
     onToggle: () -> Unit,
     rows: List<ContentRepository.LeaderboardItemRemote>,
     currentDisplayNameKey: String,
@@ -492,7 +598,11 @@ private fun LeaderboardTestCard(
             Spacer(Modifier.height(10.dp))
             if (rows.isEmpty()) {
                 Text(
-                    text = "No attempts found for this test in selected filters.",
+                    text = if (detailLoadFailed) {
+                        "Couldn't load rankings for this test. Tap to collapse and try again."
+                    } else {
+                        "No attempts found for this test in selected filters."
+                    },
                     color = p.textSecondary,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,

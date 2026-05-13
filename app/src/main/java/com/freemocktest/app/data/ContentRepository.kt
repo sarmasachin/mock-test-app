@@ -17,7 +17,9 @@ import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.jvm.Volatile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -26,9 +28,17 @@ import kotlinx.coroutines.withContext
  */
 object ContentRepository {
     private const val TAG = "ContentRepository"
+    private const val MAX_CACHED_TEST_CARDS = 24
+    private const val MAX_CACHED_TEST_LIST_KEYS = 20
+    private const val MAX_CACHED_QUIZ_QUESTION_KEYS = 16
 
     private val articleMemory = ConcurrentHashMap<String, ManualNewsItem>()
+    private val newsFeedListMemory = ConcurrentHashMap<String, List<ManualNewsItem>>()
     private val testCardMemory = ConcurrentHashMap<String, TestCardNew>()
+    private val testListBySubcategoryMemory = ConcurrentHashMap<String, List<TestCardNew>>()
+    private val quizQuestionsMemory = ConcurrentHashMap<String, List<QuizQuestionRemote>>()
+    @Volatile
+    private var profileMenuItemsMemory: List<ProfileMenuItemRemote>? = null
     @Volatile
     private var homeContentMemory: HomeContentRemote? = null
     @Volatile
@@ -218,6 +228,19 @@ object ContentRepository {
         notifyOnPublish = notifyOnPublish,
     )
 
+    suspend fun loadCachedNewsFeed(feedKind: String): List<ManualNewsItem> = withContext(Dispatchers.IO) {
+        val kind = feedKind.lowercase(Locale.US)
+        newsFeedListMemory[kind]?.let { return@withContext it }
+        val raw = AppPreferencesRepository.peekCachedNewsFeed(kind) ?: return@withContext emptyList()
+        val parsed = runCatching { decodeNewsFeedItemsJson(raw) }.getOrNull()
+            ?: return@withContext emptyList()
+        if (parsed.isNotEmpty()) {
+            parsed.forEach { articleMemory[it.id] = it }
+            newsFeedListMemory[kind] = parsed
+        }
+        parsed
+    }
+
     suspend fun loadNewsFeed(feedKind: String): List<ManualNewsItem> = withContext(Dispatchers.IO) {
         val kind = feedKind.lowercase(Locale.US)
         try {
@@ -225,6 +248,10 @@ object ContentRepository {
             val mapped = resp.items.map { it.toManualNewsItem() }
             mapped.forEach { articleMemory[it.id] = it }
             if (mapped.isNotEmpty()) {
+                runCatching {
+                    AppPreferencesRepository.saveCachedNewsFeedNow(kind, encodeNewsFeedItemsJson(mapped))
+                }.onFailure { Log.w(TAG, "saveCachedNewsFeed $kind", it) }
+                newsFeedListMemory[kind] = mapped
                 mapped
             } else {
                 manualFallback(kind)
@@ -233,6 +260,53 @@ object ContentRepository {
             Log.w(TAG, "loadNewsFeed $kind", e)
             manualFallback(kind)
         }
+    }
+
+    private fun encodeNewsFeedItemsJson(items: List<ManualNewsItem>): String {
+        val arr = JSONArray()
+        items.forEach { item ->
+            val o = JSONObject()
+            o.put("id", item.id)
+            o.put("headline", item.headline)
+            o.put("summary", item.summary)
+            o.put("category", item.category)
+            o.put("dateLabel", item.dateLabel)
+            o.put("body", item.body)
+            item.featureImageUrl?.let { if (it.isNotBlank()) o.put("featureImageUrl", it) }
+            arr.put(o)
+        }
+        return JSONObject().put("items", arr).toString()
+    }
+
+    private fun decodeNewsFeedItemsJson(raw: String): List<ManualNewsItem>? {
+        if (raw.isBlank()) return null
+        val root = runCatching { JSONObject(raw) }.getOrNull() ?: return null
+        val arr = root.optJSONArray("items") ?: return null
+        val out = ArrayList<ManualNewsItem>(arr.length())
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val id = o.optString("id").trim()
+            if (id.isEmpty()) continue
+            val headline = o.optString("headline")
+            val summary = o.optString("summary")
+            val category = o.optString("category").trim().ifBlank { "News" }
+            val dateLabel = o.optString("dateLabel")
+            val bodyRaw = o.optString("body").trim()
+            val body = bodyRaw.ifBlank { summary }
+            val featureUrl = o.optString("featureImageUrl").trim().takeIf { it.isNotEmpty() }
+            out.add(
+                ManualNewsItem(
+                    id = id,
+                    headline = headline,
+                    summary = summary,
+                    category = category,
+                    dateLabel = dateLabel,
+                    body = body,
+                    featureImageUrl = featureUrl,
+                ),
+            )
+        }
+        return out
     }
 
     suspend fun resolveArticle(articleId: String): ManualNewsItem? = withContext(Dispatchers.IO) {
@@ -252,31 +326,262 @@ object ContentRepository {
             }
     }
 
-    suspend fun loadTestsForSubcategory(subcategory: String): List<TestCardNew> = withContext(Dispatchers.IO) {
+    suspend fun loadCachedTestsForSubcategory(subcategory: String): List<TestCardNew> = withContext(Dispatchers.IO) {
         val sub = subcategory.trim().ifBlank { "Topic" }
+        val key = sub.lowercase(Locale.US)
+        testListBySubcategoryMemory[key]?.let { return@withContext it }
+        val raw = AppPreferencesRepository.peekCachedTestsListsBlob() ?: return@withContext emptyList()
+        val map = linkedKeyedJsonArrayBlobFromJson(raw)
+        val arr = map[key] ?: return@withContext emptyList()
+        val out = ArrayList<TestCardNew>(arr.length())
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            decodeTestCardNew(o)?.let { card ->
+                out.add(card)
+                val tKey = card.title.trim().lowercase(Locale.US)
+                if (tKey.isNotBlank()) testCardMemory[tKey] = card
+            }
+        }
+        if (out.isNotEmpty()) {
+            testListBySubcategoryMemory[key] = out
+        }
+        out
+    }
+
+    suspend fun loadTestsForSubcategory(subcategory: String, forceRefresh: Boolean = false): List<TestCardNew> = withContext(Dispatchers.IO) {
+        val sub = subcategory.trim().ifBlank { "Topic" }
+        val key = sub.lowercase(Locale.US)
+        if (!forceRefresh) {
+            testListBySubcategoryMemory[key]?.let { return@withContext it }
+        } else {
+            testListBySubcategoryMemory.remove(key)
+        }
         try {
             val resp = RetrofitProvider.publicApi.listTests(subcategory = sub, limit = 40)
             val mapped = resp.items.map { row -> row.toTestCard() }
             mapped.forEach { card ->
-                val key = card.title.trim().lowercase(Locale.US)
-                if (key.isNotBlank()) testCardMemory[key] = card
+                val tKey = card.title.trim().lowercase(Locale.US)
+                if (tKey.isNotBlank()) testCardMemory[tKey] = card
             }
             if (mapped.isNotEmpty()) {
+                testListBySubcategoryMemory[key] = mapped
+                runCatching { persistTestsListDiskCache(key, mapped) }
+                    .onFailure { Log.w(TAG, "persistTestsListDiskCache $key", it) }
                 mapped
             } else {
                 defaultTests(sub)
             }
         } catch (e: Exception) {
             Log.w(TAG, "loadTestsForSubcategory $sub", e)
-            defaultTests(sub)
+            val disk = runCatching { loadCachedTestsForSubcategory(sub) }.getOrDefault(emptyList())
+            if (disk.isNotEmpty()) disk else defaultTests(sub)
         }
     }
 
-    suspend fun loadTestByTitle(title: String): TestCardNew? = withContext(Dispatchers.IO) {
+    /** Full catalog slice for post-login test picker (`GET /tests` without subcategory filter). */
+    suspend fun loadCatalogTestsForPicker(limit: Int = 100): List<TestCardNew> = withContext(Dispatchers.IO) {
+        val resp = RetrofitProvider.publicApi.listTests(subcategory = null, limit = limit)
+        resp.items
+            .map { row -> row.toTestCard() }
+            .filter { it.title.isNotBlank() }
+            .distinctBy { it.title.trim().lowercase(Locale.US) }
+    }
+
+    private fun jsonOptIntOrNull(o: JSONObject, key: String): Int? =
+        when {
+            !o.has(key) || o.isNull(key) -> null
+            else -> o.optInt(key)
+        }
+
+    private fun linkedTestCardCacheFromJson(raw: String): LinkedHashMap<String, JSONObject> {
+        val out = LinkedHashMap<String, JSONObject>()
+        val root = runCatching { JSONObject(raw.trim()) }.getOrNull() ?: return out
+        val arr = root.optJSONArray("entries") ?: return out
+        for (i in 0 until arr.length()) {
+            val row = arr.optJSONObject(i) ?: continue
+            val k = row.optString("k").trim().lowercase(Locale.US)
+            if (k.isEmpty()) continue
+            val c = row.optJSONObject("c") ?: continue
+            out.remove(k)
+            out[k] = c
+        }
+        return out
+    }
+
+    private fun linkedTestCardCacheToJson(map: LinkedHashMap<String, JSONObject>): String {
+        val arr = JSONArray()
+        for ((k, c) in map) {
+            val row = JSONObject()
+            row.put("k", k)
+            row.put("c", c)
+            arr.put(row)
+        }
+        return JSONObject().put("v", 1).put("entries", arr).toString()
+    }
+
+    private fun encodeTestCardNewJson(c: TestCardNew): JSONObject = JSONObject().apply {
+        put("id", c.id)
+        put("slug", c.slug)
+        put("title", c.title)
+        put("meta", c.meta)
+        c.examDate?.let { put("examDate", it) }
+        c.durationLabel?.let { put("durationLabel", it) }
+        c.questionsMarks?.let { put("questionsMarks", it) }
+        c.slotLabel?.let { put("slotLabel", it) }
+        c.enrolledLabel?.let { put("enrolledLabel", it) }
+        c.remainingSeatsLabel?.let { put("remainingSeatsLabel", it) }
+        c.attemptsAllowed?.let { put("attemptsAllowed", it) }
+        c.languageMode?.let { put("languageMode", it) }
+        c.examMode?.let { put("examMode", it) }
+        c.negativeMarkingText?.let { put("negativeMarkingText", it) }
+        c.testTypeLabel?.let { put("testTypeLabel", it) }
+        put("badgeEnabled", c.badgeEnabled)
+        put("badgeText", c.badgeText)
+        c.validUntil?.let { put("validUntil", it) }
+        c.answerKeyReleaseAt?.let { put("answerKeyReleaseAt", it) }
+        c.resultReleaseAt?.let { put("resultReleaseAt", it) }
+        c.capacityTotal?.let { put("capacityTotal", it) } ?: run { put("capacityTotal", JSONObject.NULL) }
+        c.enrolledCount?.let { put("enrolledCount", it) } ?: run { put("enrolledCount", JSONObject.NULL) }
+        c.remainingSeats?.let { put("remainingSeats", it) } ?: run { put("remainingSeats", JSONObject.NULL) }
+        c.publishAt?.let { put("publishAt", it) }
+        c.unpublishAt?.let { put("unpublishAt", it) }
+        c.resultVisibility?.let { put("resultVisibility", it) }
+        put("reattemptCooldownMinutes", c.reattemptCooldownMinutes)
+        put("lateJoinMinutes", c.lateJoinMinutes)
+        put("notifyBeforeMinutes", c.notifyBeforeMinutes)
+        put("resumeEnabled", c.resumeEnabled)
+        put("shuffleQuestions", c.shuffleQuestions)
+        put("shuffleOptions", c.shuffleOptions)
+        put("fullscreenRequired", c.fullscreenRequired)
+        put("copyPasteBlocked", c.copyPasteBlocked)
+        put("notifyOnPublish", c.notifyOnPublish)
+    }
+
+    private fun decodeTestCardNew(o: JSONObject): TestCardNew? {
+        val title = o.optString("title").trim()
+        if (title.isBlank()) return null
+        return TestCardNew(
+            id = o.optString("id", ""),
+            slug = o.optString("slug", ""),
+            title = title,
+            meta = o.optString("meta").ifBlank { "Test details are currently unavailable" },
+            examDate = o.optString("examDate", "").trim().takeIf { it.isNotBlank() },
+            durationLabel = o.optString("durationLabel", "").trim().takeIf { it.isNotBlank() },
+            questionsMarks = o.optString("questionsMarks", "").trim().takeIf { it.isNotBlank() },
+            slotLabel = o.optString("slotLabel", "").trim().takeIf { it.isNotBlank() },
+            enrolledLabel = o.optString("enrolledLabel", "").trim().takeIf { it.isNotBlank() },
+            remainingSeatsLabel = o.optString("remainingSeatsLabel", "").trim().takeIf { it.isNotBlank() },
+            attemptsAllowed = o.optString("attemptsAllowed", "").trim().takeIf { it.isNotBlank() },
+            languageMode = o.optString("languageMode", "").trim().takeIf { it.isNotBlank() },
+            examMode = o.optString("examMode", "").trim().takeIf { it.isNotBlank() },
+            negativeMarkingText = o.optString("negativeMarkingText", "").trim().takeIf { it.isNotBlank() },
+            testTypeLabel = o.optString("testTypeLabel", "").trim().takeIf { it.isNotBlank() },
+            badgeEnabled = o.optBoolean("badgeEnabled", false),
+            badgeText = o.optString("badgeText", "Live").ifBlank { "Live" },
+            validUntil = o.optString("validUntil", "").trim().takeIf { it.isNotBlank() },
+            answerKeyReleaseAt = o.optString("answerKeyReleaseAt", "").trim().takeIf { it.isNotBlank() },
+            resultReleaseAt = o.optString("resultReleaseAt", "").trim().takeIf { it.isNotBlank() },
+            capacityTotal = jsonOptIntOrNull(o, "capacityTotal"),
+            enrolledCount = jsonOptIntOrNull(o, "enrolledCount"),
+            remainingSeats = jsonOptIntOrNull(o, "remainingSeats"),
+            publishAt = o.optString("publishAt", "").trim().takeIf { it.isNotBlank() },
+            unpublishAt = o.optString("unpublishAt", "").trim().takeIf { it.isNotBlank() },
+            resultVisibility = o.optString("resultVisibility", "").trim().takeIf { it.isNotBlank() },
+            reattemptCooldownMinutes = o.optInt("reattemptCooldownMinutes", 0).coerceAtLeast(0),
+            lateJoinMinutes = o.optInt("lateJoinMinutes", 0).coerceAtLeast(0),
+            notifyBeforeMinutes = o.optInt("notifyBeforeMinutes", 0).coerceAtLeast(0),
+            resumeEnabled = o.optBoolean("resumeEnabled", true),
+            shuffleQuestions = o.optBoolean("shuffleQuestions", false),
+            shuffleOptions = o.optBoolean("shuffleOptions", false),
+            fullscreenRequired = o.optBoolean("fullscreenRequired", false),
+            copyPasteBlocked = o.optBoolean("copyPasteBlocked", false),
+            notifyOnPublish = o.optBoolean("notifyOnPublish", true),
+        )
+    }
+
+    private suspend fun persistTestCardDiskCache(titleKey: String, card: TestCardNew) {
+        val key = titleKey.trim().lowercase(Locale.US)
+        if (key.isBlank()) return
+        val encoded = encodeTestCardNewJson(card)
+        val raw = AppPreferencesRepository.peekCachedTestCardsBlob().orEmpty()
+        val map = linkedTestCardCacheFromJson(if (raw.isBlank()) "{\"v\":1,\"entries\":[]}" else raw)
+        map.remove(key)
+        map[key] = encoded
+        while (map.size > MAX_CACHED_TEST_CARDS) {
+            val drop = map.keys.first()
+            map.remove(drop)
+        }
+        AppPreferencesRepository.saveCachedTestCardsBlobNow(linkedTestCardCacheToJson(map))
+    }
+
+    /** Shared blob shape: `{ "v":1, "entries":[{ "k", "items":[] }] }` for tests lists and quiz questions. */
+    private fun linkedKeyedJsonArrayBlobFromJson(raw: String): LinkedHashMap<String, JSONArray> {
+        val out = LinkedHashMap<String, JSONArray>()
+        val root = runCatching { JSONObject(raw.trim()) }.getOrNull() ?: return out
+        val arr = root.optJSONArray("entries") ?: return out
+        for (i in 0 until arr.length()) {
+            val row = arr.optJSONObject(i) ?: continue
+            val k = row.optString("k").trim().lowercase(Locale.US)
+            if (k.isEmpty()) continue
+            val items = row.optJSONArray("items") ?: continue
+            out.remove(k)
+            out[k] = items
+        }
+        return out
+    }
+
+    private fun linkedKeyedJsonArrayBlobToJson(map: LinkedHashMap<String, JSONArray>, maxKeys: Int): String {
+        while (map.size > maxKeys) {
+            map.remove(map.keys.first())
+        }
+        val arr = JSONArray()
+        for ((k, items) in map) {
+            val row = JSONObject()
+            row.put("k", k)
+            row.put("items", items)
+            arr.put(row)
+        }
+        return JSONObject().put("v", 1).put("entries", arr).toString()
+    }
+
+    private suspend fun persistTestsListDiskCache(subKey: String, items: List<TestCardNew>) {
+        val key = subKey.trim().lowercase(Locale.US)
+        if (key.isBlank()) return
+        val arr = JSONArray()
+        items.forEach { arr.put(encodeTestCardNewJson(it)) }
+        val raw = AppPreferencesRepository.peekCachedTestsListsBlob().orEmpty()
+        val map = linkedKeyedJsonArrayBlobFromJson(if (raw.isBlank()) "{\"v\":1,\"entries\":[]}" else raw)
+        map.remove(key)
+        map[key] = arr
+        AppPreferencesRepository.saveCachedTestsListsBlobNow(
+            linkedKeyedJsonArrayBlobToJson(map, MAX_CACHED_TEST_LIST_KEYS),
+        )
+    }
+
+    /**
+     * Disk-backed snapshot for [title] (normalized). Hydrates [testCardMemory] so other callers
+     * benefit; use [loadTestByTitle] with `forceRefresh = true` after this for stale-while-revalidate.
+     */
+    suspend fun loadCachedTestByTitle(title: String): TestCardNew? = withContext(Dispatchers.IO) {
         val target = title.trim()
         if (target.isBlank()) return@withContext null
         val key = target.lowercase(Locale.US)
         testCardMemory[key]?.let { return@withContext it }
+        val blob = AppPreferencesRepository.peekCachedTestCardsBlob() ?: return@withContext null
+        val map = linkedTestCardCacheFromJson(blob)
+        val json = map[key] ?: return@withContext null
+        val card = decodeTestCardNew(json) ?: return@withContext null
+        testCardMemory[key] = card
+        card
+    }
+
+    suspend fun loadTestByTitle(title: String, forceRefresh: Boolean = false): TestCardNew? = withContext(Dispatchers.IO) {
+        val target = title.trim()
+        if (target.isBlank()) return@withContext null
+        val key = target.lowercase(Locale.US)
+        if (!forceRefresh) {
+            testCardMemory[key]?.let { return@withContext it }
+        }
         try {
             val resp = RetrofitProvider.publicApi.listTests(limit = 100)
             val mapped = resp.items.map { it.toTestCard() }
@@ -284,49 +589,188 @@ object ContentRepository {
                 val k = card.title.trim().lowercase(Locale.US)
                 if (k.isNotBlank()) testCardMemory[k] = card
             }
-            mapped
+            val resolved = mapped
                 .firstOrNull { it.title.equals(target, ignoreCase = true) }
                 ?: defaultTests(target).firstOrNull()
+            if (resolved != null && resolved.title.isNotBlank()) {
+                testCardMemory[key] = resolved
+                runCatching { persistTestCardDiskCache(key, resolved) }
+                    .onFailure { Log.w(TAG, "persistTestCardDiskCache $key", it) }
+            }
+            resolved
         } catch (e: Exception) {
             Log.w(TAG, "loadTestByTitle $target", e)
-            defaultTests(target).firstOrNull()
+            val fromDisk = runCatching { loadCachedTestByTitle(target) }.getOrNull()
+            if (fromDisk != null && fromDisk.title.isNotBlank()) {
+                testCardMemory[key] = fromDisk
+                return@withContext fromDisk
+            }
+            val fallback = defaultTests(target).firstOrNull()
+            if (fallback != null && fallback.title.isNotBlank()) {
+                testCardMemory[key] = fallback
+                runCatching { persistTestCardDiskCache(key, fallback) }
+                    .onFailure { Log.w(TAG, "persistTestCardDiskCache fallback $key", it) }
+            }
+            fallback
         }
     }
 
-    suspend fun loadQuizQuestionsForTest(testName: String): List<QuizQuestionRemote> = withContext(Dispatchers.IO) {
-        val safeName = testName.trim()
-        if (safeName.isBlank()) return@withContext emptyList()
-        try {
-            val test = loadTestByTitle(safeName)
-            val testId = test?.id?.trim().orEmpty()
-            if (testId.isBlank()) return@withContext emptyList()
-            val rows = try {
-                // Prefer authenticated, per-user shuffled order.
-                RetrofitProvider.appApi.getAttemptQuestions(testId).items
-            } catch (_: Exception) {
-                // Fallback keeps app functional if session expired or endpoint unavailable.
-                RetrofitProvider.publicApi.getTestQuestions(testId).items
+    private fun encodeQuizQuestionRemoteJson(q: QuizQuestionRemote): JSONObject {
+        val o = JSONObject()
+        o.put("t", q.title)
+        val arr = JSONArray()
+        q.options.forEach { arr.put(it) }
+        o.put("o", arr)
+        o.put("c", q.correctIndex)
+        o.put("e", q.explanation)
+        return o
+    }
+
+    private fun decodeQuizQuestionRemote(o: JSONObject): QuizQuestionRemote? {
+        val title = o.optString("t").trim()
+        if (title.isBlank()) return null
+        val arr = o.optJSONArray("o") ?: return null
+        val options = buildList {
+            for (i in 0 until arr.length()) {
+                arr.optString(i).trim().takeIf { it.isNotBlank() }?.let { add(it) }
             }
-            rows.mapNotNull { row ->
-                val prompt = row.questionPrompt.trim()
-                val options = row.options.map { it.trim() }.filter { it.isNotBlank() }
-                val correctIndex = row.correctIndex
-                if (prompt.isBlank() || options.size < 2 || correctIndex !in options.indices) {
-                    null
-                } else {
-                    QuizQuestionRemote(
-                        title = prompt,
-                        options = options,
-                        correctIndex = correctIndex,
-                        explanation = row.explanation?.trim().orEmpty(),
-                    )
-                }
+        }
+        if (options.size < 2) return null
+        val correctIndex = o.optInt("c", -1)
+        if (correctIndex !in options.indices) return null
+        return QuizQuestionRemote(
+            title = title,
+            options = options,
+            correctIndex = correctIndex,
+            explanation = o.optString("e", "").trim(),
+        )
+    }
+
+    private suspend fun readQuizQuestionsFromDisk(titleKey: String): List<QuizQuestionRemote> {
+        val key = titleKey.trim().lowercase(Locale.US)
+        if (key.isBlank()) return emptyList()
+        val raw = AppPreferencesRepository.peekCachedQuizQuestionsBlob() ?: return emptyList()
+        val map = linkedKeyedJsonArrayBlobFromJson(raw)
+        val arr = map[key] ?: return emptyList()
+        return buildList {
+            for (i in 0 until arr.length()) {
+                val jo = arr.optJSONObject(i) ?: continue
+                decodeQuizQuestionRemote(jo)?.let { add(it) }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "loadQuizQuestionsForTest $safeName", e)
-            emptyList()
         }
     }
+
+    private suspend fun persistQuizQuestionsDiskCache(titleKey: String, items: List<QuizQuestionRemote>) {
+        val key = titleKey.trim().lowercase(Locale.US)
+        if (key.isBlank()) return
+        val arr = JSONArray()
+        items.forEach { arr.put(encodeQuizQuestionRemoteJson(it)) }
+        val raw = AppPreferencesRepository.peekCachedQuizQuestionsBlob().orEmpty()
+        val map = linkedKeyedJsonArrayBlobFromJson(if (raw.isBlank()) "{\"v\":1,\"entries\":[]}" else raw)
+        map.remove(key)
+        map[key] = arr
+        AppPreferencesRepository.saveCachedQuizQuestionsBlobNow(
+            linkedKeyedJsonArrayBlobToJson(map, MAX_CACHED_QUIZ_QUESTION_KEYS),
+        )
+    }
+
+    private suspend fun evictQuizQuestionsDiskCache(titleKey: String) {
+        val key = titleKey.trim().lowercase(Locale.US)
+        if (key.isBlank()) return
+        val raw = AppPreferencesRepository.peekCachedQuizQuestionsBlob().orEmpty()
+        val map = linkedKeyedJsonArrayBlobFromJson(if (raw.isBlank()) "{\"v\":1,\"entries\":[]}" else raw)
+        if (!map.containsKey(key)) return
+        map.remove(key)
+        AppPreferencesRepository.saveCachedQuizQuestionsBlobNow(
+            linkedKeyedJsonArrayBlobToJson(map, MAX_CACHED_QUIZ_QUESTION_KEYS),
+        )
+    }
+
+    private suspend fun resolveTestForQuizQuestions(safeName: String, forceRefresh: Boolean): TestCardNew? {
+        return when {
+            forceRefresh -> loadTestByTitle(safeName, forceRefresh = true) ?: loadCachedTestByTitle(safeName)
+            else -> {
+                val key = safeName.lowercase(Locale.US)
+                testCardMemory[key] ?: loadCachedTestByTitle(safeName) ?: loadTestByTitle(safeName, forceRefresh = false)
+            }
+        }
+    }
+
+    /**
+     * Disk-backed quiz questions for [testName] (normalized). Hydrates [quizQuestionsMemory].
+     * Use [loadQuizQuestionsForTest] with `forceRefresh = true` after this for stale-while-revalidate.
+     */
+    suspend fun loadCachedQuizQuestionsForTest(testName: String): List<QuizQuestionRemote> = withContext(Dispatchers.IO) {
+        val key = testName.trim().lowercase(Locale.US)
+        if (key.isBlank()) return@withContext emptyList()
+        quizQuestionsMemory[key]?.let { return@withContext it }
+        val list = readQuizQuestionsFromDisk(key)
+        if (list.isNotEmpty()) quizQuestionsMemory[key] = list
+        list
+    }
+
+    suspend fun loadQuizQuestionsForTest(testName: String, forceRefresh: Boolean = false): List<QuizQuestionRemote> =
+        withContext(Dispatchers.IO) {
+            val safeName = testName.trim()
+            if (safeName.isBlank()) return@withContext emptyList()
+            val key = safeName.lowercase(Locale.US)
+            if (!forceRefresh) {
+                quizQuestionsMemory[key]?.let { return@withContext it }
+            } else {
+                quizQuestionsMemory.remove(key)
+            }
+            try {
+                val test = resolveTestForQuizQuestions(safeName, forceRefresh)
+                val testId = test?.id?.trim().orEmpty()
+                if (testId.isBlank()) {
+                    val diskOnly = readQuizQuestionsFromDisk(key)
+                    if (diskOnly.isNotEmpty()) {
+                        quizQuestionsMemory[key] = diskOnly
+                        return@withContext diskOnly
+                    }
+                    return@withContext emptyList()
+                }
+                val rows = try {
+                    RetrofitProvider.appApi.getAttemptQuestions(testId).items
+                } catch (_: Exception) {
+                    RetrofitProvider.publicApi.getTestQuestions(testId).items
+                }
+                val mapped = rows.mapNotNull { row ->
+                    val prompt = row.questionPrompt.trim()
+                    val options = row.options.map { it.trim() }.filter { it.isNotBlank() }
+                    val correctIndex = row.correctIndex
+                    if (prompt.isBlank() || options.size < 2 || correctIndex !in options.indices) {
+                        null
+                    } else {
+                        QuizQuestionRemote(
+                            title = prompt,
+                            options = options,
+                            correctIndex = correctIndex,
+                            explanation = row.explanation?.trim().orEmpty(),
+                        )
+                    }
+                }
+                if (mapped.isNotEmpty()) {
+                    quizQuestionsMemory[key] = mapped
+                    runCatching { persistQuizQuestionsDiskCache(key, mapped) }
+                        .onFailure { Log.w(TAG, "persistQuizQuestionsDiskCache $key", it) }
+                    mapped
+                } else {
+                    runCatching { evictQuizQuestionsDiskCache(key) }
+                        .onFailure { Log.w(TAG, "evictQuizQuestionsDiskCache $key", it) }
+                    quizQuestionsMemory.remove(key)
+                    emptyList()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "loadQuizQuestionsForTest $safeName", e)
+                val fromDisk = readQuizQuestionsFromDisk(key)
+                if (fromDisk.isNotEmpty()) {
+                    quizQuestionsMemory[key] = fromDisk
+                    return@withContext fromDisk
+                }
+                throw e
+            }
+        }
 
     suspend fun loadTestAdvancedConfigByTitle(testName: String): TestAdvancedConfigRemote? = withContext(Dispatchers.IO) {
         loadTestByTitle(testName)?.toAdvancedConfigRemote()
@@ -640,9 +1084,24 @@ object ContentRepository {
         }
     }
 
-    suspend fun loadProfileMenuItems(): List<ProfileMenuItemRemote> = withContext(Dispatchers.IO) {
+    suspend fun loadCachedProfileMenuItems(): List<ProfileMenuItemRemote> = withContext(Dispatchers.IO) {
+        profileMenuItemsMemory?.let { return@withContext it }
+        val raw = AppPreferencesRepository.peekCachedProfileMenuJson() ?: return@withContext emptyList()
+        val parsed = runCatching { decodeProfileMenuItemsJson(raw) }.getOrNull() ?: return@withContext emptyList()
+        if (parsed.isNotEmpty()) {
+            profileMenuItemsMemory = parsed
+        }
+        parsed
+    }
+
+    suspend fun loadProfileMenuItems(forceRefresh: Boolean = false): List<ProfileMenuItemRemote> = withContext(Dispatchers.IO) {
+        if (!forceRefresh) {
+            profileMenuItemsMemory?.let { return@withContext it }
+        } else {
+            profileMenuItemsMemory = null
+        }
         try {
-            RetrofitProvider.publicApi.getHomeContent().profileMenuItems.map { item ->
+            val list = RetrofitProvider.publicApi.getHomeContent().profileMenuItems.map { item ->
                 ProfileMenuItemRemote(
                     id = item.id,
                     title = item.title,
@@ -651,10 +1110,54 @@ object ContentRepository {
                     enabled = item.enabled,
                 )
             }.filter { it.title.isNotBlank() && it.path.isNotBlank() }
+            if (list.isNotEmpty()) {
+                profileMenuItemsMemory = list
+                runCatching {
+                    AppPreferencesRepository.saveCachedProfileMenuJsonNow(encodeProfileMenuItemsJson(list))
+                }.onFailure { Log.w(TAG, "saveCachedProfileMenuJson", it) }
+            }
+            list
         } catch (e: Exception) {
             Log.w(TAG, "loadProfileMenuItems", e)
-            emptyList()
+            profileMenuItemsMemory ?: loadCachedProfileMenuItems()
         }
+    }
+
+    private fun encodeProfileMenuItemsJson(items: List<ProfileMenuItemRemote>): String {
+        val arr = JSONArray()
+        items.forEach { item ->
+            val o = JSONObject()
+            o.put("id", item.id)
+            o.put("title", item.title)
+            o.put("subtitle", item.subtitle)
+            o.put("path", item.path)
+            o.put("enabled", item.enabled)
+            arr.put(o)
+        }
+        return JSONObject().put("items", arr).toString()
+    }
+
+    private fun decodeProfileMenuItemsJson(raw: String): List<ProfileMenuItemRemote>? {
+        if (raw.isBlank()) return null
+        val root = runCatching { JSONObject(raw.trim()) }.getOrNull() ?: return null
+        val arr = root.optJSONArray("items") ?: return null
+        val out = ArrayList<ProfileMenuItemRemote>(arr.length())
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val title = o.optString("title").trim()
+            val path = o.optString("path").trim()
+            if (title.isBlank() || path.isBlank()) continue
+            out.add(
+                ProfileMenuItemRemote(
+                    id = o.optString("id").trim().ifBlank { path },
+                    title = title,
+                    subtitle = o.optString("subtitle", ""),
+                    path = path,
+                    enabled = o.optBoolean("enabled", true),
+                ),
+            )
+        }
+        return out
     }
 
     suspend fun loadExamCategories(): List<ExamCategoryItemRemote> = withContext(Dispatchers.IO) {

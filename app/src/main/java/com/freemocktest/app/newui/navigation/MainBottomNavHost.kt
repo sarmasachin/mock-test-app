@@ -86,6 +86,7 @@ import com.freemocktest.app.notifications.PushNavigationBridge
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.nio.charset.StandardCharsets
 
@@ -555,31 +556,42 @@ fun MainBottomNavHost(
                             drawerProfile.userIdFormatted ?: "guest"
                         }
                         scope.launch {
-                            val catalogId = ContentRepository.loadTestByTitle(name.ifBlank { "Test" })
-                                ?.id
-                                ?.trim()
-                                .orEmpty()
+                            val testTitle = name.ifBlank { "Test" }
+                            val catalogId = runCatching {
+                                ContentRepository.loadTestByTitle(testTitle)?.id?.trim().orEmpty()
+                            }.getOrElse { "" }
                             if (catalogId.isBlank()) {
                                 Toast.makeText(context, "Test details missing. Please retry.", Toast.LENGTH_SHORT).show()
                                 return@launch
                             }
-                            TestHistoryRepository.recordAttempt(
-                                userKey = attemptsUserKey,
-                                testName = name.ifBlank { "Test" },
-                                testCatalogId = catalogId,
-                                correct = correct,
-                                total = total,
-                            )
-                            AppPreferencesRepository.markPendingResultSubmittedNow(
-                                testName = name.ifBlank { "Test" },
-                                publishAtMillis = publishAt,
-                                answered = answered,
-                                correct = correct,
-                                wrong = wrong,
-                                total = total,
-                            )
-                            AppPreferencesRepository.removeAppliedTestSeriesNow(name.ifBlank { "Test" })
-                            mainNavController.goToHomeTab()
+                            try {
+                                TestHistoryRepository.recordAttempt(
+                                    userKey = attemptsUserKey,
+                                    testName = testTitle,
+                                    testCatalogId = catalogId,
+                                    correct = correct,
+                                    total = total,
+                                )
+                                AppPreferencesRepository.markPendingResultSubmittedNow(
+                                    testName = testTitle,
+                                    publishAtMillis = publishAt,
+                                    answered = answered,
+                                    correct = correct,
+                                    wrong = wrong,
+                                    total = total,
+                                )
+                                AppPreferencesRepository.removeAppliedTestSeriesNow(testTitle)
+                                mainNavController.goToHomeTab()
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                Toast.makeText(
+                                    context,
+                                    "Couldn't finish saving your result. Check home or history.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                                runCatching { mainNavController.goToHomeTab() }
+                            }
                         }
                     },
                 )

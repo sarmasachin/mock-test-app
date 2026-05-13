@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -61,6 +62,8 @@ import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @Composable
@@ -110,7 +113,8 @@ fun ApplyForTestScreenNew(
     LaunchedEffect(Unit) {
         // CMS copy for this screen; on failure the built-in defaults stay in effect.
         try {
-            val remote = ContentRepository.loadSubmitApplicationContent() ?: return@LaunchedEffect
+            val remote = runCatching { ContentRepository.loadSubmitApplicationContent() }.getOrNull()
+                ?: return@LaunchedEffect
             pageTitle = remote.title?.ifBlank { pageTitle } ?: pageTitle
             benefitsTitle = remote.benefitsTitle?.ifBlank { benefitsTitle } ?: benefitsTitle
             submitButtonLabel = remote.submitButtonLabel?.ifBlank { submitButtonLabel } ?: submitButtonLabel
@@ -118,6 +122,8 @@ fun ApplyForTestScreenNew(
             if (remote.bulletItems.isNotEmpty()) {
                 bulletItems = remote.bulletItems
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             // Defaults already initialised in `remember { mutableStateOf(...) }` remain in effect.
         }
@@ -126,9 +132,11 @@ fun ApplyForTestScreenNew(
         // Lock-window/active-window come from CMS; on failure the safe defaults
         // (`20_000L`, `30 * 60 * 1000L`) initialised above remain in effect.
         try {
-            val home = ContentRepository.loadHomeContent() ?: return@LaunchedEffect
+            val home = runCatching { ContentRepository.loadHomeContent() }.getOrNull() ?: return@LaunchedEffect
             startSeriesLockMs = home.startSeriesLockSeconds.coerceAtLeast(0).toLong() * 1000L
             startSeriesActiveWindowMs = home.startSeriesActiveWindowMinutes.coerceAtLeast(1).toLong() * 60_000L
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             // Defaults remain in effect.
         }
@@ -140,14 +148,16 @@ fun ApplyForTestScreenNew(
         // On failure we deliberately KEEP previously-resolved values so the user doesn't
         // lose a good snapshot just because a single ON_RESUME refresh hit a network blip.
         try {
-            val directMatch = ContentRepository.loadTestByTitle(title)
+            val directMatch = runCatching { ContentRepository.loadTestByTitle(title) }.getOrNull()
             val test = if (directMatch?.id?.isNotBlank() == true) {
                 directMatch
             } else {
                 // Some routes pass category/subcategory label instead of exact test title.
                 // Fallback to the first live test in that bucket so submit always has a valid test id.
-                ContentRepository.loadTestsForSubcategory(title)
-                    .firstOrNull { it.id.isNotBlank() }
+                runCatching {
+                    ContentRepository.loadTestsForSubcategory(title)
+                        .firstOrNull { it.id.isNotBlank() }
+                }.getOrNull()
             }
             testId = test?.id?.trim().orEmpty()
             resolvedTestName = test?.title?.trim()?.ifBlank { title } ?: title
@@ -166,21 +176,30 @@ fun ApplyForTestScreenNew(
                 test?.remainingSeatsLabel?.ifBlank { "0 seats left" } ?: "0 seats left"
             }
             if (testId.isNotBlank()) {
-                AuthRepository.getTestWaitlistStatus(testId).onSuccess { status ->
-                    isWaitlisted = status.waitlisted
-                    waitingPosition = status.waitingPosition.coerceAtLeast(0)
-                    waitingTotal = status.waitingTotal.coerceAtLeast(0)
-                }
+                runCatching { AuthRepository.getTestWaitlistStatus(testId) }
+                    .getOrNull()
+                    ?.onSuccess { status ->
+                        isWaitlisted = status.waitlisted
+                        waitingPosition = status.waitingPosition.coerceAtLeast(0)
+                        waitingTotal = status.waitingTotal.coerceAtLeast(0)
+                    }
             } else {
                 isWaitlisted = false
                 waitingPosition = 0
                 waitingTotal = 0
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             // Keep last-good values on screen; the user can pull background→foreground
             // (DisposableEffect bumps `refreshTick`) to retry.
         } finally {
-            isRefreshing = false
+            // When this effect is cancelled because `refreshTick` changed, do not clear
+            // `isRefreshing` here — the new effect immediately sets it true again. Clearing
+            // during cancel races the new run and makes Retry / resume look like they "flicker".
+            if (isActive) {
+                isRefreshing = false
+            }
         }
     }
     DisposableEffect(lifecycleOwner) {
@@ -371,37 +390,46 @@ fun ApplyForTestScreenNew(
                                 }
                                 isSubmitting = true
                                 scope.launch {
-                                    val result = AuthRepository.applyForTest(testId)
-                                    isSubmitting = false
-                                    result.onSuccess { response ->
-                                        val enrolled = response.enrolledCount.coerceAtLeast(0)
-                                        val capacity = response.capacityTotal.coerceAtLeast(0)
-                                        val remaining = response.remainingSeats.coerceAtLeast(0)
-                                        appliedInfo = if (capacity > 0) "$enrolled/$capacity" else "$enrolled"
-                                        remainingSeatsInfo = "$remaining seats left"
-                                        isWaitlisted = response.waitlisted
-                                        waitingPosition = response.waitingPosition.coerceAtLeast(0)
-                                        waitingTotal = response.waitingTotal.coerceAtLeast(0)
-                                        shouldQueueSeriesOnConfirm = !response.alreadyApplied && !response.waitlisted
-                                        successMessage = when {
-                                            response.message?.isNotBlank() == true -> response.message
-                                            response.alreadyApplied -> "You have already applied for this test."
-                                            else -> successMessage
+                                    try {
+                                        val result = AuthRepository.applyForTest(testId)
+                                        result.onSuccess { response ->
+                                            val enrolled = response.enrolledCount.coerceAtLeast(0)
+                                            val capacity = response.capacityTotal.coerceAtLeast(0)
+                                            val remaining = response.remainingSeats.coerceAtLeast(0)
+                                            appliedInfo = if (capacity > 0) "$enrolled/$capacity" else "$enrolled"
+                                            remainingSeatsInfo = "$remaining seats left"
+                                            isWaitlisted = response.waitlisted
+                                            waitingPosition = response.waitingPosition.coerceAtLeast(0)
+                                            waitingTotal = response.waitingTotal.coerceAtLeast(0)
+                                            shouldQueueSeriesOnConfirm = !response.alreadyApplied && !response.waitlisted
+                                            successMessage = when {
+                                                response.message?.isNotBlank() == true -> response.message
+                                                response.alreadyApplied -> "You have already applied for this test."
+                                                else -> successMessage
+                                            }
+                                            if (response.waitlisted) {
+                                                submitWarning = successMessage
+                                                showSuccessDialog = false
+                                            } else {
+                                                showSuccessDialog = true
+                                            }
+                                        }.onFailure { error ->
+                                            val message = error.message?.ifBlank { "Unable to submit application." }
+                                                ?: "Unable to submit application."
+                                            submitError = message
+                                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                                         }
-                                        if (response.waitlisted) {
-                                            submitWarning = successMessage
-                                            showSuccessDialog = false
-                                        } else {
-                                            showSuccessDialog = true
-                                        }
-                                    }.onFailure { error ->
-                                        val message = error.message?.ifBlank { "Unable to submit application." }
-                                            ?: "Unable to submit application."
-                                        submitError = message
-                                        // Inline red text already shows below the button; the toast
-                                        // adds a more glanceable confirmation for users who tap Submit
-                                        // and immediately look elsewhere on screen.
-                                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        submitError = "Unable to submit application."
+                                        Toast.makeText(
+                                            context,
+                                            "Unable to submit application.",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                    } finally {
+                                        isSubmitting = false
                                     }
                                 }
                             },
@@ -415,25 +443,26 @@ fun ApplyForTestScreenNew(
                             ),
                             enabled = !isSubmitting,
                         ) {
-                            if (isSubmitting) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center,
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier.heightIn(min = 22.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier.size(18.dp),
+                                    contentAlignment = Alignment.Center,
                                 ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp,
-                                        color = p.onPrimaryButton,
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        text = "Submitting...",
-                                        fontWeight = FontWeight.Bold,
-                                    )
+                                    if (isSubmitting) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp,
+                                            color = p.onPrimaryButton,
+                                        )
+                                    }
                                 }
-                            } else {
+                                Spacer(Modifier.width(8.dp))
                                 Text(
-                                    text = submitButtonLabel,
+                                    text = if (isSubmitting) "Submitting..." else submitButtonLabel,
                                     fontWeight = FontWeight.Bold,
                                 )
                             }
@@ -481,6 +510,8 @@ fun ApplyForTestScreenNew(
                                         lockMs = startSeriesLockMs,
                                         activeWindowMs = startSeriesActiveWindowMs,
                                     )
+                                } catch (e: CancellationException) {
+                                    throw e
                                 } catch (_: Exception) {
                                     // Swallow: nothing user-actionable here.
                                 }

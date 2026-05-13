@@ -229,6 +229,17 @@ async function ensureOptionalColumns() {
        DROP CONSTRAINT IF EXISTS news_articles_feed_kind_check`,
     );
     await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_news_articles_kind_updated
+       ON news_articles (feed_kind, updated_at DESC)
+       WHERE is_published = true`,
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_news_articles_published_updated
+       ON news_articles (is_published, updated_at DESC)
+       WHERE is_published = true`,
+    );
+    await pool.query(`DROP INDEX IF EXISTS idx_news_articles_kind_published`);
+    await pool.query(
       `CREATE TABLE IF NOT EXISTS user_login_devices (
          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
          fingerprint VARCHAR(128) NOT NULL,

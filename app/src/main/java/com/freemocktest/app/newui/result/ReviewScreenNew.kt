@@ -22,6 +22,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -29,8 +31,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,6 +48,13 @@ import androidx.compose.ui.unit.sp
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
+import kotlinx.coroutines.CancellationException
+
+private const val REVIEW_QUESTIONS_LOAD_ERROR_MESSAGE =
+    "Couldn't load review questions. Check your connection and try again."
+
+private const val REVIEW_SOLUTION_LOAD_ERROR_MESSAGE =
+    "Couldn't load solution. Check your connection and try again."
 
 @Composable
 fun ReviewScreenNew(
@@ -52,6 +65,34 @@ fun ReviewScreenNew(
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
+    var questions by remember(testName) { mutableStateOf<List<ReviewItem>>(emptyList()) }
+    var questionsLoading by remember(testName) { mutableStateOf(true) }
+    var questionsLoadFailed by remember(testName) { mutableStateOf(false) }
+    var reviewReloadKey by remember(testName) { mutableIntStateOf(0) }
+
+    LaunchedEffect(testName, reviewReloadKey) {
+        questionsLoading = true
+        questionsLoadFailed = false
+        try {
+            val result = runCatching { ContentRepository.loadQuizQuestionsForTest(testName) }
+            questions = result.getOrElse { emptyList() }.map { q ->
+                ReviewItem(
+                    title = q.title,
+                    yourAnswer = "Not available",
+                    correctAnswer = q.options.getOrNull(q.correctIndex).orEmpty().ifBlank { "Not available" },
+                    explanation = q.explanation,
+                )
+            }
+            questionsLoadFailed = result.isFailure
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            questions = emptyList()
+            questionsLoadFailed = true
+        } finally {
+            questionsLoading = false
+        }
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -91,18 +132,45 @@ fun ReviewScreenNew(
             )
             Spacer(Modifier.height(18.dp))
 
-            val questions by produceState(initialValue = emptyList<ReviewItem>(), key1 = testName) {
-                value = ContentRepository.loadQuizQuestionsForTest(testName).map { q ->
-                    ReviewItem(
-                        title = q.title,
-                        yourAnswer = "Not available",
-                        correctAnswer = q.options.getOrNull(q.correctIndex).orEmpty().ifBlank { "Not available" },
-                        explanation = q.explanation,
-                    )
+            if (questionsLoading) {
+                Text(
+                    text = "Loading review…",
+                    color = p.textSecondary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            } else if (questionsLoadFailed) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surface),
+                    border = BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            text = REVIEW_QUESTIONS_LOAD_ERROR_MESSAGE,
+                            color = p.textPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Button(
+                            onClick = { reviewReloadKey += 1 },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.primaryButton,
+                                contentColor = p.onPrimaryButton,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Retry", fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
-            }
-
-            if (questions.isEmpty()) {
+            } else if (questions.isEmpty()) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(18.dp),
@@ -219,16 +287,35 @@ fun ReviewSolutionScreenNew(
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
-    val questions by produceState(initialValue = emptyList<ReviewItem>(), key1 = testName) {
-        value = ContentRepository.loadQuizQuestionsForTest(testName).map { q ->
-            ReviewItem(
-                title = q.title,
-                yourAnswer = "Not available",
-                correctAnswer = q.options.getOrNull(q.correctIndex).orEmpty().ifBlank { "Not available" },
-                explanation = q.explanation,
-            )
+    var questions by remember(testName) { mutableStateOf<List<ReviewItem>>(emptyList()) }
+    var questionsLoading by remember(testName) { mutableStateOf(true) }
+    var questionsLoadFailed by remember(testName) { mutableStateOf(false) }
+    var solutionReloadKey by remember(testName) { mutableIntStateOf(0) }
+
+    LaunchedEffect(testName, solutionReloadKey) {
+        questionsLoading = true
+        questionsLoadFailed = false
+        try {
+            val result = runCatching { ContentRepository.loadQuizQuestionsForTest(testName) }
+            questions = result.getOrElse { emptyList() }.map { q ->
+                ReviewItem(
+                    title = q.title,
+                    yourAnswer = "Not available",
+                    correctAnswer = q.options.getOrNull(q.correctIndex).orEmpty().ifBlank { "Not available" },
+                    explanation = q.explanation,
+                )
+            }
+            questionsLoadFailed = result.isFailure
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            questions = emptyList()
+            questionsLoadFailed = true
+        } finally {
+            questionsLoading = false
         }
     }
+
     val totalQuestions = questions.size.coerceAtLeast(1)
     val safeQuestionNo = questionNo.coerceIn(1, totalQuestions)
     val activeQuestion = questions.getOrNull(safeQuestionNo - 1)
@@ -269,70 +356,138 @@ fun ReviewSolutionScreenNew(
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.height(10.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                repeat(totalQuestions) { idx ->
-                    val q = idx + 1
-                    val selected = q == safeQuestionNo
-                    val shape = RoundedCornerShape(10.dp)
+
+            when {
+                questionsLoading -> {
                     Text(
-                        text = "Q$q",
-                        color = if (selected) p.onPrimaryButton else p.textPrimary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .clip(shape)
-                            .background(if (selected) p.primaryButton else p.surfaceElevated)
-                            .border(1.dp, p.border.copy(alpha = 0.2f), shape)
-                            .clickable { onOpenQuestion(q) }
-                            .padding(horizontal = 10.dp, vertical = 7.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                }
-            }
-            Spacer(Modifier.height(14.dp))
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = p.surface),
-                border = BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    activeQuestion?.let { question ->
-                        Text(
-                            text = question.title,
-                            color = p.textPrimary,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "Correct answer: ${question.correctAnswer}",
-                            color = p.success,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Spacer(Modifier.height(10.dp))
-                    }
-                    Text(
-                        text = "Step-by-step solution",
-                        color = p.textPrimary,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = activeQuestion?.explanation?.ifBlank {
-                            "Detailed step-by-step solution is not available for Q$safeQuestionNo yet."
-                        } ?: "Detailed step-by-step solution is not available for Q$safeQuestionNo yet.",
+                        text = "Loading solution…",
                         color = p.textSecondary,
-                        fontSize = 13.sp,
-                        lineHeight = 19.sp,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
                     )
+                }
+                questionsLoadFailed -> {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = p.surface),
+                        border = BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Text(
+                                text = REVIEW_SOLUTION_LOAD_ERROR_MESSAGE,
+                                color = p.textPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Button(
+                                onClick = { solutionReloadKey += 1 },
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = p.primaryButton,
+                                    contentColor = p.onPrimaryButton,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Retry", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+                questions.isEmpty() -> {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = p.surface),
+                        border = BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Solution is not available yet for this test.",
+                                color = p.textPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = "Questions may not be published yet.",
+                                color = p.textSecondary,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                }
+                else -> {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        repeat(totalQuestions) { idx ->
+                            val q = idx + 1
+                            val selected = q == safeQuestionNo
+                            val shape = RoundedCornerShape(10.dp)
+                            Text(
+                                text = "Q$q",
+                                color = if (selected) p.onPrimaryButton else p.textPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clip(shape)
+                                    .background(if (selected) p.primaryButton else p.surfaceElevated)
+                                    .border(1.dp, p.border.copy(alpha = 0.2f), shape)
+                                    .clickable { onOpenQuestion(q) }
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                        }
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = p.surface),
+                        border = BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            activeQuestion?.let { question ->
+                                Text(
+                                    text = question.title,
+                                    color = p.textPrimary,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    text = "Correct answer: ${question.correctAnswer}",
+                                    color = p.success,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Spacer(Modifier.height(10.dp))
+                            }
+                            Text(
+                                text = "Step-by-step solution",
+                                color = p.textPrimary,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = activeQuestion?.explanation?.ifBlank {
+                                    "Detailed step-by-step solution is not available for Q$safeQuestionNo yet."
+                                } ?: "Detailed step-by-step solution is not available for Q$safeQuestionNo yet.",
+                                color = p.textSecondary,
+                                fontSize = 13.sp,
+                                lineHeight = 19.sp,
+                            )
+                        }
+                    }
                 }
             }
         }
