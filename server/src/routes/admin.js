@@ -9,6 +9,15 @@ const { getArticleFeedKindList, setArticleFeedKindList } = require('../lib/artic
 const { getArticleCategoryList, setArticleCategoryList } = require('../lib/articleCategoryOptions');
 const { sendPushToToken } = require('../notificationDispatch');
 const {
+  hashDeviceToken,
+  createCampaign,
+  finalizeCampaignCounts,
+  insertDeliveryEventsBatch,
+  getCampaignSummary,
+  getLatestCampaignForPushItem,
+  listCampaignEvents,
+} = require('../lib/pushCampaignAnalytics');
+const {
   isMailConfigured,
   sendAdminContentAlertEmail,
   sendSupportJourneyEmail,
@@ -4083,12 +4092,56 @@ router.patch('/publish-scheduling/:id', async (req, res) => {
   }
 });
 
+router.get('/notifications/campaigns/latest/:pushItemId', async (req, res) => {
+  try {
+    const pushItemId = String(req.params.pushItemId || '').trim().slice(0, 60);
+    if (!pushItemId) return res.status(400).json({ error: 'pushItemId is required' });
+    const row = await getLatestCampaignForPushItem(pushItemId);
+    if (!row) return res.json({ ok: true, campaign: null });
+    const summary = await getCampaignSummary(row.id);
+    return res.json({ ok: true, campaign: summary });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load campaign stats' });
+  }
+});
+
+router.get('/notifications/campaigns/:campaignId/stats', async (req, res) => {
+  try {
+    const campaignId = String(req.params.campaignId || '').trim();
+    const summary = await getCampaignSummary(campaignId);
+    if (!summary) return res.status(404).json({ error: 'Campaign not found' });
+    return res.json({ ok: true, campaign: summary });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load campaign stats' });
+  }
+});
+
+router.get('/notifications/campaigns/:campaignId/events', async (req, res) => {
+  try {
+    const campaignId = String(req.params.campaignId || '').trim();
+    const status = String(req.query.status || '').trim();
+    const q = String(req.query.q || '').trim();
+    const limit = Number(req.query.limit || 50);
+    const offset = Number(req.query.offset || 0);
+    const summary = await getCampaignSummary(campaignId);
+    if (!summary) return res.status(404).json({ error: 'Campaign not found' });
+    const page = await listCampaignEvents(campaignId, { status, q, limit, offset });
+    return res.json({ ok: true, ...page });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load campaign events' });
+  }
+});
+
 router.post('/notifications/send', async (req, res) => {
   const body = req.body || {};
   const title = String(body.title || '').trim().slice(0, 120);
   const message = String(body.message || '').trim().slice(0, 500);
   const target = String(body.target || 'all').trim().toLowerCase();
   const deepLink = String(body.deepLink || '').trim().slice(0, 120);
+  const pushItemId = String(body.pushItemId || '').trim().slice(0, 60);
   if (!title || !message) return res.status(400).json({ error: 'title and message are required' });
   if (!['all', 'new_users', 'active_users'].includes(target)) {
     return res.status(400).json({ error: 'target must be all, new_users or active_users' });
@@ -4165,8 +4218,16 @@ router.post('/notifications/send', async (req, res) => {
           : null;
     const activeClause = activeColumn ? `src.${activeColumn} = true AND ` : '';
     const orderClause = orderColumn ? `ORDER BY src.${orderColumn} DESC` : '';
+    const hasPlatform = cols.has('platform');
+    const hasDeviceModel = cols.has('device_model');
+    const extraCols = [
+      hasPlatform ? 'src.platform AS platform' : null,
+      hasDeviceModel ? 'src.device_model AS device_model' : null,
+    ]
+      .filter(Boolean)
+      .join(', ');
     const tokenRows = await pool.query(
-      `SELECT src.${tokenColumn} AS token
+      `SELECT src.${tokenColumn} AS token, src.user_id AS user_id${extraCols ? `, ${extraCols}` : ''}
        FROM ${sourceTable} src
        INNER JOIN users u ON u.id = src.user_id
        WHERE ${activeClause}${whereClause}
@@ -4174,19 +4235,62 @@ router.post('/notifications/send', async (req, res) => {
        LIMIT 10000`,
     );
     const rows = tokenRows.rows || [];
+    const campaignId = await createCampaign({
+      pushItemId,
+      title,
+      message,
+      target,
+      deepLink,
+      sentByUserId: req.userId,
+    });
+    const campaignIdStr = campaignId ? String(campaignId) : '';
     let sent = 0;
     let failed = 0;
     let deactivated = 0;
+    const deliveryEvents = [];
+    const now = new Date();
     for (const row of rows) {
       try {
         const currentToken = String(row.token || '').trim();
+        const userId = row.user_id || null;
+        const platform = String(row.platform || 'android').slice(0, 20);
+        const deviceModel = String(row.device_model || '').slice(0, 120);
         if (!currentToken) {
           failed += 1;
+          if (campaignId) {
+            deliveryEvents.push({
+              userId,
+              deviceTokenHash: hashDeviceToken(`empty-${userId}-${deliveryEvents.length}`),
+              platform,
+              deviceModel,
+              deliveryStatus: 'failed',
+              failCode: 'EMPTY_TOKEN',
+              failDetail: '',
+              deliveredAt: null,
+            });
+          }
           continue;
         }
-        const result = await sendPushToToken(currentToken, { title, message, deepLink });
+        const result = await sendPushToToken(currentToken, {
+          title,
+          message,
+          deepLink,
+          campaignId: campaignIdStr,
+        });
         if (result.ok) {
           sent += 1;
+          if (campaignId) {
+            deliveryEvents.push({
+              userId,
+              deviceTokenHash: hashDeviceToken(currentToken),
+              platform,
+              deviceModel,
+              deliveryStatus: 'delivered',
+              failCode: '',
+              failDetail: '',
+              deliveredAt: now,
+            });
+          }
         } else {
           failed += 1;
           console.error(
@@ -4194,6 +4298,18 @@ router.post('/notifications/send', async (req, res) => {
             result.code || 'unknown',
             (result.detail && String(result.detail).slice(0, 400)) || '',
           );
+          if (campaignId) {
+            deliveryEvents.push({
+              userId,
+              deviceTokenHash: hashDeviceToken(currentToken),
+              platform,
+              deviceModel,
+              deliveryStatus: 'failed',
+              failCode: String(result.code || 'unknown').slice(0, 40),
+              failDetail: String(result.detail || '').slice(0, 500),
+              deliveredAt: null,
+            });
+          }
           if (result.code === 'UNREGISTERED') {
             if (activeColumn) {
               const updateTs = cols.has('updated_at') ? ', updated_at = now()' : '';
@@ -4218,6 +4334,15 @@ router.post('/notifications/send', async (req, res) => {
         console.error('fcm_push_token_exception', e && (e.message || e));
       }
     }
+    if (campaignId) {
+      await insertDeliveryEventsBatch(campaignId, deliveryEvents);
+      await finalizeCampaignCounts(campaignId, {
+        total: rows.length,
+        delivered: sent,
+        failed,
+        deactivated,
+      });
+    }
     // Keep app bell/inbox feed in sync with manually sent pushes.
     await appendPushNotificationItem(req.userId, { title, message, target, deepLink });
     await logAdminAction(req, 'push_notification_manual_send', 'notification', null, {
@@ -4226,8 +4351,16 @@ router.post('/notifications/send', async (req, res) => {
       failed,
       deactivated,
       total: rows.length,
+      campaignId: campaignIdStr,
     });
-    return res.json({ ok: true, total: rows.length, sent, failed, deactivated });
+    return res.json({
+      ok: true,
+      total: rows.length,
+      sent,
+      failed,
+      deactivated,
+      campaignId: campaignIdStr || null,
+    });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to send push notification' });

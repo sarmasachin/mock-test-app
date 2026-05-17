@@ -45,9 +45,13 @@ async function sendPushToToken(deviceToken, payload) {
   const title = String(payload?.title || '').trim().slice(0, 120);
   const body = String(payload?.message || '').trim().slice(0, 500);
   const deepLink = String(payload?.deepLink || '').trim().slice(0, 120);
+  const campaignId = String(payload?.campaignId || '').trim().slice(0, 64);
   if (!title || !body) {
     return { ok: false, code: 'INVALID_PAYLOAD' };
   }
+  const data = {};
+  if (deepLink) data.deepLink = deepLink;
+  if (campaignId) data.campaignId = campaignId;
   const { token: accessToken, projectId } = await getAccessToken();
   const endpoint = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`;
   const response = await fetch(endpoint, {
@@ -63,11 +67,7 @@ async function sendPushToToken(deviceToken, payload) {
           title,
           body,
         },
-        data: deepLink
-          ? {
-              deepLink,
-            }
-          : {},
+        data,
         android: {
           priority: 'HIGH',
           notification: {

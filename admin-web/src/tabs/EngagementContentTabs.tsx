@@ -37,6 +37,36 @@ type PushItem = {
 };
 type PushSettings = { items: PushItem[] };
 
+type PushCampaignSummary = {
+  id: string;
+  title: string;
+  target: string;
+  deepLink: string;
+  sentAt: string;
+  sent: number;
+  delivered: number;
+  failed: number;
+  opened: number;
+  deactivated: number;
+  notOpened: number;
+  deliveryRate: number;
+  ctr: number;
+};
+
+type PushCampaignEventRow = {
+  id: number;
+  displayName: string;
+  email: string;
+  phone: string;
+  platform: string;
+  deviceModel: string;
+  status: string;
+  failCode: string;
+  deliveredAt: string | null;
+  openedAt: string | null;
+  openDelayMinutes: number | null;
+};
+
 /** Values accepted by app `openByPushRoute` (Android MainBottomNavHost). */
 const PUSH_DEEP_LINK_PRESETS: { value: string; label: string }[] = [
   { value: '', label: '— None —' },
@@ -379,6 +409,15 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   const [adding, setAdding] = useState(false);
   const [deletingId, setDeletingId] = useState('');
   const [sendingId, setSendingId] = useState('');
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsCampaign, setStatsCampaign] = useState<PushCampaignSummary | null>(null);
+  const [statsEvents, setStatsEvents] = useState<PushCampaignEventRow[]>([]);
+  const [statsEventsTotal, setStatsEventsTotal] = useState(0);
+  const [statsEventsPage, setStatsEventsPage] = useState(1);
+  const [statsFilter, setStatsFilter] = useState<'all' | 'delivered' | 'failed' | 'opened' | 'not_opened'>('all');
+  const [statsSearch, setStatsSearch] = useState('');
+  const STATS_EVENTS_PER_PAGE = 50;
   function formatDateTime(value: string) {
     const dt = new Date(value);
     if (!value || Number.isNaN(dt.getTime())) return '-';
@@ -432,6 +471,59 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: reload when tab remounts, not every render
   }, []);
+
+  async function loadCampaignEvents(campaignId: string, page: number, filter: string, search: string) {
+    const offset = (page - 1) * STATS_EVENTS_PER_PAGE;
+    const res = await apiClient.get(`/admin/notifications/campaigns/${campaignId}/events`, {
+      params: {
+        status: filter === 'all' ? '' : filter,
+        q: search.trim(),
+        limit: STATS_EVENTS_PER_PAGE,
+        offset,
+      },
+    });
+    setStatsEvents(Array.isArray(res.data?.items) ? res.data.items : []);
+    setStatsEventsTotal(Number(res.data?.total || 0));
+  }
+
+  async function openStatsForItem(item: PushItem) {
+    try {
+      setStatsLoading(true);
+      setStatsOpen(true);
+      setStatsEventsPage(1);
+      setStatsFilter('all');
+      setStatsSearch('');
+      const res = await apiClient.get(`/admin/notifications/campaigns/latest/${encodeURIComponent(item.id)}`);
+      const campaign = res.data?.campaign as PushCampaignSummary | null;
+      if (!campaign?.id) {
+        setStatsCampaign(null);
+        setStatsEvents([]);
+        setStatsEventsTotal(0);
+        pushToast('warning', 'No send stats yet. Use Send / Resend first.');
+        return;
+      }
+      setStatsCampaign(campaign);
+      await loadCampaignEvents(campaign.id, 1, 'all', '');
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to load push stats');
+      setStatsOpen(false);
+    } finally {
+      setStatsLoading(false);
+    }
+  }
+
+  async function refreshStatsModal() {
+    if (!statsCampaign?.id) return;
+    try {
+      setStatsLoading(true);
+      const res = await apiClient.get(`/admin/notifications/campaigns/${statsCampaign.id}/stats`);
+      setStatsCampaign(res.data?.campaign || statsCampaign);
+      await loadCampaignEvents(statsCampaign.id, statsEventsPage, statsFilter, statsSearch);
+    } finally {
+      setStatsLoading(false);
+    }
+  }
+
   async function save(nextSettings?: PushSettings, successText?: string) {
     try {
       setSaving(true);
@@ -543,6 +635,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
         message: item.message.trim(),
         target: item.target,
         deepLink: mergedSend.deepLink.trim(),
+        pushItemId: item.id,
       });
       const sent = Number(res.data?.sent || 0);
       const failed = Number(res.data?.failed || 0);
@@ -554,12 +647,18 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
         resultLine += ` ${deactivated} invalid token(s) cleared.`;
       }
       setSendResult(resultLine);
-      pushToast('success', resultLine);
+      const delivered = sent > 0;
+      pushToast(delivered ? 'success' : 'error', resultLine);
       setSettings((p) => ({
         ...p,
         items: p.items.map((x) =>
           x.id === item.id
-            ? { ...x, status: 'sent', resendCount: (x.resendCount || 0) + 1, lastSentAt: new Date().toISOString() }
+            ? {
+                ...x,
+                status: delivered ? 'sent' : x.status,
+                resendCount: delivered ? (x.resendCount || 0) + 1 : x.resendCount || 0,
+                lastSentAt: delivered ? new Date().toISOString() : x.lastSentAt,
+              }
             : x,
         ),
       }));
@@ -600,6 +699,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
           <span>Deep link</span>
           <span>Status</span>
           <span>Last Sent (IST)</span>
+          <span>Stats</span>
           <span>Resend</span>
           <span>Update</span>
           <span>Delete</span>
@@ -646,6 +746,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
             </span>
             <span>{item.status}</span>
             <span>{formatDateTime(item.lastSentAt)}</span>
+            <button type="button" className="ghost" onClick={() => { void openStatsForItem(item); }} disabled={saving || !!deletingId || !!sendingId || statsLoading}>Stats</button>
             <button type="button" className="ghost" onClick={() => sendNow(item)} disabled={saving || !!deletingId || !!sendingId}>{sendingId === item.id ? 'Sending...' : 'Resend'}</button>
             <button type="button" onClick={() => { void save(); }} disabled={saving || !!sendingId || !!deletingId}>{saving ? 'Saving...' : 'Save'}</button>
             <button type="button" className="danger" onClick={() => removePush(item.id)} disabled={saving || !!sendingId || !!deletingId}>{deletingId === item.id ? 'Deleting...' : 'Delete'}</button>
@@ -657,6 +758,136 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
       <div className="inline-form"><button type="button" className="ghost" onClick={load} disabled={saving || adding || !!sendingId || !!deletingId}>Load</button><button type="button" onClick={() => { void save(); }} disabled={saving || adding || !!sendingId || !!deletingId}>{saving ? 'Saving...' : 'Save Push Settings'}</button></div>
       {sendResult ? <p className="muted">{sendResult}</p> : null}
+      {statsOpen ? (
+        <div
+          className="admin-dialog-overlay"
+          style={{ zIndex: 1200 }}
+          onClick={() => setStatsOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="panel-card"
+            style={{ maxWidth: 960, width: 'min(96vw, 960px)', maxHeight: '90vh', overflow: 'auto', margin: '4vh auto' }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Push notification stats"
+          >
+            <div className="panel-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+              <h3>Push stats{statsCampaign?.title ? `: ${statsCampaign.title}` : ''}</h3>
+              <button type="button" className="ghost" onClick={() => setStatsOpen(false)}>Close</button>
+            </div>
+            {statsLoading && !statsCampaign ? <p className="muted">Loading…</p> : null}
+            {statsCampaign ? (
+              <>
+                <p className="muted" style={{ lineHeight: 1.6 }}>
+                  <strong>Campaign:</strong> {statsCampaign.title}
+                  <br />
+                  Target: {statsCampaign.target} | Deep link: {statsCampaign.deepLink || '—'} | Sent: {formatDateTime(statsCampaign.sentAt)}
+                  <br />
+                  Sent: {statsCampaign.sent.toLocaleString('en-IN')} | Delivered: {statsCampaign.delivered.toLocaleString('en-IN')} ({statsCampaign.deliveryRate}%)
+                  | Failed: {statsCampaign.failed.toLocaleString('en-IN')} | Opened: {statsCampaign.opened.toLocaleString('en-IN')} | CTR: {statsCampaign.ctr}%
+                  | Not opened: {statsCampaign.notOpened.toLocaleString('en-IN')} | Deactivated tokens: {statsCampaign.deactivated.toLocaleString('en-IN')}
+                </p>
+                <div className="inline-form" style={{ flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                  <select
+                    value={statsFilter}
+                    onChange={(e) => {
+                      const v = e.target.value as typeof statsFilter;
+                      setStatsFilter(v);
+                      setStatsEventsPage(1);
+                      if (statsCampaign?.id) void loadCampaignEvents(statsCampaign.id, 1, v, statsSearch);
+                    }}
+                  >
+                    <option value="all">All</option>
+                    <option value="delivered">Delivered</option>
+                    <option value="failed">Failed</option>
+                    <option value="opened">Opened</option>
+                    <option value="not_opened">Not opened</option>
+                  </select>
+                  <input
+                    value={statsSearch}
+                    onChange={(e) => setStatsSearch(e.target.value)}
+                    placeholder="Search name / email / phone"
+                    style={{ minWidth: 200 }}
+                  />
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => {
+                      if (!statsCampaign?.id) return;
+                      void loadCampaignEvents(statsCampaign.id, 1, statsFilter, statsSearch).then(() => setStatsEventsPage(1));
+                    }}
+                  >
+                    Search
+                  </button>
+                  <button type="button" className="ghost" onClick={() => { void refreshStatsModal(); }} disabled={statsLoading}>
+                    Refresh
+                  </button>
+                </div>
+                <div className="list table">
+                  <div className="row row-head" style={{ gridTemplateColumns: '1.2fr 1.2fr 1fr 90px 1fr 80px 80px 90px' }}>
+                    <span>User</span>
+                    <span>Contact</span>
+                    <span>Device</span>
+                    <span>OS</span>
+                    <span>Status</span>
+                    <span>Opened</span>
+                    <span>Delay (min)</span>
+                    <span>Fail</span>
+                  </div>
+                  {statsEvents.map((ev) => (
+                    <div key={ev.id} className="row" style={{ gridTemplateColumns: '1.2fr 1.2fr 1fr 90px 1fr 80px 80px 90px', fontSize: '0.88rem' }}>
+                      <span>{ev.displayName || '—'}</span>
+                      <span>{ev.phone || ev.email || '—'}</span>
+                      <span>{ev.deviceModel || '—'}</span>
+                      <span>{ev.platform || '—'}</span>
+                      <span>{ev.openedAt ? 'opened' : ev.status}</span>
+                      <span>{ev.openedAt ? 'yes' : 'no'}</span>
+                      <span>{ev.openDelayMinutes != null ? String(ev.openDelayMinutes) : '—'}</span>
+                      <span>{ev.failCode || '—'}</span>
+                    </div>
+                  ))}
+                  {!statsEvents.length ? <p className="muted">No rows for this filter.</p> : null}
+                </div>
+                <div className="pagination-wrap">
+                  <span>
+                    Page {statsEventsPage} of {Math.max(1, Math.ceil(statsEventsTotal / STATS_EVENTS_PER_PAGE))} ({statsEventsTotal} rows)
+                  </span>
+                  <div className="inline-form pagination-controls">
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={statsEventsPage <= 1 || statsLoading}
+                      onClick={() => {
+                        const p = Math.max(1, statsEventsPage - 1);
+                        setStatsEventsPage(p);
+                        if (statsCampaign?.id) void loadCampaignEvents(statsCampaign.id, p, statsFilter, statsSearch);
+                      }}
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={statsEventsPage >= Math.ceil(statsEventsTotal / STATS_EVENTS_PER_PAGE) || statsLoading}
+                      onClick={() => {
+                        const p = statsEventsPage + 1;
+                        setStatsEventsPage(p);
+                        if (statsCampaign?.id) void loadCampaignEvents(statsCampaign.id, p, statsFilter, statsSearch);
+                      }}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p className="muted">No campaign data yet. Send this push once, then open Stats again.</p>
+            )}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

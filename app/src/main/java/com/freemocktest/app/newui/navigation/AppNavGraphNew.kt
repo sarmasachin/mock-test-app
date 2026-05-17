@@ -2,11 +2,9 @@ package com.freemocktest.app.newui.navigation
 
 import android.util.Log
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -16,7 +14,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
@@ -31,10 +28,11 @@ import com.freemocktest.app.newui.auth.ForgotPasswordScreenNew
 import com.freemocktest.app.newui.legal.TermsOfServiceScreenNew
 import com.freemocktest.app.newui.components.NetworkConnectivityBanner
 import com.freemocktest.app.notifications.PushNavigationBridge
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 internal object RoutesNew {
-    const val BOOTSTRAP = "bootstrap"
     const val AUTH = "auth"
     /** One-time test multi-select after login / restored session. */
     const val SELECT_LOGIN_TESTS = "select_login_tests"
@@ -71,19 +69,53 @@ internal object RoutesNew {
     const val NOTIFICATIONS = "notifications"
 }
 
+private suspend fun resolveColdStartDestination(): String {
+    return when (AuthRepository.peekColdStartStatus()) {
+        RestoreSessionStatus.LoggedOut -> RoutesNew.AUTH
+        RestoreSessionStatus.ProfileIncomplete -> RoutesNew.COMPLETE_PROFILE
+        RestoreSessionStatus.Ready -> if (AppPreferencesRepository.shouldShowLoginTestPicker()) {
+            RoutesNew.SELECT_LOGIN_TESTS
+        } else {
+            RoutesNew.HOME
+        }
+    }
+}
+
 @Composable
 fun AppNavGraphNew() {
     val navController = rememberNavController()
+    val startDestination = remember {
+        runBlocking(Dispatchers.IO) { resolveColdStartDestination() }
+    }
     val pendingPushRoute by PushNavigationBridge.pendingRoute.collectAsState()
-    // Do not call navController.navigate() from inside Auth's click handler while that route is
-    // being popped (popUpTo AUTH inclusive). That can trigger lifecycle / snapshot crashes on some
-    // devices. Instead: flip a flag here; perform navigation from this stable LaunchedEffect.
     var pendingNavigateToHome by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        when (AuthRepository.restoreSession()) {
+            RestoreSessionStatus.LoggedOut -> {
+                val route = navController.currentDestination?.route
+                if (route != RoutesNew.AUTH) {
+                    navController.navigate(RoutesNew.AUTH) {
+                        popUpTo(navController.graph.id) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                }
+            }
+            RestoreSessionStatus.ProfileIncomplete -> {
+                val route = navController.currentDestination?.route
+                if (route != RoutesNew.COMPLETE_PROFILE && route != RoutesNew.AUTH) {
+                    navController.navigate(RoutesNew.COMPLETE_PROFILE) {
+                        popUpTo(navController.graph.id) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                }
+            }
+            RestoreSessionStatus.Ready -> Unit
+        }
+    }
 
     LaunchedEffect(pendingNavigateToHome) {
         if (!pendingNavigateToHome) return@LaunchedEffect
-        // Never clear the flag before navigate(): setting false changes this effect's key and can
-        // cancel this coroutine before navigate() runs — that looked like "app closes on login".
         val dest = if (AppPreferencesRepository.shouldShowLoginTestPicker()) {
             RoutesNew.SELECT_LOGIN_TESTS
         } else {
@@ -119,46 +151,11 @@ fun AppNavGraphNew() {
         NetworkConnectivityBanner()
         NavHost(
             navController = navController,
-            startDestination = RoutesNew.BOOTSTRAP,
+            startDestination = startDestination,
             modifier = Modifier
                 .weight(1f, fill = true)
                 .fillMaxWidth(),
         ) {
-        composable(RoutesNew.BOOTSTRAP) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator()
-            }
-            LaunchedEffect(Unit) {
-                when (AuthRepository.restoreSession()) {
-                    RestoreSessionStatus.Ready -> {
-                        val dest = if (AppPreferencesRepository.shouldShowLoginTestPicker()) {
-                            RoutesNew.SELECT_LOGIN_TESTS
-                        } else {
-                            RoutesNew.HOME
-                        }
-                        navController.navigate(dest) {
-                            popUpTo(RoutesNew.BOOTSTRAP) { inclusive = true }
-                            launchSingleTop = true
-                        }
-                    }
-                    RestoreSessionStatus.ProfileIncomplete -> {
-                        navController.navigate(RoutesNew.COMPLETE_PROFILE) {
-                            popUpTo(RoutesNew.BOOTSTRAP) { inclusive = true }
-                            launchSingleTop = true
-                        }
-                    }
-                    RestoreSessionStatus.LoggedOut -> {
-                        navController.navigate(RoutesNew.AUTH) {
-                            popUpTo(RoutesNew.BOOTSTRAP) { inclusive = true }
-                            launchSingleTop = true
-                        }
-                    }
-                }
-            }
-        }
         composable(RoutesNew.AUTH) {
             AuthRouteNew(
                 onAuthSuccess = { pendingNavigateToHome = true },
@@ -222,5 +219,3 @@ fun AppNavGraphNew() {
         }
     }
 }
-
-

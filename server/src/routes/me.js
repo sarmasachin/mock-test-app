@@ -13,6 +13,7 @@ const {
   sendSupportJourneyEmail,
 } = require('../mail');
 const { checkEmailVerificationUser } = require('../lib/otpSendRateLimit');
+const { recordNotificationOpen } = require('../lib/pushCampaignAnalytics');
 
 const router = express.Router();
 const { isProtectedSuperAdminDbEmail } = require('../constants/protectedSuperAdminEmails');
@@ -706,6 +707,18 @@ router.delete('/device-token', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to remove device token' });
+  }
+});
+
+router.post('/notification-open', async (req, res) => {
+  const campaignId = String(req.body?.campaignId || '').trim();
+  if (!campaignId) return res.status(400).json({ error: 'campaignId is required' });
+  try {
+    const result = await recordNotificationOpen(campaignId, req.userId);
+    return res.json({ ok: true, updated: Number(result.updated || 0) });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to record notification open' });
   }
 });
 

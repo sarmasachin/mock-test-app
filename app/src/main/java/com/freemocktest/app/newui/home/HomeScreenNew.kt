@@ -240,8 +240,10 @@ fun HomeScreenNew(
         defaultHomeCategorySections,
         )
     }
-    /** Hide the category strip until the first home CMS fetch settles so dummy chips never flash then swap. */
+    /** Hide the category strip until cached/home CMS is applied (disk preload or first fetch). */
     var homeCategoryStripReady by remember { mutableStateOf(false) }
+    val preloadedHome = remember { ContentRepository.peekHomeContentMemory() }
+    var didApplyPreloadedHome by remember { mutableStateOf(false) }
     var homeWelcomeTemplate by remember { mutableStateOf("Welcome {name}") }
     var homeQuickActionsTitle by remember { mutableStateOf("Quick actions") }
     var shareAppTemplate by remember { mutableStateOf("Check out MockTestApp for practice tests and alerts.\n{storeUrl}") }
@@ -381,6 +383,14 @@ fun HomeScreenNew(
         bannerSlides = mixedSlides
     }
 
+    androidx.compose.runtime.SideEffect {
+        if (!didApplyPreloadedHome && preloadedHome != null) {
+            applyHomeRemote(preloadedHome)
+            homeCategoryStripReady = true
+            didApplyPreloadedHome = true
+        }
+    }
+
     LaunchedEffect(Unit) {
         val now = System.currentTimeMillis()
         val previousVisitTs = visitPrefs.getLong("last_home_visit_ts", 0L)
@@ -407,18 +417,19 @@ fun HomeScreenNew(
         hiddenSessionAt = 0L
     }
     LaunchedEffect(Unit) {
-        // Stale-while-revalidate: hydrate from disk cache instantly so chips/quick actions don't
-        // flash defaults on cold start, then fetch the latest payload in the background and
-        // silently swap. Both paths are independently guarded so a failure in either does not
-        // strand `homeCategoryStripReady` (which would hide the strip forever).
-        var stripReadyMarked = false
-        try {
-            val cacheResult = runCatching { ContentRepository.loadCachedHomeContent() }
-            cacheResult.getOrNull()?.let { cached ->
+        // Paint from disk if Application preload did not run yet; never block UI on network.
+        var stripReadyMarked = homeCategoryStripReady
+        if (!stripReadyMarked) {
+            runCatching { ContentRepository.loadCachedHomeContent() }.getOrNull()?.let { cached ->
                 applyHomeRemote(cached)
                 homeCategoryStripReady = true
                 stripReadyMarked = true
             }
+        }
+        if (!stripReadyMarked) {
+            homeCategoryStripReady = true
+        }
+        scope.launch {
             val remoteResult = runCatching { ContentRepository.loadHomeContent(forceRefresh = true) }
             val remote = remoteResult.getOrNull()
             if (remote != null) {
@@ -427,12 +438,6 @@ fun HomeScreenNew(
                 homeRemoteRefreshFailed = false
             } else {
                 homeRemoteRefreshFailed = remoteResult.isFailure || remote == null
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } finally {
-            if (!stripReadyMarked) {
-                homeCategoryStripReady = true
             }
         }
     }

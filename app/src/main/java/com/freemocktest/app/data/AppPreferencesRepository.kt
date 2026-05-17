@@ -83,6 +83,8 @@ object AppPreferencesRepository {
     private val keyCachedNewsFeedExamJson = stringPreferencesKey("cached_news_feed_exam_json")
     /** Last successful CMS profile menu (from home payload) for instant Profile screen paint. */
     private val keyCachedProfileMenuJson = stringPreferencesKey("cached_profile_menu_json_v1")
+    /** Exam category hierarchy (level1/2/3) for instant Exam Categories screen. */
+    private val keyCachedExamCategoriesJson = stringPreferencesKey("cached_exam_categories_json_v1")
     /** Last successful tests lists per subcategory (bottom Tests tab + Apply fallback). */
     private val keyCachedTestsListsBlob = stringPreferencesKey("cached_tests_lists_blob_v1")
     /** Per-test-title quiz question lists from last successful API (answer key / review / result). */
@@ -694,6 +696,22 @@ object AppPreferencesRepository {
     suspend fun peekCachedHomeContent(): String? {
         if (!::appContext.isInitialized) return null
         val raw = runCatching { store().data.first()[keyCachedHomeContentJson].orEmpty().trim() }.getOrDefault("")
+        return raw.takeIf { it.isNotBlank() }
+    }
+
+    suspend fun saveCachedExamCategoriesNow(json: String) {
+        if (!::appContext.isInitialized) return
+        if (json.isBlank()) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyCachedExamCategoriesJson] = json
+            }
+        }.onFailure { Log.e(TAG, "saveCachedExamCategoriesNow failed", it) }
+    }
+
+    suspend fun peekCachedExamCategories(): String? {
+        if (!::appContext.isInitialized) return null
+        val raw = runCatching { store().data.first()[keyCachedExamCategoriesJson].orEmpty().trim() }.getOrDefault("")
         return raw.takeIf { it.isNotBlank() }
     }
 

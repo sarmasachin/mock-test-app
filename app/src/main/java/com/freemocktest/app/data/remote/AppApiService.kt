@@ -67,4 +67,9 @@ interface AppApiService {
         @Body body: DeviceTokenUpsertRequest,
     ): SimpleOkResponse
 
+    @POST("me/notification-open")
+    suspend fun recordNotificationOpen(
+        @Body body: NotificationOpenRequest,
+    ): SimpleOkResponse
+
 }

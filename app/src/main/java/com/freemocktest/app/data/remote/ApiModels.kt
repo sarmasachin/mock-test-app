@@ -478,6 +478,10 @@ data class PollVoteResponse(
     val counts: List<Int> = emptyList(),
 )
 
+data class NotificationOpenRequest(
+    @SerializedName("campaignId") val campaignId: String,
+)
+
 data class DeviceTokenUpsertRequest(
     @SerializedName("deviceToken") val deviceToken: String,
     val platform: String = "android",

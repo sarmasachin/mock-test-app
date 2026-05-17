@@ -1,6 +1,7 @@
 package com.freemocktest.app.data
 
 import android.util.Log
+import com.freemocktest.app.data.remote.ExamCategoriesDto
 import com.freemocktest.app.data.remote.NewsArticleDto
 import com.freemocktest.app.data.remote.RetrofitProvider
 import org.json.JSONArray
@@ -41,6 +42,8 @@ object ContentRepository {
     private var profileMenuItemsMemory: List<ProfileMenuItemRemote>? = null
     @Volatile
     private var homeContentMemory: HomeContentRemote? = null
+    @Volatile
+    private var examCategoriesMemory: List<ExamCategoryItemRemote>? = null
     @Volatile
     private var instructionContentMemory: InstructionContentRemote? = null
 
@@ -823,78 +826,92 @@ object ContentRepository {
         parsed
     }
 
+    /** Hydrate in-memory caches from disk before first frame (Application.onCreate). */
+    suspend fun warmCachesFromDisk() = withContext(Dispatchers.IO) {
+        loadCachedHomeContent()
+        loadCachedProfileMenuItems()
+        loadCachedExamCategories()
+    }
+
+    /** Non-blocking read of home cache warmed in [warmCachesFromDisk]. */
+    fun peekHomeContentMemory(): HomeContentRemote? = homeContentMemory
+
+    fun peekExamCategoriesMemory(): List<ExamCategoryItemRemote>? = examCategoriesMemory
+
     suspend fun loadHomeContent(forceRefresh: Boolean = false): HomeContentRemote? = withContext(Dispatchers.IO) {
         if (!forceRefresh) {
             homeContentMemory?.let { return@withContext it }
-        } else {
-            homeContentMemory = null
         }
         try {
-            val content = RetrofitProvider.publicApi.getHomeContent().content ?: return@withContext null
-            val sanitizedSections = content.sections
-                .map { section ->
-                    HomeSectionRemote(
-                        id = section.id.trim(),
-                        title = section.title.trim(),
-                        items = section.items.map { it.trim() }.filter { it.isNotBlank() },
-                    )
-                }
-                .filter { it.title.isNotBlank() && it.items.isNotEmpty() }
-            val sanitizedQuickActionSections = content.quickActionSections
-                .map { section ->
-                    HomeQuickActionSectionRemote(
-                        id = section.id.trim(),
-                        title = section.title.trim(),
-                        items = section.items
-                            .map { action ->
-                                HomeQuickActionItemRemote(
-                                    title = action.title.trim(),
-                                    actionKey = action.actionKey.trim(),
-                                    iconKey = action.iconKey?.trim()?.ifBlank { null },
-                                )
-                            }
-                            .filter { it.title.isNotBlank() && it.actionKey.isNotBlank() },
-                    )
-                }
-                .filter { it.title.isNotBlank() && it.items.isNotEmpty() }
-            HomeContentRemote(
-                welcomeText = content.welcomeText,
-                quickActionsTitle = content.quickActionsTitle,
-                themePreset = content.themePreset,
-                promoWidgetEnabled = content.promoWidgetEnabled,
-                promoWidgetHtml = content.promoWidgetHtml,
-                studentUpdateWidgetEnabled = content.studentUpdateWidgetEnabled || content.billWidgetEnabledLegacy,
-                studentUpdateWidgetHtml = content.studentUpdateWidgetHtml ?: content.billWidgetHtmlLegacy,
-                newsCategoryMenu = content.newsCategoryMenu.map { it.trim() }.filter { it.isNotBlank() },
-                jobCategoryMenu = content.jobCategoryMenu.map { it.trim() }.filter { it.isNotBlank() },
-                examCategoryMenu = content.examCategoryMenu.map { it.trim() }.filter { it.isNotBlank() },
-                sections = sanitizedSections,
-                quickActionSections = sanitizedQuickActionSections,
-                banners = content.banners.filter { it.enabled && it.imageUrl.isNotBlank() }.map { it.imageUrl },
-                newsSlides = content.newsSlides
-                    .filter { it.enabled && it.articleId.isNotBlank() && it.imageUrl.isNotBlank() }
-                    .map {
-                        HomeNewsSlideRemote(
-                            id = it.id,
-                            articleId = it.articleId,
-                            headline = it.headline,
-                            imageUrl = it.imageUrl,
-                        )
-                    },
-                startSeriesLockSeconds = (content.startSeriesLockSeconds ?: 20).coerceIn(0, 86_400),
-                startSeriesActiveWindowMinutes = (content.startSeriesActiveWindowMinutes ?: 30).coerceIn(1, 10_080),
-            ).also { fresh ->
-                homeContentMemory = fresh
-                // Persist for the next cold start. Failure here is non-fatal: in-memory cache
-                // still serves the rest of this session, and the next successful fetch will retry.
-                runCatching {
-                    AppPreferencesRepository.saveCachedHomeContentNow(encodeHomeContent(fresh))
-                }.onFailure { Log.w(TAG, "saveCachedHomeContent", it) }
-            }
+            val fresh = fetchHomeContentFromNetwork() ?: return@withContext homeContentMemory
+            homeContentMemory = fresh
+            runCatching {
+                AppPreferencesRepository.saveCachedHomeContentNow(encodeHomeContent(fresh))
+            }.onFailure { Log.w(TAG, "saveCachedHomeContent", it) }
+            fresh
         } catch (e: Exception) {
             Log.w(TAG, "loadHomeContent", e)
-            null
+            homeContentMemory
         }
+    }
+
+    private suspend fun fetchHomeContentFromNetwork(): HomeContentRemote? {
+        val response = RetrofitProvider.publicApi.getHomeContent()
+        persistExamCategories(mapExamCategoryDtos(response.examCategories))
+        val content = response.content ?: return null
+        val sanitizedSections = content.sections
+            .map { section ->
+                HomeSectionRemote(
+                    id = section.id.trim(),
+                    title = section.title.trim(),
+                    items = section.items.map { it.trim() }.filter { it.isNotBlank() },
+                )
+            }
+            .filter { it.title.isNotBlank() && it.items.isNotEmpty() }
+        val sanitizedQuickActionSections = content.quickActionSections
+            .map { section ->
+                HomeQuickActionSectionRemote(
+                    id = section.id.trim(),
+                    title = section.title.trim(),
+                    items = section.items
+                        .map { action ->
+                            HomeQuickActionItemRemote(
+                                title = action.title.trim(),
+                                actionKey = action.actionKey.trim(),
+                                iconKey = action.iconKey?.trim()?.ifBlank { null },
+                            )
+                        }
+                        .filter { it.title.isNotBlank() && it.actionKey.isNotBlank() },
+                )
+            }
+            .filter { it.title.isNotBlank() && it.items.isNotEmpty() }
+        return HomeContentRemote(
+            welcomeText = content.welcomeText,
+            quickActionsTitle = content.quickActionsTitle,
+            themePreset = content.themePreset,
+            promoWidgetEnabled = content.promoWidgetEnabled,
+            promoWidgetHtml = content.promoWidgetHtml,
+            studentUpdateWidgetEnabled = content.studentUpdateWidgetEnabled || content.billWidgetEnabledLegacy,
+            studentUpdateWidgetHtml = content.studentUpdateWidgetHtml ?: content.billWidgetHtmlLegacy,
+            newsCategoryMenu = content.newsCategoryMenu.map { it.trim() }.filter { it.isNotBlank() },
+            jobCategoryMenu = content.jobCategoryMenu.map { it.trim() }.filter { it.isNotBlank() },
+            examCategoryMenu = content.examCategoryMenu.map { it.trim() }.filter { it.isNotBlank() },
+            sections = sanitizedSections,
+            quickActionSections = sanitizedQuickActionSections,
+            banners = content.banners.filter { it.enabled && it.imageUrl.isNotBlank() }.map { it.imageUrl },
+            newsSlides = content.newsSlides
+                .filter { it.enabled && it.articleId.isNotBlank() && it.imageUrl.isNotBlank() }
+                .map {
+                    HomeNewsSlideRemote(
+                        id = it.id,
+                        articleId = it.articleId,
+                        headline = it.headline,
+                        imageUrl = it.imageUrl,
+                    )
+                },
+            startSeriesLockSeconds = (content.startSeriesLockSeconds ?: 20).coerceIn(0, 86_400),
+            startSeriesActiveWindowMinutes = (content.startSeriesActiveWindowMinutes ?: 30).coerceIn(1, 10_080),
+        )
     }
 
     private fun encodeHomeContent(c: HomeContentRemote): String {
@@ -1097,8 +1114,6 @@ object ContentRepository {
     suspend fun loadProfileMenuItems(forceRefresh: Boolean = false): List<ProfileMenuItemRemote> = withContext(Dispatchers.IO) {
         if (!forceRefresh) {
             profileMenuItemsMemory?.let { return@withContext it }
-        } else {
-            profileMenuItemsMemory = null
         }
         try {
             val list = RetrofitProvider.publicApi.getHomeContent().profileMenuItems.map { item ->
@@ -1160,23 +1175,86 @@ object ContentRepository {
         return out
     }
 
-    suspend fun loadExamCategories(): List<ExamCategoryItemRemote> = withContext(Dispatchers.IO) {
+    suspend fun loadCachedExamCategories(): List<ExamCategoryItemRemote> = withContext(Dispatchers.IO) {
+        examCategoriesMemory?.let { return@withContext it }
+        val raw = AppPreferencesRepository.peekCachedExamCategories() ?: return@withContext emptyList()
+        val parsed = runCatching { decodeExamCategoriesJson(raw) }.getOrNull() ?: return@withContext emptyList()
+        if (parsed.isNotEmpty()) {
+            examCategoriesMemory = parsed
+        }
+        parsed
+    }
+
+    suspend fun loadExamCategories(forceRefresh: Boolean = false): List<ExamCategoryItemRemote> = withContext(Dispatchers.IO) {
+        if (!forceRefresh) {
+            examCategoriesMemory?.let { return@withContext it }
+            loadCachedExamCategories().takeIf { it.isNotEmpty() }?.let { return@withContext it }
+        }
         try {
-            val items = RetrofitProvider.publicApi.getHomeContent().examCategories?.items ?: emptyList()
-            items.map {
-                ExamCategoryItemRemote(
-                    id = it.id,
-                    level1 = it.level1,
-                    level2 = it.level2,
-                    level3 = it.level3,
-                    iconKey = it.iconKey,
-                    enabled = it.enabled,
-                )
-            }.filter { it.level1.isNotBlank() && it.level2.isNotBlank() && it.level3.isNotBlank() }
+            val response = RetrofitProvider.publicApi.getHomeContent()
+            val items = mapExamCategoryDtos(response.examCategories)
+            persistExamCategories(items)
+            items
         } catch (e: Exception) {
             Log.w(TAG, "loadExamCategories", e)
-            emptyList()
+            examCategoriesMemory ?: loadCachedExamCategories()
         }
+    }
+
+    private fun mapExamCategoryDtos(dto: ExamCategoriesDto?): List<ExamCategoryItemRemote> {
+        val items = dto?.items ?: emptyList()
+        return items.map {
+            ExamCategoryItemRemote(
+                id = it.id,
+                level1 = it.level1,
+                level2 = it.level2,
+                level3 = it.level3,
+                iconKey = it.iconKey,
+                enabled = it.enabled,
+            )
+        }.filter { it.level1.isNotBlank() && it.level2.isNotBlank() && it.level3.isNotBlank() && it.enabled }
+    }
+
+    private suspend fun persistExamCategories(items: List<ExamCategoryItemRemote>) {
+        examCategoriesMemory = items
+        if (items.isEmpty()) return
+        runCatching {
+            AppPreferencesRepository.saveCachedExamCategoriesNow(encodeExamCategoriesJson(items))
+        }.onFailure { Log.w(TAG, "persistExamCategories", it) }
+    }
+
+    private fun encodeExamCategoriesJson(items: List<ExamCategoryItemRemote>): String {
+        val arr = JSONArray()
+        items.forEach { item ->
+            val o = JSONObject()
+            o.put("id", item.id)
+            o.put("level1", item.level1)
+            o.put("level2", item.level2)
+            o.put("level3", item.level3)
+            item.iconKey?.let { o.put("iconKey", it) }
+            o.put("enabled", item.enabled)
+            arr.put(o)
+        }
+        return arr.toString()
+    }
+
+    private fun decodeExamCategoriesJson(raw: String): List<ExamCategoryItemRemote> {
+        val arr = JSONArray(raw)
+        val out = ArrayList<ExamCategoryItemRemote>(arr.length())
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            out.add(
+                ExamCategoryItemRemote(
+                    id = o.optString("id", ""),
+                    level1 = o.optString("level1", ""),
+                    level2 = o.optString("level2", ""),
+                    level3 = o.optString("level3", ""),
+                    iconKey = o.optString("iconKey", "").trim().ifBlank { null },
+                    enabled = o.optBoolean("enabled", true),
+                ),
+            )
+        }
+        return out.filter { it.level1.isNotBlank() && it.level2.isNotBlank() && it.level3.isNotBlank() && it.enabled }
     }
 
     suspend fun loadPollModalSettings(): PollModalSettingsRemote = withContext(Dispatchers.IO) {

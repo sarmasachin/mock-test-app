@@ -86,6 +86,15 @@ object AuthRepository {
         refreshTokenMem = AuthTokenStore.readRefresh()
     }
 
+    /** Instant cold-start route hint: token + cached bootstrap only (no network). */
+    suspend fun peekColdStartStatus(): RestoreSessionStatus {
+        loadStoredTokens()
+        if (accessTokenMem.isNullOrBlank()) {
+            return RestoreSessionStatus.LoggedOut
+        }
+        return AppPreferencesRepository.getAuthBootstrapState() ?: RestoreSessionStatus.Ready
+    }
+
     suspend fun persistTokens(access: String, refresh: String) {
         accessTokenMem = access
         refreshTokenMem = refresh
@@ -112,10 +121,11 @@ object AuthRepository {
         // was waiting on /me to respond. We never short-circuit when the cached state is missing
         // or LoggedOut – those still go through the original network-confirm path below.
         if (cachedStatus == RestoreSessionStatus.Ready ||
-            cachedStatus == RestoreSessionStatus.ProfileIncomplete
+            cachedStatus == RestoreSessionStatus.ProfileIncomplete ||
+            (cachedStatus == null && !accessTokenMem.isNullOrBlank())
         ) {
             refreshSessionInBackground()
-            return@withContext cachedStatus
+            return@withContext cachedStatus ?: RestoreSessionStatus.Ready
         }
         return@withContext try {
             val me = withTimeoutOrNull(RESTORE_TIMEOUT_MS) { RetrofitProvider.appApi.me() }

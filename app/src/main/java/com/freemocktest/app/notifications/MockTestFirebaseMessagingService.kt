@@ -28,6 +28,7 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
             .ifBlank { message.data["message"]?.trim().orEmpty() }
         if (body.isBlank()) return
         val deepLink = message.data["deepLink"]?.trim().orEmpty()
+        val campaignId = message.data["campaignId"]?.trim().orEmpty()
         LocalNotificationInbox.save(
             context = applicationContext,
             title = title,
@@ -37,6 +38,7 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             if (deepLink.isNotBlank()) putExtra("push_deep_link", deepLink)
+            if (campaignId.isNotBlank()) putExtra("campaignId", campaignId)
         }
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -45,7 +47,7 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val notification = NotificationCompat.Builder(this, MockTestNotificationChannels.GENERAL_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_stat_notification)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))

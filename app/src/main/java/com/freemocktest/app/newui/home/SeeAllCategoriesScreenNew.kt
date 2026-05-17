@@ -32,7 +32,6 @@ import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Button
@@ -61,7 +60,6 @@ import com.freemocktest.app.newui.theme.palette.categoryLabelTintColor
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import coil.compose.AsyncImage
-
 private const val NO_EXAMS_MESSAGE = "Mock Test Exam Not Available"
 private const val LOAD_ERROR_MESSAGE = "Couldn't load exam categories. Check your connection and try again."
 
@@ -70,6 +68,29 @@ private data class ExamHierarchyNode(
     val iconKey: String? = null,
     val children: List<ExamHierarchyNode> = emptyList(),
 )
+
+private fun buildExamHierarchy(remote: List<ContentRepository.ExamCategoryItemRemote>): List<ExamHierarchyNode> {
+    if (remote.isEmpty()) return emptyList()
+    val grouped = remote.groupBy { it.level1.trim() }
+    return grouped.map { (l1, level1Rows) ->
+        ExamHierarchyNode(
+            label = l1,
+            children = level1Rows.groupBy { it.level2.trim() }.map { (l2, level2Rows) ->
+                ExamHierarchyNode(
+                    label = l2,
+                    iconKey = level2Rows.firstNotNullOfOrNull { it.iconKey?.trim()?.takeIf(String::isNotEmpty) },
+                    children = level2Rows.map {
+                        ExamHierarchyNode(
+                            label = it.level3.trim(),
+                            iconKey = it.iconKey?.trim()?.takeIf(String::isNotEmpty),
+                        )
+                    }.distinctBy { it.label },
+                )
+            }.sortedBy { it.label },
+            iconKey = level1Rows.firstNotNullOfOrNull { it.iconKey?.trim()?.takeIf(String::isNotEmpty) },
+        )
+    }.sortedBy { it.label }
+}
 
 @Composable
 fun SeeAllCategoriesScreenNew(
@@ -80,47 +101,43 @@ fun SeeAllCategoriesScreenNew(
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
-
-    var hierarchy by remember { mutableStateOf<List<ExamHierarchyNode>>(emptyList()) }
-    var hierarchyLoaded by remember { mutableStateOf(false) }
+    val preloadedItems = remember { ContentRepository.peekExamCategoriesMemory() }
+    var hierarchy by remember {
+        mutableStateOf(preloadedItems?.let { buildExamHierarchy(it) } ?: emptyList())
+    }
     var hierarchyFetchError by remember { mutableStateOf(false) }
     var hierarchyReloadKey by remember { mutableIntStateOf(0) }
     var level1 by remember { mutableStateOf<String?>(null) }
     var level2 by remember { mutableStateOf<String?>(null) }
+    var didApplyPreload by remember { mutableStateOf(false) }
+
+    fun applyRemoteItems(remote: List<ContentRepository.ExamCategoryItemRemote>) {
+        hierarchy = buildExamHierarchy(remote.filter { it.enabled })
+        hierarchyFetchError = false
+    }
+
+    androidx.compose.runtime.SideEffect {
+        if (!didApplyPreload && preloadedItems != null) {
+            applyRemoteItems(preloadedItems)
+            didApplyPreload = true
+        }
+    }
 
     LaunchedEffect(hierarchyReloadKey) {
-        hierarchyLoaded = false
-        hierarchyFetchError = false
-        try {
-            val remote = ContentRepository.loadExamCategories().filter { it.enabled }
+        runCatching { ContentRepository.loadCachedExamCategories() }
+            .getOrNull()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { applyRemoteItems(it) }
+        val remote = runCatching { ContentRepository.loadExamCategories(forceRefresh = true) }.getOrNull()
+        if (remote != null) {
             if (remote.isNotEmpty()) {
-                val grouped = remote.groupBy { it.level1.trim() }
-                hierarchy = grouped.map { (l1, level1Rows) ->
-                    ExamHierarchyNode(
-                        label = l1,
-                        children = level1Rows.groupBy { it.level2.trim() }.map { (l2, level2Rows) ->
-                            ExamHierarchyNode(
-                                label = l2,
-                                iconKey = level2Rows.firstNotNullOfOrNull { it.iconKey?.trim()?.takeIf(String::isNotEmpty) },
-                                children = level2Rows.map {
-                                    ExamHierarchyNode(
-                                        label = it.level3.trim(),
-                                        iconKey = it.iconKey?.trim()?.takeIf(String::isNotEmpty),
-                                    )
-                                }.distinctBy { it.label },
-                            )
-                        }.sortedBy { it.label },
-                        iconKey = level1Rows.firstNotNullOfOrNull { it.iconKey?.trim()?.takeIf(String::isNotEmpty) },
-                    )
-                }.sortedBy { it.label }
-            } else {
+                applyRemoteItems(remote)
+            } else if (hierarchy.isEmpty()) {
                 hierarchy = emptyList()
+                hierarchyFetchError = false
             }
-        } catch (_: Exception) {
-            hierarchy = emptyList()
+        } else if (hierarchy.isEmpty()) {
             hierarchyFetchError = true
-        } finally {
-            hierarchyLoaded = true
         }
     }
 
@@ -141,8 +158,8 @@ fun SeeAllCategoriesScreenNew(
     BackHandler(onBack = navigateUp)
 
     val showEmptyMessage =
-        hierarchyLoaded && !hierarchyFetchError && hierarchy.isEmpty() && level1 == null && level2 == null
-    val showLoadError = hierarchyLoaded && hierarchyFetchError
+        !hierarchyFetchError && hierarchy.isEmpty() && level1 == null && level2 == null
+    val showLoadError = hierarchyFetchError && hierarchy.isEmpty()
     val showBackInAppBar = showAppBarBack || level1 != null || level2 != null
 
     val shownItems = when {
@@ -185,16 +202,7 @@ fun SeeAllCategoriesScreenNew(
             }
             Spacer(Modifier.height(16.dp))
 
-            if (!hierarchyLoaded) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(color = p.accent)
-                }
-            } else if (showEmptyMessage) {
+            if (showEmptyMessage) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
