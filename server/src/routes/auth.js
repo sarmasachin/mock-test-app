@@ -31,6 +31,17 @@ const {
 
 const router = express.Router();
 
+/**
+ * When true, POST /admin-login/request-otp returns JWTs immediately after password + is_admin
+ * checks (no email OTP). Production servers must leave ADMIN_DEV_PASSWORD_LOGIN unset/false
+ * (do not commit server/.env); NODE_ENV is not used here so local runs are not blocked by a
+ * stray NODE_ENV=production on the developer machine.
+ */
+function isAdminDevPasswordLoginEnabled() {
+  const raw = String(process.env.ADMIN_DEV_PASSWORD_LOGIN || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
 function pickSixDigit() {
   return 100000 + Math.floor(Math.random() * 900000);
 }
@@ -294,6 +305,23 @@ router.post('/admin-login/request-otp', async (req, res) => {
       res.setHeader('Retry-After', String(rlUid.retryAfterSec));
       return res.status(429).json({
         error: `Too many code requests for this account. Try again in ${rlUid.retryAfterSec}s.`,
+      });
+    }
+
+    if (isAdminDevPasswordLoginEnabled()) {
+      console.warn(
+        'admin_login_dev_password_bypass: tokens issued without OTP (ADMIN_DEV_PASSWORD_LOGIN is enabled — disable on any public deploy)',
+      );
+      const tokens = await issueTokens(row.id);
+      return res.status(200).json({
+        ok: true,
+        devPasswordBypass: true,
+        message:
+          'Local dev: signed in without email OTP. Unset ADMIN_DEV_PASSWORD_LOGIN before production.',
+        user: mapUserRow(row),
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        expiresInSeconds: tokens.expiresInSeconds,
       });
     }
 

@@ -10,6 +10,7 @@ import {
   PublishSchedulingTabImpl,
   UserManagementAdvancedTabImpl,
 } from './tabs/AdvancedAdminTabs';
+import { ExamSnapCardTab } from './tabs/ExamSnapCardTab';
 import { isProtectedSuperAdminEmail } from './protectedSuperAdmin';
 import {
   InstructionContentTabImpl,
@@ -59,6 +60,7 @@ type Tab =
   | 'dailyQuiz'
   | 'articles'
   | 'homeContent'
+  | 'examSnapCard'
   | 'pollSettings'
   | 'pushNotificationSettings'
   | 'notificationScheduling'
@@ -432,6 +434,7 @@ const TAB_LABELS: Record<Tab, string> = {
   dailyQuiz: 'Daily Quiz',
   articles: 'Articles',
   homeContent: 'Home Content',
+  examSnapCard: 'Card',
   pollSettings: 'Poll Settings',
   pushNotificationSettings: 'Push Notification',
   notificationScheduling: 'Notification Scheduling',
@@ -463,6 +466,7 @@ const TAB_ICONS: Record<Tab, string> = {
   dailyQuiz: 'DQ',
   articles: 'AR',
   homeContent: 'HC',
+  examSnapCard: 'CD',
   pollSettings: 'PL',
   pushNotificationSettings: 'PN',
   notificationScheduling: 'NS',
@@ -930,6 +934,25 @@ function App() {
     return { ok: true };
   }
 
+  /** Server local-dev bypass: request-otp returns tokens + devPasswordBypass (never in production). */
+  async function completeAdminDevBypassLogin(
+    resData: { accessToken?: string; user?: LoginUserPayload },
+    successMsg: string,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    const accessToken = String(resData?.accessToken || '');
+    if (!accessToken) return { ok: false, message: 'Token missing in login response.' };
+    const loginUser = (resData?.user || null) as LoginUserPayload;
+    const result = await bootstrapAdminSession(accessToken, identifier, loginUser);
+    if (!result.ok) return { ok: false, message: result.message };
+    setAdminOtpStep('password');
+    setOtpCode('');
+    setPassword('');
+    setOtpResendSec(0);
+    setMessageType('success');
+    setMessage(successMsg);
+    return { ok: true };
+  }
+
   async function handleAdminRequestOtp(e: FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -941,6 +964,14 @@ function App() {
         password,
       });
       if (res.data?.ok) {
+        if (res.data?.devPasswordBypass && res.data?.accessToken) {
+          const done = await completeAdminDevBypassLogin(res.data, 'Login successful (local dev: no OTP).');
+          if (!done.ok) {
+            setMessageType('error');
+            setMessage(done.message);
+          }
+          return;
+        }
         setAdminOtpStep('otp');
         setOtpCode('');
         setMessageType('success');
@@ -973,6 +1004,14 @@ function App() {
         password,
       });
       if (res.data?.ok) {
+        if (res.data?.devPasswordBypass && res.data?.accessToken) {
+          const done = await completeAdminDevBypassLogin(res.data, 'Signed in again (local dev: no OTP).');
+          if (!done.ok) {
+            setMessageType('error');
+            setMessage(done.message);
+          }
+          return;
+        }
         setOtpCode('');
         setOtpResendSec(ADMIN_OTP_RESEND_COOLDOWN_SEC);
         setMessageType('success');
@@ -1167,6 +1206,7 @@ function App() {
               'dailyQuiz',
               'articles',
               'homeContent',
+              'examSnapCard',
               'notificationScheduling',
               'publishScheduling',
               'submitApplicationContent',
@@ -1250,6 +1290,7 @@ function App() {
           {tab === 'dailyQuiz' && <DailyQuizTab apiClient={authedApi} />}
           {tab === 'articles' && <ArticlesTab apiClient={authedApi} />}
           {tab === 'homeContent' && <HomeContentTab apiClient={authedApi} />}
+          {tab === 'examSnapCard' && <ExamSnapCardTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
           {tab === 'pollSettings' && <PollSettingsTab apiClient={authedApi} />}
           {tab === 'pushNotificationSettings' && <PushNotificationSettingsTab apiClient={authedApi} />}
           {tab === 'notificationScheduling' && <NotificationSchedulingTab apiClient={authedApi} />}

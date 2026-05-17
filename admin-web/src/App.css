@@ -386,6 +386,8 @@
   border-radius: var(--radius-lg);
   padding: 12px;
   box-shadow: var(--shadow-card);
+  max-width: 100%;
+  min-width: 0;
 }
 
 .panel-head {
@@ -483,7 +485,39 @@ textarea {
 
 .table-scroll-x {
   max-width: 100%;
+  width: 100%;
+  min-width: 0;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.exam-categories-panel {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.exam-categories-panel > form.inline-form,
+.exam-categories-panel > .inline-form {
+  max-width: 100%;
+  width: 100%;
+}
+
+.exam-categories-panel > form.inline-form > input:not([type='checkbox']):not([type='file']),
+.exam-categories-panel > form.inline-form > select {
+  flex: 1 1 120px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.exam-categories-panel > form.inline-form > input[type='file'] {
+  flex: 1 1 160px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.exam-categories-panel > form.inline-form > button,
+.exam-categories-panel > form.inline-form > label.check-wrap {
+  flex: 0 0 auto;
 }
 
 .exam-categories-table .row {
@@ -3114,4 +3148,198 @@ button:active {
     width: 100%;
     justify-content: center;
   }
+}
+
+/* Exam snap card admin tab */
+/* Same padding open/closed so +/− stay one corner */
+.panel-card.exam-snap-card-tab {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.exam-snap-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+}
+
+.exam-snap-top-row .exam-snap-panel-head {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.exam-snap-card-tab--collapsed-only {
+  max-width: 100%;
+}
+
+.exam-snap-card-tab--collapsed-only .exam-snap-top-row {
+  margin-bottom: 0;
+}
+
+.exam-snap-card-tab--editor-open .exam-snap-top-row {
+  margin-bottom: 8px;
+}
+
+.exam-snap-panel-head {
+  align-items: center;
+  padding-right: 0;
+}
+
+.exam-snap-panel-head h3 {
+  line-height: 1.2;
+  padding-right: 0;
+}
+
+.exam-snap-editor-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.exam-snap-editor-actions {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  padding: 14px 12px 10px;
+  margin: 0;
+  border-top: 1px solid var(--line, #d9e0ea);
+  box-sizing: border-box;
+}
+
+.exam-snap-editor-actions-inner {
+  margin: 0 !important;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.exam-snap-card-body {
+  position: relative;
+  padding-top: 0;
+}
+
+.exam-snap-card-body--open {
+  padding-bottom: 0;
+}
+
+/* Same row as title: vertically centered (align with heading / top strip) */
+.exam-snap-preview-fab {
+  position: relative;
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  background: linear-gradient(145deg, #3b82f6, #2563eb);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  box-sizing: border-box;
+}
+
+.exam-snap-preview-fab:hover {
+  filter: brightness(1.06);
+}
+
+.exam-snap-preview-fab-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  line-height: 0;
+  pointer-events: none;
+}
+
+.exam-snap-fab-svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.exam-snap-card-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  align-items: start;
+}
+
+.exam-snap-card-layout--with-preview {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 440px);
+  gap: 20px;
+}
+
+@media (max-width: 1100px) {
+  .exam-snap-card-layout--with-preview {
+    grid-template-columns: 1fr;
+  }
+}
+
+.exam-snap-card-form {
+  min-width: 0;
+}
+
+.exam-snap-card-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.exam-snap-field {
+  display: grid;
+  gap: 4px;
+}
+
+.exam-snap-field span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted, #5f6b7a);
+}
+
+.exam-snap-field input {
+  width: 100%;
+  min-width: 0;
+}
+
+.exam-snap-card-preview-wrap {
+  position: sticky;
+  top: 12px;
+  min-width: 0;
+}
+
+.exam-snap-preview-title {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  color: var(--text-strong, #152033);
+}
+
+.exam-snap-card-preview-frame {
+  border: 1px solid var(--line, #d9e0ea);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #e8ecf1;
+  box-shadow: var(--shadow-card, 0 8px 24px rgba(10, 24, 52, 0.06));
+}
+
+.exam-snap-card-iframe {
+  width: 100%;
+  min-height: 560px;
+  border: none;
+  display: block;
+  background: #f0f2f5;
 }

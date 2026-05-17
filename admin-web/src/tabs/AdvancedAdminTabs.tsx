@@ -697,9 +697,9 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const safePage = Math.min(page, totalPages);
   const visibleItems = useMemo(() => items.slice((safePage - 1) * ITEMS_PER_PAGE, (safePage - 1) * ITEMS_PER_PAGE + ITEMS_PER_PAGE), [items, safePage]);
   return (
-    <section className="panel-card">
+    <section className="panel-card exam-categories-panel">
       <div className="panel-head"><h3>Exam Categories Hierarchy</h3></div>
-      <form onSubmit={addItem} className="inline-form">
+      <form onSubmit={addItem} className="inline-form exam-categories-add-form">
         <input value={newLevel1} onChange={(e) => setNewLevel1(e.target.value)} placeholder="Level 1 (e.g. State Exams)" />
         <input value={newLevel2} onChange={(e) => setNewLevel2(e.target.value)} placeholder="Level 2 (e.g. MP Govt)" />
         <input value={newLevel3} onChange={(e) => setNewLevel3(e.target.value)} placeholder="Level 3 (e.g. Patwari)" />

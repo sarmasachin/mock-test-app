@@ -79,6 +79,7 @@ const SETTINGS_KEYS = [
   'registrationOpen',
   'profileMenuItems',
   'homeContent',
+  'examSnapCard',
   'pollSettings',
   'pushNotificationSettings',
   'dailyQuizSettings',
@@ -328,6 +329,75 @@ function normalizeHomeContent(value) {
       newsSlides,
       startSeriesLockSeconds,
       startSeriesActiveWindowMinutes,
+    },
+  };
+}
+
+function DEFAULT_EXAM_SNAP_CARD() {
+  return {
+    registrationLeft: '● Registration: Open',
+    registrationRight: '● Last Date: 20 May 2026',
+    sessionInfo: 'ADMISSION SESSION: 2026-27',
+    examTitle: 'CUET (UG) 2026',
+    conductingBody: 'National Testing Agency (NTA)',
+    courseLabel: 'कोर्स (Courses)',
+    courseValue: 'BA, B.Sc, B.Com',
+    eligLabel: 'योग्यता (Elig.)',
+    eligValue: '12th Pass/App.',
+    examModeLabel: 'एग्जाम मोड',
+    examModeValue: 'Hybrid (CBT/Pen)',
+    feeLabel: 'आवेदन शुल्क',
+    feeValue: '₹750 (Gen/OBC)',
+    examDateLabel: 'परीक्षा तिथि (Exam Date)',
+    examDateValue: '15 मई - 31 मई 2026',
+    universitiesLabel: 'कुल यूनिवर्सिटी',
+    universitiesValue: '250+ Universities',
+    markingLabel: 'मार्किंग स्कीम',
+    markingValue: '+5 Correct | -1 Wrong',
+    patternLabel: 'Exam Pattern',
+    patternValue: 'Sec 1: Lang | Sec 2: Domain | Sec 3: Gen. Test',
+    brandName: 'Entrance Master',
+    brandSubtitle: 'Get App on Play Store',
+    qrImageUrl: 'https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=https://nta.ac.in',
+  };
+}
+
+function sliceStr(raw, fallback, maxLen) {
+  const s = String(raw !== undefined && raw !== null ? raw : fallback).trim();
+  return s.slice(0, maxLen);
+}
+
+function normalizeExamSnapCard(value) {
+  const d = DEFAULT_EXAM_SNAP_CARD();
+  const safe = value && typeof value === 'object' ? value : {};
+  const qrRaw = sliceStr(safe.qrImageUrl, d.qrImageUrl, 800);
+  const qrImageUrl = /^https:\/\//i.test(qrRaw) ? qrRaw : d.qrImageUrl;
+  return {
+    value: {
+      registrationLeft: sliceStr(safe.registrationLeft, d.registrationLeft, 160),
+      registrationRight: sliceStr(safe.registrationRight, d.registrationRight, 160),
+      sessionInfo: sliceStr(safe.sessionInfo, d.sessionInfo, 120),
+      examTitle: sliceStr(safe.examTitle, d.examTitle, 120),
+      conductingBody: sliceStr(safe.conductingBody, d.conductingBody, 160),
+      courseLabel: sliceStr(safe.courseLabel, d.courseLabel, 80),
+      courseValue: sliceStr(safe.courseValue, d.courseValue, 120),
+      eligLabel: sliceStr(safe.eligLabel, d.eligLabel, 80),
+      eligValue: sliceStr(safe.eligValue, d.eligValue, 120),
+      examModeLabel: sliceStr(safe.examModeLabel, d.examModeLabel, 80),
+      examModeValue: sliceStr(safe.examModeValue, d.examModeValue, 120),
+      feeLabel: sliceStr(safe.feeLabel, d.feeLabel, 80),
+      feeValue: sliceStr(safe.feeValue, d.feeValue, 120),
+      examDateLabel: sliceStr(safe.examDateLabel, d.examDateLabel, 100),
+      examDateValue: sliceStr(safe.examDateValue, d.examDateValue, 120),
+      universitiesLabel: sliceStr(safe.universitiesLabel, d.universitiesLabel, 100),
+      universitiesValue: sliceStr(safe.universitiesValue, d.universitiesValue, 120),
+      markingLabel: sliceStr(safe.markingLabel, d.markingLabel, 100),
+      markingValue: sliceStr(safe.markingValue, d.markingValue, 120),
+      patternLabel: sliceStr(safe.patternLabel, d.patternLabel, 80),
+      patternValue: sliceStr(safe.patternValue, d.patternValue, 240),
+      brandName: sliceStr(safe.brandName, d.brandName, 80),
+      brandSubtitle: sliceStr(safe.brandSubtitle, d.brandSubtitle, 120),
+      qrImageUrl,
     },
   };
 }
@@ -1023,6 +1093,14 @@ async function getSettingsMap() {
     homeContent: (() => {
       try {
         const parsed = JSON.parse(String(map.homeContent || '{}'));
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch (_e) {
+        return {};
+      }
+    })(),
+    examSnapCard: (() => {
+      try {
+        const parsed = JSON.parse(String(map.examSnapCard || '{}'));
         return parsed && typeof parsed === 'object' ? parsed : {};
       } catch (_e) {
         return {};
@@ -1814,6 +1892,50 @@ router.get('/summary', async (req, res) => {
   }
 });
 
+/** Shared: save exam_snap_card row only. POST preferred (some proxies strip PATCH bodies). */
+async function handleExamSnapCardSettingsSave(req, res) {
+  if (!req.isSuperAdmin) {
+    return res.status(403).json({ error: 'Super admin access required' });
+  }
+  try {
+    const raw = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const payload =
+      raw.examSnapCard !== undefined && raw.examSnapCard !== null && typeof raw.examSnapCard === 'object'
+        ? raw.examSnapCard
+        : raw;
+    const normalized = normalizeExamSnapCard(payload);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+         VALUES ('examSnapCard', $1, $2::uuid)
+         ON CONFLICT (setting_key)
+         DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+        [JSON.stringify(normalized.value), req.userId],
+      );
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+    try {
+      await logAdminAction(req, 'settings_update', 'app_settings', null, {
+        examSnapCardUpdated: true,
+      });
+    } catch (logErr) {
+      console.error('exam_snap_card_settings_audit_log_failed', logErr && (logErr.message || logErr));
+    }
+    const settings = await getSettingsMap();
+    return res.json({ settings });
+  } catch (e) {
+    console.error('exam_snap_card_save_failed', e);
+    return res.status(500).json({ error: e && e.message ? String(e.message) : 'Failed to save exam snap card' });
+  }
+}
+
 router.get('/settings', async (_req, res) => {
   try {
     const settings = await getSettingsMap();
@@ -1823,6 +1945,9 @@ router.get('/settings', async (_req, res) => {
     return res.status(500).json({ error: 'Failed to load settings' });
   }
 });
+
+router.post('/settings/exam-snap-card', handleExamSnapCardSettingsSave);
+router.patch('/settings/exam-snap-card', handleExamSnapCardSettingsSave);
 
 router.post('/uploads/banner', async (req, res) => {
   if (!req.isSuperAdmin) {
@@ -1948,6 +2073,8 @@ router.patch('/settings', async (req, res) => {
   if (normalizedHomeContent && normalizedHomeContent.error) {
     return res.status(400).json({ error: normalizedHomeContent.error });
   }
+  const normalizedExamSnapCard =
+    body.examSnapCard === undefined ? null : normalizeExamSnapCard(body.examSnapCard);
   const normalizedPollSettings =
     body.pollSettings === undefined ? null : normalizePollSettings(body.pollSettings);
   const normalizedPushNotificationSettings =
@@ -2002,6 +2129,7 @@ router.patch('/settings', async (req, res) => {
     jobExamArticleAnnouncementEmail === null &&
     normalizedProfileItems === null &&
     normalizedHomeContent === null &&
+    normalizedExamSnapCard === null &&
     normalizedPollSettings === null &&
     normalizedPushNotificationSettings === null &&
     normalizedDailyQuizSettings === null &&
@@ -2025,7 +2153,10 @@ router.patch('/settings', async (req, res) => {
     normalizedPrivacyPolicyContent === null &&
     normalizedTermsOfUseContent === null
   ) {
-    return res.status(400).json({ error: 'No settings provided' });
+    return res.status(400).json({
+      error: 'No settings provided',
+      receivedKeys: Object.keys(body || {}),
+    });
   }
   try {
     const previousFeedbackInbox = normalizedFeedbackInbox !== null
@@ -2092,6 +2223,15 @@ router.patch('/settings', async (req, res) => {
            ON CONFLICT (setting_key)
            DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
           [JSON.stringify(normalizedHomeContent.value), req.userId],
+        );
+      }
+      if (normalizedExamSnapCard !== null) {
+        await client.query(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+           VALUES ('examSnapCard', $1, $2::uuid)
+           ON CONFLICT (setting_key)
+           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [JSON.stringify(normalizedExamSnapCard.value), req.userId],
         );
       }
       if (normalizedPollSettings !== null) {
@@ -2307,6 +2447,7 @@ router.patch('/settings', async (req, res) => {
       jobExamArticleAnnouncementEmailUpdated: jobExamArticleAnnouncementEmail !== null,
       profileMenuItemsUpdated: normalizedProfileItems !== null,
       homeContentUpdated: normalizedHomeContent !== null,
+      examSnapCardUpdated: normalizedExamSnapCard !== null,
       pollSettingsUpdated: normalizedPollSettings !== null,
       pushNotificationSettingsUpdated: normalizedPushNotificationSettings !== null,
       dailyQuizSettingsUpdated: normalizedDailyQuizSettings !== null,
