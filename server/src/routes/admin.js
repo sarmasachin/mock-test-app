@@ -3821,10 +3821,20 @@ router.patch('/users/:id/admin', async (req, res) => {
   }
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid user id' });
-  const isAdmin = Boolean((req.body || {}).isAdmin);
+  let isAdmin = Boolean((req.body || {}).isAdmin);
   const makeSuperAdmin = (req.body || {}).isSuperAdmin;
   const hasSuperAdminUpdate = makeSuperAdmin !== undefined;
-  const isSuperAdmin = hasSuperAdminUpdate ? Boolean(makeSuperAdmin) : undefined;
+  let isSuperAdmin = hasSuperAdminUpdate ? Boolean(makeSuperAdmin) : undefined;
+  // Super-admin requires admin; removing admin must clear super-admin (even if client sent stale flags).
+  if (hasSuperAdminUpdate) {
+    if (!isAdmin) {
+      isSuperAdmin = false;
+    } else if (isSuperAdmin) {
+      isAdmin = true;
+    }
+  } else if (!isAdmin) {
+    isSuperAdmin = false;
+  }
   if (String(req.userId) === String(id) && !isAdmin) {
     return res.status(400).json({ error: 'You cannot remove your own admin access' });
   }

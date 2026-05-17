@@ -7208,9 +7208,11 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
 
   async function toggleAdmin(user: UserItem) {
     try {
+      const nextIsAdmin = !user.is_admin;
       await apiClient.patch(`/admin/users/${user.id}/admin`, {
-        isAdmin: !user.is_admin,
-        isSuperAdmin: user.is_super_admin,
+        isAdmin: nextIsAdmin,
+        // Dropping admin must clear super-admin too (one step back to normal user).
+        isSuperAdmin: nextIsAdmin ? user.is_super_admin : false,
       });
       await fetchUsers(usersPage);
       pushToast('success', 'Admin role updated.');
