@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useAdminDialog } from '../adminDialog';
 import { useAdminToast } from '../adminToast';
 
@@ -25,7 +25,7 @@ type PushItem = {
   target: 'all' | 'new_users' | 'active_users';
   /** Canonical value sent to API / FCM (derived from preset + custom when saving). */
   deepLink: string;
-  /** Quick pick — must be empty if custom deep link is used (same rule as new row form). */
+  /** Quick pick - must be empty if custom deep link is used (same rule as new row form). */
   deepLinkPreset: string;
   deepLinkCustom: string;
   scheduledAt: string;
@@ -69,7 +69,7 @@ type PushCampaignEventRow = {
 
 /** Values accepted by app `openByPushRoute` (Android MainBottomNavHost). */
 const PUSH_DEEP_LINK_PRESETS: { value: string; label: string }[] = [
-  { value: '', label: '— None —' },
+  { value: '', label: '- None -' },
   { value: 'poll', label: 'Poll' },
   { value: 'notifications', label: 'Notifications' },
   { value: 'menu_quiz', label: 'Daily Quiz' },
@@ -89,7 +89,7 @@ function splitSavedDeepLink(saved: string): { preset: string; custom: string } {
   return { preset: '', custom: s };
 }
 
-/** Custom wins if non-empty; else preset. Both non-empty → conflict (caller shows warning). */
+/** Custom wins if non-empty; else preset. Both non-empty â†' conflict (caller shows warning). */
 function mergePushDeepLink(preset: string, custom: string): { ok: true; deepLink: string } | { ok: false } {
   const p = preset.trim();
   const c = custom.trim();
@@ -109,7 +109,125 @@ function stripPushItemForApi(item: PushItem): PushItemApiRow | null {
 }
 
 const PUSH_DEEPLINK_CONFLICT_MSG =
-  'Quick destination aur Custom deep link dono set hain — koi ek clear karein (sirf ek use ho sakta hai).';
+  'Quick destination aur Custom deep link dono set hain - koi ek clear karein (sirf ek use ho sakta hai).';
+
+type PushFormValues = Pick<
+  PushItem,
+  'title' | 'message' | 'target' | 'deepLinkPreset' | 'deepLinkCustom' | 'scheduledAt' | 'enabled'
+>;
+
+function pushTargetLabel(target: PushItem['target']) {
+  if (target === 'new_users') return 'New users';
+  if (target === 'active_users') return 'Active users';
+  return 'All users';
+}
+
+function pushDeepLinkSummary(item: Pick<PushItem, 'deepLinkPreset' | 'deepLinkCustom'>) {
+  const merged = mergePushDeepLink(item.deepLinkPreset, item.deepLinkCustom);
+  if (!merged.ok) return 'Fix deep link';
+  if (!merged.deepLink) return '-';
+  const preset = PUSH_DEEP_LINK_PRESETS.find((o) => o.value === merged.deepLink);
+  return preset?.label || merged.deepLink;
+}
+
+function PushFieldsForm({
+  values,
+  onChange,
+  disabled,
+  idPrefix,
+}: {
+  values: PushFormValues;
+  onChange: (patch: Partial<PushFormValues>) => void;
+  disabled?: boolean;
+  idPrefix: string;
+}) {
+  return (
+    <div className="push-form-grid">
+      <label className="push-field push-field-span-2" htmlFor={`${idPrefix}-title`}>
+        <span className="push-field-label">Notification title</span>
+        <input
+          id={`${idPrefix}-title`}
+          value={values.title}
+          onChange={(e) => onChange({ title: e.target.value })}
+          placeholder="Users ko dikhega"
+          disabled={disabled}
+        />
+      </label>
+      <label className="push-field push-field-span-2" htmlFor={`${idPrefix}-message`}>
+        <span className="push-field-label">Notification message</span>
+        <input
+          id={`${idPrefix}-message`}
+          value={values.message}
+          onChange={(e) => onChange({ message: e.target.value })}
+          placeholder="Short message body"
+          disabled={disabled}
+        />
+      </label>
+      <label className="push-field" htmlFor={`${idPrefix}-target`}>
+        <span className="push-field-label">Kaun ko bhejna hai (target)</span>
+        <select
+          id={`${idPrefix}-target`}
+          value={values.target}
+          onChange={(e) => onChange({ target: e.target.value as PushItem['target'] })}
+          disabled={disabled}
+        >
+          <option value="all">All users</option>
+          <option value="new_users">New users</option>
+          <option value="active_users">Active users</option>
+        </select>
+      </label>
+      <label className="push-field" htmlFor={`${idPrefix}-preset`}>
+        <span className="push-field-label">App me kaun sa screen khule (quick pick)</span>
+        <select
+          id={`${idPrefix}-preset`}
+          value={values.deepLinkPreset}
+          onChange={(e) => onChange({ deepLinkPreset: e.target.value })}
+          disabled={disabled}
+        >
+          {PUSH_DEEP_LINK_PRESETS.map((opt) => (
+            <option key={opt.value || '__none__'} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="push-field push-field-span-2" htmlFor={`${idPrefix}-custom`}>
+        <span className="push-field-label">Custom deep link (optional)</span>
+        <input
+          id={`${idPrefix}-custom`}
+          value={values.deepLinkCustom}
+          onChange={(e) => onChange({ deepLinkCustom: e.target.value })}
+          placeholder="Sirf tab jab quick pick use na ho"
+          disabled={disabled}
+        />
+      </label>
+      <label className="push-field" htmlFor={`${idPrefix}-schedule`}>
+        <span className="push-field-label">Schedule (optional)</span>
+        <input
+          id={`${idPrefix}-schedule`}
+          type="datetime-local"
+          value={values.scheduledAt}
+          onChange={(e) => onChange({ scheduledAt: e.target.value })}
+          disabled={disabled}
+        />
+      </label>
+      <div className="push-field push-field-check">
+        <span className="push-field-label">Enabled</span>
+        <label className="check-wrap" htmlFor={`${idPrefix}-enabled`}>
+          <input
+            id={`${idPrefix}-enabled`}
+            type="checkbox"
+            checked={values.enabled}
+            onChange={(e) => onChange({ enabled: e.target.checked })}
+            disabled={disabled}
+          />
+          List me active rakhein
+        </label>
+      </div>
+    </div>
+  );
+}
+
 type SubmitApplicationContent = {
   title: string;
   benefitsTitle: string;
@@ -170,7 +288,7 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
     }
   }
 
-  /** Single path to DB + local state (avoids “Add Poll” only updating React state with no PATCH). */
+  /** Single path to DB + local state (avoids "Add Poll" only updating React state with no PATCH). */
   async function persistPollSettings(next: PollSettings, successText: string) {
     try {
       setSaving(true);
@@ -389,6 +507,125 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
   );
 }
 
+function PushCampaignStatsBlock({
+  campaign,
+  events,
+  eventsTotal,
+  eventsPage,
+  filter,
+  search,
+  loading,
+  perPage,
+  onFilterChange,
+  onSearchChange,
+  onSearch,
+  onRefresh,
+  onPageChange,
+}: {
+  campaign: PushCampaignSummary | null;
+  events: PushCampaignEventRow[];
+  eventsTotal: number;
+  eventsPage: number;
+  filter: 'all' | 'delivered' | 'failed' | 'opened' | 'not_opened';
+  search: string;
+  loading: boolean;
+  perPage: number;
+  onFilterChange: (v: 'all' | 'delivered' | 'failed' | 'opened' | 'not_opened') => void;
+  onSearchChange: (v: string) => void;
+  onSearch: () => void;
+  onRefresh: () => void;
+  onPageChange: (page: number) => void;
+}) {
+  if (!campaign) {
+    return <p className="muted">No send stats yet. Use Send / Resend first.</p>;
+  }
+  const totalPages = Math.max(1, Math.ceil(eventsTotal / perPage));
+  return (
+    <>
+      <p className="muted push-inline-stats-summary">
+        Sent: {campaign.sent.toLocaleString('en-IN')} | Delivered: {campaign.delivered.toLocaleString('en-IN')} (
+        {campaign.deliveryRate}%) | Failed: {campaign.failed.toLocaleString('en-IN')} | Opened:{' '}
+        {campaign.opened.toLocaleString('en-IN')} | CTR: {campaign.ctr}% | Not opened:{' '}
+        {campaign.notOpened.toLocaleString('en-IN')}
+      </p>
+      <div className="inline-form push-inline-stats-filters" style={{ flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+        <select value={filter} onChange={(e) => onFilterChange(e.target.value as typeof filter)} disabled={loading}>
+          <option value="all">All</option>
+          <option value="delivered">Delivered</option>
+          <option value="failed">Failed</option>
+          <option value="opened">Opened</option>
+          <option value="not_opened">Not opened</option>
+        </select>
+        <input
+          value={search}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder="Search name / email / phone"
+          style={{ minWidth: 180 }}
+          disabled={loading}
+        />
+        <button type="button" className="ghost" onClick={onSearch} disabled={loading}>
+          Search
+        </button>
+        <button type="button" className="ghost" onClick={onRefresh} disabled={loading}>
+          {loading ? 'Loading...' : 'Refresh'}
+        </button>
+      </div>
+      <div className="list table push-inline-stats-table">
+        <div className="row row-head push-notification-grid-row" style={{ gridTemplateColumns: '1.2fr 1.2fr 1fr 90px 1fr 80px 80px 90px' }}>
+          <span>User</span>
+          <span>Contact</span>
+          <span>Device</span>
+          <span>OS</span>
+          <span>Status</span>
+          <span>Opened</span>
+          <span>Delay (min)</span>
+          <span>Fail</span>
+        </div>
+        {events.map((ev) => (
+          <div
+            key={ev.id}
+            className="row push-notification-grid-row"
+            style={{ gridTemplateColumns: '1.2fr 1.2fr 1fr 90px 1fr 80px 80px 90px', fontSize: '0.88rem' }}
+          >
+            <span>{ev.displayName || '-'}</span>
+            <span>{ev.phone || ev.email || '-'}</span>
+            <span>{ev.deviceModel || '-'}</span>
+            <span>{ev.platform || '-'}</span>
+            <span>{ev.openedAt ? 'opened' : ev.status}</span>
+            <span>{ev.openedAt ? 'yes' : 'no'}</span>
+            <span>{ev.openDelayMinutes != null ? String(ev.openDelayMinutes) : ' - '}</span>
+            <span>{ev.failCode || '-'}</span>
+          </div>
+        ))}
+        {!events.length ? <p className="muted">No rows for this filter.</p> : null}
+      </div>
+      <div className="pagination-wrap">
+        <span>
+          Page {eventsPage} of {totalPages} ({eventsTotal} rows)
+        </span>
+        <div className="inline-form pagination-controls">
+          <button
+            type="button"
+            className="ghost"
+            disabled={eventsPage <= 1 || loading}
+            onClick={() => onPageChange(Math.max(1, eventsPage - 1))}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            disabled={eventsPage >= totalPages || loading}
+            onClick={() => onPageChange(eventsPage + 1)}
+          >
+            Next
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
   const { confirm: adminConfirm } = useAdminDialog();
@@ -404,6 +641,9 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
     enabled: true,
   });
   const [page, setPage] = useState(1);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandPanel, setExpandPanel] = useState<'edit' | 'status' | null>(null);
+  const expandRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [sendResult, setSendResult] = useState('');
   const [saving, setSaving] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -417,6 +657,14 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   const [statsEventsPage, setStatsEventsPage] = useState(1);
   const [statsFilter, setStatsFilter] = useState<'all' | 'delivered' | 'failed' | 'opened' | 'not_opened'>('all');
   const [statsSearch, setStatsSearch] = useState('');
+  const [inlineStatsItemId, setInlineStatsItemId] = useState<string | null>(null);
+  const [inlineStatsLoading, setInlineStatsLoading] = useState(false);
+  const [inlineStatsCampaign, setInlineStatsCampaign] = useState<PushCampaignSummary | null>(null);
+  const [inlineStatsEvents, setInlineStatsEvents] = useState<PushCampaignEventRow[]>([]);
+  const [inlineStatsEventsTotal, setInlineStatsEventsTotal] = useState(0);
+  const [inlineStatsEventsPage, setInlineStatsEventsPage] = useState(1);
+  const [inlineStatsFilter, setInlineStatsFilter] = useState<'all' | 'delivered' | 'failed' | 'opened' | 'not_opened'>('all');
+  const [inlineStatsSearch, setInlineStatsSearch] = useState('');
   const STATS_EVENTS_PER_PAGE = 50;
   function formatDateTime(value: string) {
     const dt = new Date(value);
@@ -465,7 +713,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   }
 
   /* App.tsx renders this tab only when `tab === 'pushNotificationSettings'`, so switching menus unmounts
-   * this component → useState resets to `{ items: [] }`. Save still writes DB (PATCH); without load() on
+   * this component â†' useState resets to `{ items: [] }`. Save still writes DB (PATCH); without load() on
    * mount the UI stayed empty until "Load". */
   useEffect(() => {
     void load();
@@ -484,6 +732,58 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
     });
     setStatsEvents(Array.isArray(res.data?.items) ? res.data.items : []);
     setStatsEventsTotal(Number(res.data?.total || 0));
+  }
+
+  async function loadInlineCampaignEvents(campaignId: string, page: number, filter: string, search: string) {
+    const offset = (page - 1) * STATS_EVENTS_PER_PAGE;
+    const res = await apiClient.get(`/admin/notifications/campaigns/${campaignId}/events`, {
+      params: {
+        status: filter === 'all' ? '' : filter,
+        q: search.trim(),
+        limit: STATS_EVENTS_PER_PAGE,
+        offset,
+      },
+    });
+    setInlineStatsEvents(Array.isArray(res.data?.items) ? res.data.items : []);
+    setInlineStatsEventsTotal(Number(res.data?.total || 0));
+  }
+
+  async function loadInlineStatsForItem(item: PushItem) {
+    setInlineStatsItemId(item.id);
+    setInlineStatsLoading(true);
+    setInlineStatsEventsPage(1);
+    setInlineStatsFilter('all');
+    setInlineStatsSearch('');
+    try {
+      const res = await apiClient.get(`/admin/notifications/campaigns/latest/${encodeURIComponent(item.id)}`);
+      const campaign = res.data?.campaign as PushCampaignSummary | null;
+      setInlineStatsCampaign(campaign || null);
+      if (campaign?.id) {
+        await loadInlineCampaignEvents(campaign.id, 1, 'all', '');
+      } else {
+        setInlineStatsEvents([]);
+        setInlineStatsEventsTotal(0);
+      }
+    } catch (err: any) {
+      setInlineStatsCampaign(null);
+      setInlineStatsEvents([]);
+      setInlineStatsEventsTotal(0);
+      pushToast('error', err?.response?.data?.error || 'Failed to load push stats');
+    } finally {
+      setInlineStatsLoading(false);
+    }
+  }
+
+  async function refreshInlineStats() {
+    if (!inlineStatsCampaign?.id || !inlineStatsItemId) return;
+    try {
+      setInlineStatsLoading(true);
+      const res = await apiClient.get(`/admin/notifications/campaigns/${inlineStatsCampaign.id}/stats`);
+      setInlineStatsCampaign(res.data?.campaign || inlineStatsCampaign);
+      await loadInlineCampaignEvents(inlineStatsCampaign.id, inlineStatsEventsPage, inlineStatsFilter, inlineStatsSearch);
+    } finally {
+      setInlineStatsLoading(false);
+    }
   }
 
   async function openStatsForItem(item: PushItem) {
@@ -586,6 +886,11 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       };
       const ok = await save(next, 'Push item added and saved.');
       if (ok) {
+        const newId = next.items[next.items.length - 1]?.id;
+        if (newId) {
+          setExpandedId(newId);
+          setExpandPanel('edit');
+        }
         setNewItem({
           title: '',
           message: '',
@@ -612,7 +917,11 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
     try {
       setDeletingId(itemId);
       const next = { ...settings, items: settings.items.filter((x) => x.id !== itemId) };
-      await save(next, 'Push item deleted and saved.');
+      const ok = await save(next, 'Push item deleted and saved.');
+      if (ok && expandedId === itemId) {
+        setExpandedId(null);
+        setExpandPanel(null);
+      }
     } finally {
       setDeletingId('');
     }
@@ -671,90 +980,257 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   const totalPages = Math.max(1, Math.ceil(settings.items.length / PUSH_PER_PAGE));
   const safePage = Math.min(page, totalPages);
   const visibleItems = useMemo(() => settings.items.slice((safePage - 1) * PUSH_PER_PAGE, (safePage - 1) * PUSH_PER_PAGE + PUSH_PER_PAGE), [settings.items, safePage]);
+  function toggleExpand(itemId: string, panel: 'edit' | 'status') {
+    if (expandedId === itemId && expandPanel === panel) {
+      setExpandedId(null);
+      setExpandPanel(null);
+      if (panel === 'status') {
+        setInlineStatsItemId(null);
+        setInlineStatsCampaign(null);
+        setInlineStatsEvents([]);
+        setInlineStatsEventsTotal(0);
+      }
+      return;
+    }
+    setExpandedId(itemId);
+    setExpandPanel(panel);
+    if (panel === 'status') {
+      const item = settings.items.find((x) => x.id === itemId);
+      if (item) void loadInlineStatsForItem(item);
+    } else {
+      setInlineStatsItemId(null);
+    }
+    requestAnimationFrame(() => {
+      expandRowRefs.current[itemId]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  }
+
+  function updatePushItem(itemId: string, patch: Partial<PushItem>) {
+    setSettings((p) => ({
+      ...p,
+      items: p.items.map((x) => (x.id === itemId ? { ...x, ...patch } : x)),
+    }));
+  }
+
+  const rowBusy = saving || !!sendingId || !!deletingId;
+
   return (
     <section className="panel-card push-notification-panel">
-      <div className="panel-head"><h3>Push Notification Settings</h3></div>
-      <div className="inline-form push-settings-add-row">
-        <input value={newItem.title} onChange={(e) => setNewItem((p) => ({ ...p, title: e.target.value }))} placeholder="Notification title" disabled={saving || adding} />
-        <input value={newItem.message} onChange={(e) => setNewItem((p) => ({ ...p, message: e.target.value }))} placeholder="Notification message" disabled={saving || adding} />
-        <select value={newItem.target} onChange={(e) => setNewItem((p) => ({ ...p, target: e.target.value as PushItem['target'] }))} disabled={saving || adding}><option value="all">All users</option><option value="new_users">New users</option><option value="active_users">Active users</option></select>
-        <select value={newItem.deepLinkPreset} onChange={(e) => setNewItem((p) => ({ ...p, deepLinkPreset: e.target.value }))} disabled={saving || adding} aria-label="Open screen preset">
-          {PUSH_DEEP_LINK_PRESETS.map((opt) => (
-            <option key={opt.value || '__none__'} value={opt.value}>{opt.label}</option>
-          ))}
-        </select>
-        <input value={newItem.deepLinkCustom} onChange={(e) => setNewItem((p) => ({ ...p, deepLinkCustom: e.target.value }))} placeholder="Custom deep link (optional)" disabled={saving || adding} />
-        <input type="datetime-local" value={newItem.scheduledAt} onChange={(e) => setNewItem((p) => ({ ...p, scheduledAt: e.target.value }))} placeholder="Schedule (optional)" disabled={saving || adding} />
-        <label className="check-wrap"><input type="checkbox" checked={newItem.enabled} onChange={(e) => setNewItem((p) => ({ ...p, enabled: e.target.checked }))} disabled={saving || adding} />Enabled</label>
-        <button type="button" onClick={addPush} disabled={saving || adding}>{adding ? 'Adding...' : 'Add Push'}</button>
-      </div>
-      <p className="muted" style={{ margin: '8px 0 0', fontSize: '0.88rem' }}>
-        Quick screen aur Custom deep link dono optional hain. Dono ek saath bharenge to save/send par warning aayegi — sirf ek use karein.
-      </p>
-      <div className="list table">
-        <div className="row row-head push-notification-grid-row">
-          <span>Title</span>
-          <span>Message</span>
-          <span>Target</span>
-          <span>Deep link</span>
-          <span>Status</span>
-          <span>Last Sent (IST)</span>
-          <span>Stats</span>
-          <span>Resend</span>
-          <span>Update</span>
-          <span>Delete</span>
-          <span>Resend Count</span>
-          <span>Send Now</span>
+
+      <div className="push-section push-section-add">
+        <h4>1. Naya push add karein</h4>
+        <p className="push-section-hint muted">Quick screen <em>ya</em> Custom deep link - dono ek saath nahi.</p>
+        <PushFieldsForm
+          idPrefix="push-new"
+          values={newItem}
+          onChange={(patch) => setNewItem((p) => ({ ...p, ...patch }))}
+          disabled={saving || adding}
+        />
+        <div className="push-section-actions">
+          <button type="button" onClick={addPush} disabled={saving || adding}>
+            {adding ? 'Adding...' : 'Add to list'}
+          </button>
         </div>
-        {visibleItems.map((item) => (
-          <div key={item.id} className="row push-notification-grid-row">
-            <input value={item.title} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, title: e.target.value } : x)) }))} disabled={saving || !!sendingId || !!deletingId} />
-            <input value={item.message} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, message: e.target.value } : x)) }))} disabled={saving || !!sendingId || !!deletingId} />
-            <select value={item.target} onChange={(e) => setSettings((p) => ({ ...p, items: p.items.map((x) => (x.id === item.id ? { ...x, target: e.target.value as PushItem['target'] } : x)) }))} disabled={saving || !!sendingId || !!deletingId}>
-              <option value="all">All users</option>
-              <option value="new_users">New users</option>
-              <option value="active_users">Active users</option>
-            </select>
-            <span style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
-              <select
-                value={item.deepLinkPreset}
-                onChange={(e) =>
-                  setSettings((p) => ({
-                    ...p,
-                    items: p.items.map((x) => (x.id === item.id ? { ...x, deepLinkPreset: e.target.value } : x)),
-                  }))
-                }
-                disabled={saving || !!sendingId || !!deletingId}
-                aria-label={`Deep link preset ${item.id}`}
-              >
-                {PUSH_DEEP_LINK_PRESETS.map((opt) => (
-                  <option key={opt.value || '__none__'} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-              <input
-                value={item.deepLinkCustom}
-                placeholder="Custom"
-                onChange={(e) =>
-                  setSettings((p) => ({
-                    ...p,
-                    items: p.items.map((x) => (x.id === item.id ? { ...x, deepLinkCustom: e.target.value } : x)),
-                  }))
-                }
-                disabled={saving || !!sendingId || !!deletingId}
-                style={{ width: '100%', boxSizing: 'border-box' }}
-              />
-            </span>
-            <span>{item.status}</span>
-            <span>{formatDateTime(item.lastSentAt)}</span>
-            <button type="button" className="ghost" onClick={() => { void openStatsForItem(item); }} disabled={saving || !!deletingId || !!sendingId || statsLoading}>Stats</button>
-            <button type="button" className="ghost" onClick={() => sendNow(item)} disabled={saving || !!deletingId || !!sendingId}>{sendingId === item.id ? 'Sending...' : 'Resend'}</button>
-            <button type="button" onClick={() => { void save(); }} disabled={saving || !!sendingId || !!deletingId}>{saving ? 'Saving...' : 'Save'}</button>
-            <button type="button" className="danger" onClick={() => removePush(item.id)} disabled={saving || !!sendingId || !!deletingId}>{deletingId === item.id ? 'Deleting...' : 'Delete'}</button>
-            <span>{item.resendCount || 0}</span>
-            <button type="button" onClick={() => sendNow(item)} disabled={saving || !!deletingId || !!sendingId}>{sendingId === item.id ? 'Sending...' : 'Send'}</button>
-          </div>
-        ))}
       </div>
+
+      <div className="push-section push-section-list">
+        <h4>2. Saved pushes</h4>
+        <p className="push-section-hint muted">Status (▼) ya Edit par click - detail usi row ke niche khulegi.</p>
+        {!visibleItems.length ? (
+          <p className="muted">Abhi koi push saved nahi.</p>
+        ) : (
+          <div className="list table push-list-simple push-list-expandable">
+            <div className="row row-head push-list-row push-notification-grid-row">
+              <span>Title</span>
+              <span>Target</span>
+              <span>Screen / link</span>
+              <span>Status</span>
+              <span>Last sent</span>
+              <span>Actions</span>
+            </div>
+            {visibleItems.map((item) => {
+              const isExpanded = expandedId === item.id;
+              const showEdit = isExpanded && expandPanel === 'edit';
+              const showStatus = isExpanded && expandPanel === 'status';
+              return (
+                <div
+                  key={item.id}
+                  ref={(el) => {
+                    expandRowRefs.current[item.id] = el;
+                  }}
+                  className={`push-list-item-wrap${isExpanded ? ' is-expanded' : ''}`}
+                >
+                  <div
+                    className={`row push-list-row push-notification-grid-row${isExpanded ? ' is-selected' : ''}`}
+                    aria-expanded={isExpanded}
+                  >
+                    <span className="push-list-title" title={item.title}>
+                      {item.title.trim() || '(no title)'}
+                    </span>
+                    <span>{pushTargetLabel(item.target)}</span>
+                    <span className="muted">{pushDeepLinkSummary(item)}</span>
+                    <button
+                      type="button"
+                      className={`push-status-toggle${showStatus ? ' is-active' : ''}`}
+                      aria-expanded={showStatus}
+                      aria-label={`Status ${item.status}, click for details`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleExpand(item.id, 'status');
+                      }}
+                      disabled={rowBusy}
+                    >
+                      <span className="push-status-chip">{item.status}</span>
+                      <span className="push-expand-chevron" aria-hidden>
+                        {showStatus ? '▲' : '▼'}
+                      </span>
+                    </button>
+                    <span>{formatDateTime(item.lastSentAt)}</span>
+                    <div className="push-list-actions">
+                      <button
+                        type="button"
+                        className={`ghost${showEdit ? ' is-active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleExpand(item.id, 'edit');
+                        }}
+                        disabled={rowBusy}
+                      >
+                        {showEdit ? 'Close' : 'Edit'}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => {
+                          void openStatsForItem(item);
+                        }}
+                        disabled={rowBusy || statsLoading}
+                      >
+                        Stats
+                      </button>
+                      <button type="button" onClick={() => sendNow(item)} disabled={rowBusy}>
+                        {sendingId === item.id ? 'Sending...' : 'Send'}
+                      </button>
+                    </div>
+                  </div>
+                  {showStatus ? (
+                    <div className="push-row-expand push-row-expand-status">
+                      <h5 className="push-expand-title">Status &amp; delivery stats</h5>
+                      <div className="push-status-details">
+                        <div className="push-detail-cell">
+                          <span className="push-detail-label">Status</span>
+                          <span>{item.status}</span>
+                        </div>
+                        <div className="push-detail-cell">
+                          <span className="push-detail-label">Enabled</span>
+                          <span>{item.enabled ? 'Yes' : 'No'}</span>
+                        </div>
+                        <div className="push-detail-cell">
+                          <span className="push-detail-label">Resend count</span>
+                          <span>{item.resendCount || 0}</span>
+                        </div>
+                        <div className="push-detail-cell">
+                          <span className="push-detail-label">Last sent (IST)</span>
+                          <span>{formatDateTime(item.lastSentAt)}</span>
+                        </div>
+                        <div className="push-detail-cell">
+                          <span className="push-detail-label">Scheduled</span>
+                          <span>{item.scheduledAt ? formatDateTime(item.scheduledAt) : '-'}</span>
+                        </div>
+                        <div className="push-detail-cell push-detail-cell-wide">
+                          <span className="push-detail-label">Deep link</span>
+                          <span>{pushDeepLinkSummary(item)}</span>
+                        </div>
+                      </div>
+                      {inlineStatsLoading && inlineStatsItemId === item.id && !inlineStatsCampaign ? (
+                        <p className="muted">Loading delivery stats...</p>
+                      ) : null}
+                      {inlineStatsItemId === item.id ? (
+                        <PushCampaignStatsBlock
+                          campaign={inlineStatsCampaign}
+                          events={inlineStatsEvents}
+                          eventsTotal={inlineStatsEventsTotal}
+                          eventsPage={inlineStatsEventsPage}
+                          filter={inlineStatsFilter}
+                          search={inlineStatsSearch}
+                          loading={inlineStatsLoading}
+                          perPage={STATS_EVENTS_PER_PAGE}
+                          onFilterChange={(v) => {
+                            setInlineStatsFilter(v);
+                            setInlineStatsEventsPage(1);
+                            if (inlineStatsCampaign?.id) {
+                              void loadInlineCampaignEvents(inlineStatsCampaign.id, 1, v, inlineStatsSearch);
+                            }
+                          }}
+                          onSearchChange={setInlineStatsSearch}
+                          onSearch={() => {
+                            if (!inlineStatsCampaign?.id) return;
+                            setInlineStatsEventsPage(1);
+                            void loadInlineCampaignEvents(inlineStatsCampaign.id, 1, inlineStatsFilter, inlineStatsSearch);
+                          }}
+                          onRefresh={() => {
+                            void refreshInlineStats();
+                          }}
+                          onPageChange={(p) => {
+                            setInlineStatsEventsPage(p);
+                            if (inlineStatsCampaign?.id) {
+                              void loadInlineCampaignEvents(inlineStatsCampaign.id, p, inlineStatsFilter, inlineStatsSearch);
+                            }
+                          }}
+                        />
+                      ) : null}
+                      <div className="push-section-actions">
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => {
+                            void openStatsForItem(item);
+                          }}
+                          disabled={rowBusy || statsLoading}
+                        >
+                          Open full-screen stats
+                        </button>
+                        <button type="button" className="ghost" onClick={() => toggleExpand(item.id, 'edit')} disabled={rowBusy}>
+                          Edit this push
+                        </button>
+                        <button type="button" className="ghost" onClick={() => toggleExpand(item.id, 'status')} disabled={rowBusy}>
+                          Close
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {showEdit ? (
+                    <div className="push-row-expand push-row-expand-edit">
+                      <h5 className="push-expand-title">Edit push</h5>
+                      <PushFieldsForm
+                        idPrefix={`push-edit-${item.id}`}
+                        values={item}
+                        onChange={(patch) => updatePushItem(item.id, patch)}
+                        disabled={rowBusy}
+                      />
+                      <div className="push-section-actions">
+                        <button type="button" onClick={() => { void save(); }} disabled={rowBusy}>
+                          {saving ? 'Saving...' : 'Save changes'}
+                        </button>
+                        <button type="button" onClick={() => sendNow(item)} disabled={rowBusy}>
+                          {sendingId === item.id ? 'Sending...' : 'Send push now'}
+                        </button>
+                        <button type="button" className="danger" onClick={() => removePush(item.id)} disabled={rowBusy}>
+                          {deletingId === item.id ? 'Deleting...' : 'Delete'}
+                        </button>
+                        <button type="button" className="ghost" onClick={() => toggleExpand(item.id, 'edit')} disabled={rowBusy}>
+                          Close
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
       <div className="inline-form"><button type="button" className="ghost" onClick={load} disabled={saving || adding || !!sendingId || !!deletingId}>Load</button><button type="button" onClick={() => { void save(); }} disabled={saving || adding || !!sendingId || !!deletingId}>{saving ? 'Saving...' : 'Save Push Settings'}</button></div>
       {sendResult ? <p className="muted">{sendResult}</p> : null}
@@ -777,13 +1253,13 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
               <h3>Push stats{statsCampaign?.title ? `: ${statsCampaign.title}` : ''}</h3>
               <button type="button" className="ghost" onClick={() => setStatsOpen(false)}>Close</button>
             </div>
-            {statsLoading && !statsCampaign ? <p className="muted">Loading…</p> : null}
+            {statsLoading && !statsCampaign ? <p className="muted">Loading...</p> : null}
             {statsCampaign ? (
               <>
                 <p className="muted" style={{ lineHeight: 1.6 }}>
                   <strong>Campaign:</strong> {statsCampaign.title}
                   <br />
-                  Target: {statsCampaign.target} | Deep link: {statsCampaign.deepLink || '—'} | Sent: {formatDateTime(statsCampaign.sentAt)}
+                  Target: {statsCampaign.target} | Deep link: {statsCampaign.deepLink || '-'} | Sent: {formatDateTime(statsCampaign.sentAt)}
                   <br />
                   Sent: {statsCampaign.sent.toLocaleString('en-IN')} | Delivered: {statsCampaign.delivered.toLocaleString('en-IN')} ({statsCampaign.deliveryRate}%)
                   | Failed: {statsCampaign.failed.toLocaleString('en-IN')} | Opened: {statsCampaign.opened.toLocaleString('en-IN')} | CTR: {statsCampaign.ctr}%
@@ -838,14 +1314,14 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
                   </div>
                   {statsEvents.map((ev) => (
                     <div key={ev.id} className="row" style={{ gridTemplateColumns: '1.2fr 1.2fr 1fr 90px 1fr 80px 80px 90px', fontSize: '0.88rem' }}>
-                      <span>{ev.displayName || '—'}</span>
-                      <span>{ev.phone || ev.email || '—'}</span>
-                      <span>{ev.deviceModel || '—'}</span>
-                      <span>{ev.platform || '—'}</span>
+                      <span>{ev.displayName || '-'}</span>
+                      <span>{ev.phone || ev.email || '-'}</span>
+                      <span>{ev.deviceModel || '-'}</span>
+                      <span>{ev.platform || '-'}</span>
                       <span>{ev.openedAt ? 'opened' : ev.status}</span>
                       <span>{ev.openedAt ? 'yes' : 'no'}</span>
-                      <span>{ev.openDelayMinutes != null ? String(ev.openDelayMinutes) : '—'}</span>
-                      <span>{ev.failCode || '—'}</span>
+                      <span>{ev.openDelayMinutes != null ? String(ev.openDelayMinutes) : ' - '}</span>
+                      <span>{ev.failCode || '-'}</span>
                     </div>
                   ))}
                   {!statsEvents.length ? <p className="muted">No rows for this filter.</p> : null}
@@ -895,7 +1371,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
 export function SubmitApplicationContentTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
   const ITEMS_PER_PAGE = 20;
-  const [settings, setSettings] = useState<SubmitApplicationContent>({ title: 'Apply', benefitsTitle: 'What you’ll get', submitButtonLabel: 'Submit Application', successMessage: 'Your application was submitted successfully.', bulletItems: ['Instant access after approval', 'Mock test practice & review', 'Score history in your profile'] });
+  const [settings, setSettings] = useState<SubmitApplicationContent>({ title: 'Apply', benefitsTitle: "What you'll get", submitButtonLabel: 'Submit Application', successMessage: 'Your application was submitted successfully.', bulletItems: ['Instant access after approval', 'Mock test practice & review', 'Score history in your profile'] });
   const [newBullet, setNewBullet] = useState('');
   const [page, setPage] = useState(1);
   const [saving, setSaving] = useState(false);
@@ -903,7 +1379,7 @@ export function SubmitApplicationContentTabImpl({ apiClient }: { apiClient: ApiC
     try {
       const res = await apiClient.get('/admin/settings');
       const s = res.data?.settings?.submitApplicationContent || {};
-      setSettings({ title: String(s.title || 'Apply'), benefitsTitle: String(s.benefitsTitle || 'What you’ll get'), submitButtonLabel: String(s.submitButtonLabel || 'Submit Application'), successMessage: String(s.successMessage || 'Your application was submitted successfully.'), bulletItems: Array.isArray(s.bulletItems) ? s.bulletItems.map((x: any) => String(x)).filter(Boolean) : [] });
+      setSettings({ title: String(s.title || 'Apply'), benefitsTitle: String(s.benefitsTitle || "What you'll get"), submitButtonLabel: String(s.submitButtonLabel || 'Submit Application'), successMessage: String(s.successMessage || 'Your application was submitted successfully.'), bulletItems: Array.isArray(s.bulletItems) ? s.bulletItems.map((x: any) => String(x)).filter(Boolean) : [] });
       setPage(1);
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to load submit application content');
