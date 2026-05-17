@@ -319,6 +319,8 @@
 .push-notification-panel .list.table {
   max-width: 100%;
   box-sizing: border-box;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .push-settings-add-row {
@@ -1444,13 +1446,13 @@ button:active {
     grid-template-columns: 1fr;
   }
 
-  .push-notification-panel .push-notification-grid-row {
-    grid-template-columns: 1fr;
-    min-width: 0 !important;
+  /* Keep push table as horizontal scroll (do not stack into one column). */
+  .push-notification-panel .list.table .row-head {
+    display: grid;
   }
 
-  .table .row-head {
-    display: none;
+  .push-notification-panel .push-notification-grid-row {
+    min-width: 1260px !important;
   }
 
   .table .row {
