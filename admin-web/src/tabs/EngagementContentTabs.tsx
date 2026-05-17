@@ -523,6 +523,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   });
   const [page, setPage] = useState(1);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandPanel, setExpandPanel] = useState<'edit' | 'status' | null>(null);
   const expandRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [sendResult, setSendResult] = useState('');
   const [saving, setSaving] = useState(false);
@@ -707,7 +708,10 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       const ok = await save(next, 'Push item added and saved.');
       if (ok) {
         const newId = next.items[next.items.length - 1]?.id;
-        if (newId) setExpandedId(newId);
+        if (newId) {
+          setExpandedId(newId);
+          setExpandPanel('edit');
+        }
         setNewItem({
           title: '',
           message: '',
@@ -735,7 +739,10 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       setDeletingId(itemId);
       const next = { ...settings, items: settings.items.filter((x) => x.id !== itemId) };
       const ok = await save(next, 'Push item deleted and saved.');
-      if (ok && expandedId === itemId) setExpandedId(null);
+      if (ok && expandedId === itemId) {
+        setExpandedId(null);
+        setExpandPanel(null);
+      }
     } finally {
       setDeletingId('');
     }
@@ -794,12 +801,14 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   const totalPages = Math.max(1, Math.ceil(settings.items.length / PUSH_PER_PAGE));
   const safePage = Math.min(page, totalPages);
   const visibleItems = useMemo(() => settings.items.slice((safePage - 1) * PUSH_PER_PAGE, (safePage - 1) * PUSH_PER_PAGE + PUSH_PER_PAGE), [settings.items, safePage]);
-  function toggleEdit(itemId: string) {
-    if (expandedId === itemId) {
+  function toggleExpand(itemId: string, panel: 'edit' | 'status') {
+    if (expandedId === itemId && expandPanel === panel) {
       setExpandedId(null);
+      setExpandPanel(null);
       return;
     }
     setExpandedId(itemId);
+    setExpandPanel(panel);
     requestAnimationFrame(() => {
       expandRowRefs.current[itemId]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
@@ -835,7 +844,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
 
       <div className="push-section push-section-list">
         <h4>2. Saved pushes</h4>
-        <p className="push-section-hint muted">Edit se push change karein; Stats se delivery report dekhein. Status = draft ya sent (sirf label).</p>
+        <p className="push-section-hint muted">Status (▼) par click — detail usi row ke niche khulegi. Edit alag se form kholta hai.</p>
         {!visibleItems.length ? (
           <p className="muted">Abhi koi push saved nahi.</p>
         ) : (
@@ -849,27 +858,42 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
               <span>Actions</span>
             </div>
             {visibleItems.map((item) => {
-              const showEdit = expandedId === item.id;
+              const isExpanded = expandedId === item.id;
+              const showEdit = isExpanded && expandPanel === 'edit';
+              const showStatus = isExpanded && expandPanel === 'status';
               return (
                 <div
                   key={item.id}
                   ref={(el) => {
                     expandRowRefs.current[item.id] = el;
                   }}
-                  className={`push-list-item-wrap${showEdit ? ' is-expanded' : ''}`}
+                  className={`push-list-item-wrap${isExpanded ? ' is-expanded' : ''}`}
                 >
                   <div
-                    className={`row push-list-row push-notification-grid-row${showEdit ? ' is-selected' : ''}`}
-                    aria-expanded={showEdit}
+                    className={`row push-list-row push-notification-grid-row${isExpanded ? ' is-selected' : ''}`}
+                    aria-expanded={isExpanded}
                   >
                     <span className="push-list-title" title={item.title}>
                       {item.title.trim() || '(no title)'}
                     </span>
                     <span>{pushTargetLabel(item.target)}</span>
                     <span className="muted">{pushDeepLinkSummary(item)}</span>
-                    <span className="push-status-chip" title={item.status === 'sent' ? 'Push bhej diya gaya' : 'Abhi draft hai'}>
-                      {item.status}
-                    </span>
+                    <button
+                      type="button"
+                      className={`push-status-toggle${showStatus ? ' is-active' : ''}`}
+                      aria-expanded={showStatus}
+                      aria-label={`Status ${item.status}, details`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!rowBusy) toggleExpand(item.id, 'status');
+                      }}
+                      disabled={rowBusy}
+                    >
+                      <span className="push-status-chip">{item.status}</span>
+                      <span className="push-expand-chevron" aria-hidden>
+                        {showStatus ? '▲' : '▼'}
+                      </span>
+                    </button>
                     <span>{formatDateTime(item.lastSentAt)}</span>
                     <div className="push-list-actions">
                       <button
@@ -877,7 +901,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
                         className={`ghost${showEdit ? ' is-active' : ''}`}
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggleEdit(item.id);
+                          toggleExpand(item.id, 'edit');
                         }}
                         disabled={rowBusy}
                       >
@@ -898,6 +922,55 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
                       </button>
                     </div>
                   </div>
+                  {showStatus ? (
+                    <div className="push-row-expand push-row-expand-status">
+                      <h5 className="push-expand-title">Status details</h5>
+                      <div className="push-status-details">
+                        <div className="push-detail-cell">
+                          <span className="push-detail-label">Status</span>
+                          <span>{item.status}</span>
+                        </div>
+                        <div className="push-detail-cell">
+                          <span className="push-detail-label">Enabled</span>
+                          <span>{item.enabled ? 'Yes' : 'No'}</span>
+                        </div>
+                        <div className="push-detail-cell">
+                          <span className="push-detail-label">Resend count</span>
+                          <span>{item.resendCount || 0}</span>
+                        </div>
+                        <div className="push-detail-cell">
+                          <span className="push-detail-label">Last sent (IST)</span>
+                          <span>{formatDateTime(item.lastSentAt)}</span>
+                        </div>
+                        <div className="push-detail-cell">
+                          <span className="push-detail-label">Scheduled</span>
+                          <span>{item.scheduledAt ? formatDateTime(item.scheduledAt) : '-'}</span>
+                        </div>
+                        <div className="push-detail-cell push-detail-cell-wide">
+                          <span className="push-detail-label">Deep link</span>
+                          <span>{pushDeepLinkSummary(item)}</span>
+                        </div>
+                      </div>
+                      <div className="push-section-actions">
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => {
+                            void openStatsForItem(item);
+                          }}
+                          disabled={rowBusy || statsLoading}
+                        >
+                          Open delivery stats
+                        </button>
+                        <button type="button" className="ghost" onClick={() => toggleExpand(item.id, 'edit')} disabled={rowBusy}>
+                          Edit this push
+                        </button>
+                        <button type="button" className="ghost" onClick={() => toggleExpand(item.id, 'status')} disabled={rowBusy}>
+                          Close
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                   {showEdit ? (
                     <div className="push-row-expand push-row-expand-edit">
                       <h5 className="push-expand-title">Edit push</h5>
@@ -917,7 +990,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
                         <button type="button" className="danger" onClick={() => removePush(item.id)} disabled={rowBusy}>
                           {deletingId === item.id ? 'Deleting...' : 'Delete'}
                         </button>
-                        <button type="button" className="ghost" onClick={() => toggleEdit(item.id)} disabled={rowBusy}>
+                        <button type="button" className="ghost" onClick={() => toggleExpand(item.id, 'edit')} disabled={rowBusy}>
                           Close
                         </button>
                       </div>
