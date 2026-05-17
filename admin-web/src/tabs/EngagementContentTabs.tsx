@@ -507,125 +507,6 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
   );
 }
 
-function PushCampaignStatsBlock({
-  campaign,
-  events,
-  eventsTotal,
-  eventsPage,
-  filter,
-  search,
-  loading,
-  perPage,
-  onFilterChange,
-  onSearchChange,
-  onSearch,
-  onRefresh,
-  onPageChange,
-}: {
-  campaign: PushCampaignSummary | null;
-  events: PushCampaignEventRow[];
-  eventsTotal: number;
-  eventsPage: number;
-  filter: 'all' | 'delivered' | 'failed' | 'opened' | 'not_opened';
-  search: string;
-  loading: boolean;
-  perPage: number;
-  onFilterChange: (v: 'all' | 'delivered' | 'failed' | 'opened' | 'not_opened') => void;
-  onSearchChange: (v: string) => void;
-  onSearch: () => void;
-  onRefresh: () => void;
-  onPageChange: (page: number) => void;
-}) {
-  if (!campaign) {
-    return <p className="muted">No send stats yet. Use Send / Resend first.</p>;
-  }
-  const totalPages = Math.max(1, Math.ceil(eventsTotal / perPage));
-  return (
-    <>
-      <p className="muted push-inline-stats-summary">
-        Sent: {campaign.sent.toLocaleString('en-IN')} | Delivered: {campaign.delivered.toLocaleString('en-IN')} (
-        {campaign.deliveryRate}%) | Failed: {campaign.failed.toLocaleString('en-IN')} | Opened:{' '}
-        {campaign.opened.toLocaleString('en-IN')} | CTR: {campaign.ctr}% | Not opened:{' '}
-        {campaign.notOpened.toLocaleString('en-IN')}
-      </p>
-      <div className="inline-form push-inline-stats-filters" style={{ flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-        <select value={filter} onChange={(e) => onFilterChange(e.target.value as typeof filter)} disabled={loading}>
-          <option value="all">All</option>
-          <option value="delivered">Delivered</option>
-          <option value="failed">Failed</option>
-          <option value="opened">Opened</option>
-          <option value="not_opened">Not opened</option>
-        </select>
-        <input
-          value={search}
-          onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Search name / email / phone"
-          style={{ minWidth: 180 }}
-          disabled={loading}
-        />
-        <button type="button" className="ghost" onClick={onSearch} disabled={loading}>
-          Search
-        </button>
-        <button type="button" className="ghost" onClick={onRefresh} disabled={loading}>
-          {loading ? 'Loading...' : 'Refresh'}
-        </button>
-      </div>
-      <div className="list table push-inline-stats-table">
-        <div className="row row-head push-notification-grid-row" style={{ gridTemplateColumns: '1.2fr 1.2fr 1fr 90px 1fr 80px 80px 90px' }}>
-          <span>User</span>
-          <span>Contact</span>
-          <span>Device</span>
-          <span>OS</span>
-          <span>Status</span>
-          <span>Opened</span>
-          <span>Delay (min)</span>
-          <span>Fail</span>
-        </div>
-        {events.map((ev) => (
-          <div
-            key={ev.id}
-            className="row push-notification-grid-row"
-            style={{ gridTemplateColumns: '1.2fr 1.2fr 1fr 90px 1fr 80px 80px 90px', fontSize: '0.88rem' }}
-          >
-            <span>{ev.displayName || '-'}</span>
-            <span>{ev.phone || ev.email || '-'}</span>
-            <span>{ev.deviceModel || '-'}</span>
-            <span>{ev.platform || '-'}</span>
-            <span>{ev.openedAt ? 'opened' : ev.status}</span>
-            <span>{ev.openedAt ? 'yes' : 'no'}</span>
-            <span>{ev.openDelayMinutes != null ? String(ev.openDelayMinutes) : ' - '}</span>
-            <span>{ev.failCode || '-'}</span>
-          </div>
-        ))}
-        {!events.length ? <p className="muted">No rows for this filter.</p> : null}
-      </div>
-      <div className="pagination-wrap">
-        <span>
-          Page {eventsPage} of {totalPages} ({eventsTotal} rows)
-        </span>
-        <div className="inline-form pagination-controls">
-          <button
-            type="button"
-            className="ghost"
-            disabled={eventsPage <= 1 || loading}
-            onClick={() => onPageChange(Math.max(1, eventsPage - 1))}
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            className="ghost"
-            disabled={eventsPage >= totalPages || loading}
-            onClick={() => onPageChange(eventsPage + 1)}
-          >
-            Next
-          </button>
-        </div>
-      </div>
-    </>
-  );
-}
-
 export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
   const { confirm: adminConfirm } = useAdminDialog();
@@ -642,7 +523,6 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   });
   const [page, setPage] = useState(1);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [expandPanel, setExpandPanel] = useState<'edit' | 'status' | null>(null);
   const expandRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [sendResult, setSendResult] = useState('');
   const [saving, setSaving] = useState(false);
@@ -657,14 +537,6 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   const [statsEventsPage, setStatsEventsPage] = useState(1);
   const [statsFilter, setStatsFilter] = useState<'all' | 'delivered' | 'failed' | 'opened' | 'not_opened'>('all');
   const [statsSearch, setStatsSearch] = useState('');
-  const [inlineStatsItemId, setInlineStatsItemId] = useState<string | null>(null);
-  const [inlineStatsLoading, setInlineStatsLoading] = useState(false);
-  const [inlineStatsCampaign, setInlineStatsCampaign] = useState<PushCampaignSummary | null>(null);
-  const [inlineStatsEvents, setInlineStatsEvents] = useState<PushCampaignEventRow[]>([]);
-  const [inlineStatsEventsTotal, setInlineStatsEventsTotal] = useState(0);
-  const [inlineStatsEventsPage, setInlineStatsEventsPage] = useState(1);
-  const [inlineStatsFilter, setInlineStatsFilter] = useState<'all' | 'delivered' | 'failed' | 'opened' | 'not_opened'>('all');
-  const [inlineStatsSearch, setInlineStatsSearch] = useState('');
   const STATS_EVENTS_PER_PAGE = 50;
   function formatDateTime(value: string) {
     const dt = new Date(value);
@@ -732,58 +604,6 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
     });
     setStatsEvents(Array.isArray(res.data?.items) ? res.data.items : []);
     setStatsEventsTotal(Number(res.data?.total || 0));
-  }
-
-  async function loadInlineCampaignEvents(campaignId: string, page: number, filter: string, search: string) {
-    const offset = (page - 1) * STATS_EVENTS_PER_PAGE;
-    const res = await apiClient.get(`/admin/notifications/campaigns/${campaignId}/events`, {
-      params: {
-        status: filter === 'all' ? '' : filter,
-        q: search.trim(),
-        limit: STATS_EVENTS_PER_PAGE,
-        offset,
-      },
-    });
-    setInlineStatsEvents(Array.isArray(res.data?.items) ? res.data.items : []);
-    setInlineStatsEventsTotal(Number(res.data?.total || 0));
-  }
-
-  async function loadInlineStatsForItem(item: PushItem) {
-    setInlineStatsItemId(item.id);
-    setInlineStatsLoading(true);
-    setInlineStatsEventsPage(1);
-    setInlineStatsFilter('all');
-    setInlineStatsSearch('');
-    try {
-      const res = await apiClient.get(`/admin/notifications/campaigns/latest/${encodeURIComponent(item.id)}`);
-      const campaign = res.data?.campaign as PushCampaignSummary | null;
-      setInlineStatsCampaign(campaign || null);
-      if (campaign?.id) {
-        await loadInlineCampaignEvents(campaign.id, 1, 'all', '');
-      } else {
-        setInlineStatsEvents([]);
-        setInlineStatsEventsTotal(0);
-      }
-    } catch (err: any) {
-      setInlineStatsCampaign(null);
-      setInlineStatsEvents([]);
-      setInlineStatsEventsTotal(0);
-      pushToast('error', err?.response?.data?.error || 'Failed to load push stats');
-    } finally {
-      setInlineStatsLoading(false);
-    }
-  }
-
-  async function refreshInlineStats() {
-    if (!inlineStatsCampaign?.id || !inlineStatsItemId) return;
-    try {
-      setInlineStatsLoading(true);
-      const res = await apiClient.get(`/admin/notifications/campaigns/${inlineStatsCampaign.id}/stats`);
-      setInlineStatsCampaign(res.data?.campaign || inlineStatsCampaign);
-      await loadInlineCampaignEvents(inlineStatsCampaign.id, inlineStatsEventsPage, inlineStatsFilter, inlineStatsSearch);
-    } finally {
-      setInlineStatsLoading(false);
-    }
   }
 
   async function openStatsForItem(item: PushItem) {
@@ -887,10 +707,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       const ok = await save(next, 'Push item added and saved.');
       if (ok) {
         const newId = next.items[next.items.length - 1]?.id;
-        if (newId) {
-          setExpandedId(newId);
-          setExpandPanel('edit');
-        }
+        if (newId) setExpandedId(newId);
         setNewItem({
           title: '',
           message: '',
@@ -918,10 +735,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
       setDeletingId(itemId);
       const next = { ...settings, items: settings.items.filter((x) => x.id !== itemId) };
       const ok = await save(next, 'Push item deleted and saved.');
-      if (ok && expandedId === itemId) {
-        setExpandedId(null);
-        setExpandPanel(null);
-      }
+      if (ok && expandedId === itemId) setExpandedId(null);
     } finally {
       setDeletingId('');
     }
@@ -980,26 +794,12 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   const totalPages = Math.max(1, Math.ceil(settings.items.length / PUSH_PER_PAGE));
   const safePage = Math.min(page, totalPages);
   const visibleItems = useMemo(() => settings.items.slice((safePage - 1) * PUSH_PER_PAGE, (safePage - 1) * PUSH_PER_PAGE + PUSH_PER_PAGE), [settings.items, safePage]);
-  function toggleExpand(itemId: string, panel: 'edit' | 'status') {
-    if (expandedId === itemId && expandPanel === panel) {
+  function toggleEdit(itemId: string) {
+    if (expandedId === itemId) {
       setExpandedId(null);
-      setExpandPanel(null);
-      if (panel === 'status') {
-        setInlineStatsItemId(null);
-        setInlineStatsCampaign(null);
-        setInlineStatsEvents([]);
-        setInlineStatsEventsTotal(0);
-      }
       return;
     }
     setExpandedId(itemId);
-    setExpandPanel(panel);
-    if (panel === 'status') {
-      const item = settings.items.find((x) => x.id === itemId);
-      if (item) void loadInlineStatsForItem(item);
-    } else {
-      setInlineStatsItemId(null);
-    }
     requestAnimationFrame(() => {
       expandRowRefs.current[itemId]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
@@ -1035,7 +835,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
 
       <div className="push-section push-section-list">
         <h4>2. Saved pushes</h4>
-        <p className="push-section-hint muted">Status (▼) ya Edit par click - detail usi row ke niche khulegi.</p>
+        <p className="push-section-hint muted">Edit se push change karein; Stats se delivery report dekhein. Status = draft ya sent (sirf label).</p>
         {!visibleItems.length ? (
           <p className="muted">Abhi koi push saved nahi.</p>
         ) : (
@@ -1049,42 +849,27 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
               <span>Actions</span>
             </div>
             {visibleItems.map((item) => {
-              const isExpanded = expandedId === item.id;
-              const showEdit = isExpanded && expandPanel === 'edit';
-              const showStatus = isExpanded && expandPanel === 'status';
+              const showEdit = expandedId === item.id;
               return (
                 <div
                   key={item.id}
                   ref={(el) => {
                     expandRowRefs.current[item.id] = el;
                   }}
-                  className={`push-list-item-wrap${isExpanded ? ' is-expanded' : ''}`}
+                  className={`push-list-item-wrap${showEdit ? ' is-expanded' : ''}`}
                 >
                   <div
-                    className={`row push-list-row push-notification-grid-row${isExpanded ? ' is-selected' : ''}`}
-                    aria-expanded={isExpanded}
+                    className={`row push-list-row push-notification-grid-row${showEdit ? ' is-selected' : ''}`}
+                    aria-expanded={showEdit}
                   >
                     <span className="push-list-title" title={item.title}>
                       {item.title.trim() || '(no title)'}
                     </span>
                     <span>{pushTargetLabel(item.target)}</span>
                     <span className="muted">{pushDeepLinkSummary(item)}</span>
-                    <button
-                      type="button"
-                      className={`push-status-toggle${showStatus ? ' is-active' : ''}`}
-                      aria-expanded={showStatus}
-                      aria-label={`Status ${item.status}, click for details`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleExpand(item.id, 'status');
-                      }}
-                      disabled={rowBusy}
-                    >
-                      <span className="push-status-chip">{item.status}</span>
-                      <span className="push-expand-chevron" aria-hidden>
-                        {showStatus ? '▲' : '▼'}
-                      </span>
-                    </button>
+                    <span className="push-status-chip" title={item.status === 'sent' ? 'Push bhej diya gaya' : 'Abhi draft hai'}>
+                      {item.status}
+                    </span>
                     <span>{formatDateTime(item.lastSentAt)}</span>
                     <div className="push-list-actions">
                       <button
@@ -1092,7 +877,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
                         className={`ghost${showEdit ? ' is-active' : ''}`}
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggleExpand(item.id, 'edit');
+                          toggleEdit(item.id);
                         }}
                         disabled={rowBusy}
                       >
@@ -1113,92 +898,6 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
                       </button>
                     </div>
                   </div>
-                  {showStatus ? (
-                    <div className="push-row-expand push-row-expand-status">
-                      <h5 className="push-expand-title">Status &amp; delivery stats</h5>
-                      <div className="push-status-details">
-                        <div className="push-detail-cell">
-                          <span className="push-detail-label">Status</span>
-                          <span>{item.status}</span>
-                        </div>
-                        <div className="push-detail-cell">
-                          <span className="push-detail-label">Enabled</span>
-                          <span>{item.enabled ? 'Yes' : 'No'}</span>
-                        </div>
-                        <div className="push-detail-cell">
-                          <span className="push-detail-label">Resend count</span>
-                          <span>{item.resendCount || 0}</span>
-                        </div>
-                        <div className="push-detail-cell">
-                          <span className="push-detail-label">Last sent (IST)</span>
-                          <span>{formatDateTime(item.lastSentAt)}</span>
-                        </div>
-                        <div className="push-detail-cell">
-                          <span className="push-detail-label">Scheduled</span>
-                          <span>{item.scheduledAt ? formatDateTime(item.scheduledAt) : '-'}</span>
-                        </div>
-                        <div className="push-detail-cell push-detail-cell-wide">
-                          <span className="push-detail-label">Deep link</span>
-                          <span>{pushDeepLinkSummary(item)}</span>
-                        </div>
-                      </div>
-                      {inlineStatsLoading && inlineStatsItemId === item.id && !inlineStatsCampaign ? (
-                        <p className="muted">Loading delivery stats...</p>
-                      ) : null}
-                      {inlineStatsItemId === item.id ? (
-                        <PushCampaignStatsBlock
-                          campaign={inlineStatsCampaign}
-                          events={inlineStatsEvents}
-                          eventsTotal={inlineStatsEventsTotal}
-                          eventsPage={inlineStatsEventsPage}
-                          filter={inlineStatsFilter}
-                          search={inlineStatsSearch}
-                          loading={inlineStatsLoading}
-                          perPage={STATS_EVENTS_PER_PAGE}
-                          onFilterChange={(v) => {
-                            setInlineStatsFilter(v);
-                            setInlineStatsEventsPage(1);
-                            if (inlineStatsCampaign?.id) {
-                              void loadInlineCampaignEvents(inlineStatsCampaign.id, 1, v, inlineStatsSearch);
-                            }
-                          }}
-                          onSearchChange={setInlineStatsSearch}
-                          onSearch={() => {
-                            if (!inlineStatsCampaign?.id) return;
-                            setInlineStatsEventsPage(1);
-                            void loadInlineCampaignEvents(inlineStatsCampaign.id, 1, inlineStatsFilter, inlineStatsSearch);
-                          }}
-                          onRefresh={() => {
-                            void refreshInlineStats();
-                          }}
-                          onPageChange={(p) => {
-                            setInlineStatsEventsPage(p);
-                            if (inlineStatsCampaign?.id) {
-                              void loadInlineCampaignEvents(inlineStatsCampaign.id, p, inlineStatsFilter, inlineStatsSearch);
-                            }
-                          }}
-                        />
-                      ) : null}
-                      <div className="push-section-actions">
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => {
-                            void openStatsForItem(item);
-                          }}
-                          disabled={rowBusy || statsLoading}
-                        >
-                          Open full-screen stats
-                        </button>
-                        <button type="button" className="ghost" onClick={() => toggleExpand(item.id, 'edit')} disabled={rowBusy}>
-                          Edit this push
-                        </button>
-                        <button type="button" className="ghost" onClick={() => toggleExpand(item.id, 'status')} disabled={rowBusy}>
-                          Close
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
                   {showEdit ? (
                     <div className="push-row-expand push-row-expand-edit">
                       <h5 className="push-expand-title">Edit push</h5>
@@ -1218,7 +917,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
                         <button type="button" className="danger" onClick={() => removePush(item.id)} disabled={rowBusy}>
                           {deletingId === item.id ? 'Deleting...' : 'Delete'}
                         </button>
-                        <button type="button" className="ghost" onClick={() => toggleExpand(item.id, 'edit')} disabled={rowBusy}>
+                        <button type="button" className="ghost" onClick={() => toggleEdit(item.id)} disabled={rowBusy}>
                           Close
                         </button>
                       </div>
