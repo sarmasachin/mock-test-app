@@ -1,8 +1,19 @@
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
-// Load server/.env by path (PM2 cwd can differ; vars may not appear in `pm2 env` but process.env will have them).
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+const envPath = path.join(__dirname, '..', '.env');
+// Load server/.env by path (PM2 cwd can differ).
+require('dotenv').config({ path: envPath });
+// PM2 keeps a snapshot of env at first start; dotenv does not override existing keys.
+// Always prefer server/.env for FCM so credential updates apply after restart.
+if (fs.existsSync(envPath)) {
+  const fromFile = require('dotenv').parse(fs.readFileSync(envPath, 'utf8'));
+  if (fromFile.FCM_PROJECT_ID) process.env.FCM_PROJECT_ID = fromFile.FCM_PROJECT_ID;
+  if (fromFile.FCM_SERVICE_ACCOUNT_JSON) {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = fromFile.FCM_SERVICE_ACCOUNT_JSON;
+  }
+}
 
 const express = require('express');
 const cors = require('cors');

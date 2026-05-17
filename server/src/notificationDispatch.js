@@ -20,9 +20,16 @@ function getServiceAccount() {
 
 async function getAccessToken() {
   const projectId = getProjectId();
+  const rawJson = String(process.env.FCM_SERVICE_ACCOUNT_JSON || '').trim();
   const credentials = getServiceAccount();
-  if (!projectId || !credentials) {
-    throw new Error('FCM_PROJECT_ID or FCM_SERVICE_ACCOUNT_JSON missing');
+  if (!projectId) {
+    throw new Error('FCM_PROJECT_ID missing');
+  }
+  if (!rawJson) {
+    throw new Error('FCM_SERVICE_ACCOUNT_JSON missing');
+  }
+  if (!credentials) {
+    throw new Error('FCM_SERVICE_ACCOUNT_JSON invalid (JSON parse failed)');
   }
   const auth = new GoogleAuth({
     credentials,

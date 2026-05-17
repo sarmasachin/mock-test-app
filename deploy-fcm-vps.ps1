@@ -17,7 +17,8 @@ scp $localScript "root@${hostAddr}:${remoteDir}/scripts/applyFcmEnv.js"
 Write-Host 'Step 2/3: Update .env on VPS (password again if asked)...'
 ssh "root@${hostAddr}" "cd ${remoteDir} && node scripts/applyFcmEnv.js fcm-key.json && rm -f fcm-key.json && grep '^FCM_PROJECT_ID=' .env && grep '^FCM_SERVICE_ACCOUNT_JSON=' .env | head -c 55"
 
-Write-Host 'Step 3/3: Restart API...'
-ssh "root@${hostAddr}" 'pm2 restart mocktest-api --update-env && pm2 status mocktest-api'
+Write-Host 'Step 3/3: Verify .env + restart API...'
+scp "C:\Users\DELL\Desktop\mocktestapp\server\scripts\verifyFcmEnv.js" "root@${hostAddr}:${remoteDir}/scripts/verifyFcmEnv.js"
+ssh "root@${hostAddr}" "cd ${remoteDir} && node scripts/verifyFcmEnv.js && (pm2 delete mocktest-api 2>/dev/null || true) && pm2 start src/index.js --name mocktest-api --cwd ${remoteDir} && pm2 save && pm2 status mocktest-api"
 
 Write-Host 'Done. Now: phone login -> Admin -> Send push.'
