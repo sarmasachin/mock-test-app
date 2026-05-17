@@ -323,6 +323,21 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/* Always keep push rows as a wide table (never stack into one column on narrow viewports). */
+.push-notification-panel .list.table .push-notification-grid-row {
+  display: grid !important;
+  grid-template-columns:
+    1fr 2fr minmax(88px, 100px) minmax(140px, 1.1fr) minmax(72px, 110px)
+    minmax(88px, 140px) minmax(64px, 76px)
+    repeat(4, minmax(72px, 90px)) minmax(80px, 110px) !important;
+  min-width: 1260px !important;
+  width: max-content;
+}
+
+.push-notification-panel .list.table .row-head.push-notification-grid-row {
+  display: grid !important;
+}
+
 .push-settings-add-row {
   width: 100%;
   box-sizing: border-box;
@@ -354,9 +369,6 @@
     repeat(4, minmax(72px, 90px)) minmax(80px, 110px);
 }
 
-.push-notification-panel .list.table .push-notification-grid-row {
-  min-width: 1260px;
-}
 
 .topbar {
   background: linear-gradient(95deg, rgba(255, 255, 255, 0.95), rgba(250, 246, 239, 0.96));
@@ -1446,16 +1458,7 @@ button:active {
     grid-template-columns: 1fr;
   }
 
-  /* Keep push table as horizontal scroll (do not stack into one column). */
-  .push-notification-panel .list.table .row-head {
-    display: grid;
-  }
-
-  .push-notification-panel .push-notification-grid-row {
-    min-width: 1260px !important;
-  }
-
-  .table .row {
+  .table .row:not(.push-notification-grid-row) {
     border: 1px solid #e3eaf4;
     border-radius: 10px;
     margin: 8px;
