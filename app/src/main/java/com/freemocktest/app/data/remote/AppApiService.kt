@@ -7,6 +7,7 @@ import retrofit2.http.GET
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
+import retrofit2.http.Query
 
 interface AppApiService {
 
@@ -71,5 +72,30 @@ interface AppApiService {
     suspend fun recordNotificationOpen(
         @Body body: NotificationOpenRequest,
     ): SimpleOkResponse
+
+    /** Daily Quiz only — not mock-test /attempts. */
+    @POST("daily-quiz/attempts")
+    suspend fun submitDailyQuizAttempt(
+        @Body body: DailyQuizAttemptSubmitRequest,
+    ): DailyQuizAttemptSubmitResponse
+
+    @POST("daily-quiz/attempts/batch")
+    suspend fun submitDailyQuizBatch(
+        @Body body: DailyQuizBatchSubmitRequest,
+    ): DailyQuizBatchSubmitResponse
+
+    @GET("daily-quiz/attempts")
+    suspend fun getDailyQuizHistory(): DailyQuizHistoryResponse
+
+    @GET("daily-quiz/attempts/{quizDay}")
+    suspend fun getDailyQuizAttempt(
+        @Path("quizDay") quizDay: String,
+    ): DailyQuizDayAttemptResponse
+
+    @GET("daily-quiz/leaderboard")
+    suspend fun getDailyQuizLeaderboard(
+        @Query("quizDay") quizDay: String,
+        @Query("limit") limit: Int = 50,
+    ): DailyQuizLeaderboardResponse
 
 }

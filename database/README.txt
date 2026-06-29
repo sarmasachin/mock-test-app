@@ -67,6 +67,15 @@ What postgres/*.sql creates (run in order: 001 → 002 → 003 → 004 → 005 �
   - users.date_of_birth (DATE, nullable) and users.gender (VARCHAR(20), default '')
     for the profile edit screens. Mirrors the runtime ALTERs in server/src/index.js.
 
+017_daily_quiz_attempts.sql
+  - daily_quiz_attempts: Daily Quiz results (NOT test_attempts).
+    Used by POST/GET /v1/daily-quiz/attempts and GET /v1/admin/daily-quiz/stats.
+
+018_daily_quiz_multi_question.sql
+  - One row per user per calendar day per question (item_id).
+    Drops legacy UNIQUE (user_id, quiz_day); adds UNIQUE (user_id, quiz_day, item_id).
+    Required when admin publishes multiple Daily Quiz questions per day.
+
 Quick local database (Docker)
 -----------------------------
 From the database/ folder:

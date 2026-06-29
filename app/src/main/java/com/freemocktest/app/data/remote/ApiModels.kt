@@ -237,7 +237,105 @@ data class DailyQuizItemDto(
 )
 
 data class DailyQuizTodayResponse(
-    val item: DailyQuizItemDto,
+    @SerializedName("quizDay") val quizDay: String? = null,
+    @SerializedName("questionCount") val questionCount: Int? = null,
+    val items: List<DailyQuizItemDto> = emptyList(),
+)
+
+data class DailyQuizAttemptSubmitRequest(
+    @SerializedName("quizDay") val quizDay: String,
+    @SerializedName("itemId") val itemId: String,
+    @SerializedName("selectedOptionIndex") val selectedOptionIndex: Int,
+    @SerializedName("correctIndex") val correctIndex: Int,
+    @SerializedName("timeTakenSeconds") val timeTakenSeconds: Long,
+    @SerializedName("questionPrompt") val questionPrompt: String,
+    val options: List<String>,
+    val explanation: String = "",
+    @SerializedName("clientSubmissionId") val clientSubmissionId: String,
+)
+
+data class DailyQuizAttemptDto(
+    @SerializedName("quizDay") val quizDay: String,
+    @SerializedName("itemId") val itemId: String,
+    @SerializedName("selectedOptionIndex") val selectedOptionIndex: Int?,
+    @SerializedName("correctIndex") val correctIndex: Int,
+    @SerializedName("isCorrect") val isCorrect: Boolean,
+    @SerializedName("timeTakenSeconds") val timeTakenSeconds: Long,
+    @SerializedName("questionPrompt") val questionPrompt: String,
+    val options: List<String>,
+    val explanation: String? = null,
+    @SerializedName("submittedAt") val submittedAt: String? = null,
+    val rank: Int? = null,
+    @SerializedName("rankTotal") val rankTotal: Int? = null,
+)
+
+data class DailyQuizDaySummaryDto(
+    @SerializedName("correctCount") val correctCount: Int = 0,
+    @SerializedName("wrongCount") val wrongCount: Int = 0,
+    @SerializedName("skippedCount") val skippedCount: Int = 0,
+    @SerializedName("totalQuestions") val totalQuestions: Int = 0,
+    @SerializedName("timeTakenSeconds") val timeTakenSeconds: Long = 0L,
+    val rank: Int? = null,
+    @SerializedName("rankTotal") val rankTotal: Int? = null,
+)
+
+data class DailyQuizBatchAnswerDto(
+    @SerializedName("itemId") val itemId: String,
+    @SerializedName("selectedOptionIndex") val selectedOptionIndex: Int,
+    @SerializedName("correctIndex") val correctIndex: Int,
+    @SerializedName("timeTakenSeconds") val timeTakenSeconds: Long,
+    @SerializedName("questionPrompt") val questionPrompt: String,
+    val options: List<String>,
+    val explanation: String = "",
+)
+
+data class DailyQuizBatchSubmitRequest(
+    @SerializedName("quizDay") val quizDay: String,
+    val answers: List<DailyQuizBatchAnswerDto>,
+    @SerializedName("clientSubmissionId") val clientSubmissionId: String,
+)
+
+data class DailyQuizBatchSubmitResponse(
+    @SerializedName("quizDay") val quizDay: String,
+    val attempts: List<DailyQuizAttemptDto>,
+    val summary: DailyQuizDaySummaryDto,
+)
+
+data class DailyQuizAttemptSubmitResponse(
+    val attempt: DailyQuizAttemptDto? = null,
+    @SerializedName("quizDay") val quizDay: String? = null,
+    val attempts: List<DailyQuizAttemptDto>? = null,
+    val summary: DailyQuizDaySummaryDto? = null,
+)
+
+data class DailyQuizHistoryResponse(
+    @SerializedName("attemptedDays") val attemptedDays: List<String>,
+    val attempts: List<DailyQuizAttemptDto>,
+)
+
+data class DailyQuizDayAttemptResponse(
+    @SerializedName("quizDay") val quizDay: String,
+    val attempts: List<DailyQuizAttemptDto>,
+    val summary: DailyQuizDaySummaryDto,
+)
+
+data class DailyQuizLeaderboardEntryDto(
+    val rank: Int,
+    @SerializedName("displayName") val displayName: String,
+    @SerializedName("publicId") val publicId: String? = null,
+    @SerializedName("correctCount") val correctCount: Int = 0,
+    @SerializedName("totalQuestions") val totalQuestions: Int = 0,
+    @SerializedName("isCorrect") val isCorrect: Boolean,
+    @SerializedName("timeTakenSeconds") val timeTakenSeconds: Long,
+    @SerializedName("isCurrentUser") val isCurrentUser: Boolean = false,
+)
+
+data class DailyQuizLeaderboardResponse(
+    @SerializedName("quizDay") val quizDay: String,
+    @SerializedName("totalPlayers") val totalPlayers: Int,
+    @SerializedName("currentUserRank") val currentUserRank: Int? = null,
+    val entries: List<DailyQuizLeaderboardEntryDto>,
+    @SerializedName("tableReady") val tableReady: Boolean? = true,
 )
 
 data class HomeContentSectionDto(

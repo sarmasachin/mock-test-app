@@ -23,6 +23,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.jvm.Volatile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import retrofit2.HttpException
 
 /**
  * Loads public feed + test catalog from API; falls back to bundled manual content when empty or offline.
@@ -54,10 +55,16 @@ object ContentRepository {
         val factText: String,
     )
     data class DailyQuizRemote(
+        val id: String,
         val questionPrompt: String,
         val options: List<String>,
         val correctIndex: Int,
         val explanation: String,
+    )
+
+    data class DailyQuizTodayRemote(
+        val quizDay: LocalDate,
+        val items: List<DailyQuizRemote>,
     )
     data class QuizQuestionRemote(
         val title: String,
@@ -794,18 +801,34 @@ object ContentRepository {
         }
     }
 
-    suspend fun loadDailyQuizItem(): DailyQuizRemote? = withContext(Dispatchers.IO) {
+    suspend fun loadDailyQuizToday(): DailyQuizTodayRemote? = withContext(Dispatchers.IO) {
         try {
-            val row = RetrofitProvider.publicApi.getDailyQuizToday().item
-            DailyQuizRemote(
-                questionPrompt = row.questionPrompt,
-                options = row.options,
-                correctIndex = row.correctIndex,
-                explanation = row.explanation.orEmpty(),
-            )
+            val res = RetrofitProvider.publicApi.getDailyQuizToday()
+            val quizDay = res.quizDay?.let { s ->
+                runCatching { java.time.LocalDate.parse(s) }.getOrNull()
+            } ?: java.time.LocalDate.now()
+            val items = res.items.map { row ->
+                DailyQuizRemote(
+                    id = row.id,
+                    questionPrompt = row.questionPrompt,
+                    options = row.options,
+                    correctIndex = row.correctIndex,
+                    explanation = row.explanation.orEmpty(),
+                )
+            }
+            if (items.isEmpty()) return@withContext null
+            DailyQuizTodayRemote(quizDay = quizDay, items = items)
+        } catch (e: HttpException) {
+            if (e.code() == 404) {
+                Log.w(TAG, "loadDailyQuizToday: not published (404)")
+                null
+            } else {
+                Log.w(TAG, "loadDailyQuizToday http ${e.code()}", e)
+                throw e
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "loadDailyQuizItem", e)
-            null
+            Log.w(TAG, "loadDailyQuizToday", e)
+            throw e
         }
     }
 

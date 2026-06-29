@@ -3301,6 +3301,174 @@ router.delete('/daily-quiz/:id', async (req, res) => {
   }
 });
 
+function buildUtcRangeLabels(rangeDays) {
+  const n = Math.max(1, Math.min(120, Math.floor(rangeDays)));
+  const labels = [];
+  const keys = [];
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const d = new Date();
+    d.setUTCHours(0, 0, 0, 0);
+    d.setUTCDate(d.getUTCDate() - i);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    keys.push(`${y}-${m}-${day}`);
+    labels.push(d.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', timeZone: 'UTC' }));
+  }
+  return { labels, keys };
+}
+
+function emptyDailyQuizStatsPayload(rangeDays) {
+  const { labels, keys } = buildUtcRangeLabels(rangeDays);
+  return {
+    rangeDays,
+    tableReady: false,
+    kpis: {
+      totalAttempts: 0,
+      uniqueUsers: 0,
+      attemptsToday: 0,
+      correctRatePct: 0,
+      avgTimeSeconds: 0,
+      publishedItems: 0,
+    },
+    attemptsPerDay: {
+      labels,
+      attempts: keys.map(() => 0),
+      uniqueUsers: keys.map(() => 0),
+    },
+    outcomeSplit: { correct: 0, wrong: 0, skipped: 0 },
+    recentActivity: [],
+  };
+}
+
+/** Daily Quiz analytics only — not mock-test test_attempts. */
+router.get('/daily-quiz/stats', async (req, res) => {
+  const rangeDays = parseSummaryRangeDays(req);
+  const { labels, keys } = buildUtcRangeLabels(rangeDays);
+  try {
+    const publishedPayload = await getJsonSetting('dailyQuizItems', { items: [] });
+    const publishedItems = Array.isArray(publishedPayload.items)
+      ? publishedPayload.items.filter((x) => x && x.isPublished !== false).length
+      : 0;
+
+    const [
+      kpiRow,
+      todayRow,
+      byDayRows,
+      outcomeRow,
+      recentRows,
+    ] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*)::int AS total_attempts,
+                COUNT(DISTINCT user_id)::int AS unique_users,
+                ROUND(AVG(time_taken_seconds))::int AS avg_time_seconds,
+                ROUND(100.0 * COUNT(*) FILTER (WHERE is_correct = true) / NULLIF(COUNT(*), 0))::int AS correct_rate_pct
+         FROM daily_quiz_attempts
+         WHERE quiz_day >= (timezone('UTC', now())::date - ($1::int - 1))`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS c,
+                COUNT(DISTINCT user_id)::int AS u
+         FROM daily_quiz_attempts
+         WHERE quiz_day = (timezone('UTC', now())::date)`,
+      ),
+      pool.query(
+        `SELECT quiz_day::text AS d,
+                COUNT(*)::int AS attempts,
+                COUNT(DISTINCT user_id)::int AS unique_users
+         FROM daily_quiz_attempts
+         WHERE quiz_day >= (timezone('UTC', now())::date - ($1::int - 1))
+         GROUP BY quiz_day
+         ORDER BY quiz_day`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE is_correct = true)::int AS correct,
+           COUNT(*) FILTER (WHERE is_correct = false AND selected_option_index IS NOT NULL)::int AS wrong,
+           COUNT(*) FILTER (WHERE selected_option_index IS NULL)::int AS skipped
+         FROM daily_quiz_attempts
+         WHERE quiz_day >= (timezone('UTC', now())::date - ($1::int - 1))`,
+        [rangeDays],
+      ),
+      pool.query(
+        `SELECT
+           COALESCE(NULLIF(trim(u.display_name), ''), LEFT(trim(u.email::text), 40), 'User') AS student,
+           dqa.quiz_day::text AS quiz_day,
+           dqa.is_correct,
+           dqa.time_taken_seconds,
+           LEFT(COALESCE(NULLIF(trim(dqa.question_prompt), ''), 'Question'), 80) AS question_prompt,
+           dqa.submitted_at
+         FROM daily_quiz_attempts dqa
+         JOIN users u ON u.id = dqa.user_id
+         ORDER BY dqa.submitted_at DESC
+         LIMIT 30`,
+      ),
+    ]);
+
+    const byDayMap = new Map();
+    byDayRows.rows.forEach((row) => {
+      const key = String(row.d || '').slice(0, 10);
+      byDayMap.set(key, {
+        attempts: Number(row.attempts) || 0,
+        uniqueUsers: Number(row.unique_users) || 0,
+      });
+    });
+
+    const kpi = kpiRow.rows[0] || {};
+    const today = todayRow.rows[0] || {};
+    const outcome = outcomeRow.rows[0] || {};
+
+    return res.json({
+      rangeDays,
+      tableReady: true,
+      kpis: {
+        totalAttempts: Number(kpi.total_attempts) || 0,
+        uniqueUsers: Number(kpi.unique_users) || 0,
+        attemptsToday: Number(today.c) || 0,
+        uniqueUsersToday: Number(today.u) || 0,
+        correctRatePct: Number(kpi.correct_rate_pct) || 0,
+        avgTimeSeconds: Number(kpi.avg_time_seconds) || 0,
+        publishedItems,
+      },
+      attemptsPerDay: {
+        labels,
+        attempts: keys.map((k) => byDayMap.get(k)?.attempts ?? 0),
+        uniqueUsers: keys.map((k) => byDayMap.get(k)?.uniqueUsers ?? 0),
+      },
+      outcomeSplit: {
+        correct: Number(outcome.correct) || 0,
+        wrong: Number(outcome.wrong) || 0,
+        skipped: Number(outcome.skipped) || 0,
+      },
+      recentActivity: recentRows.rows.map((row) => ({
+        student: String(row.student || 'User'),
+        quizDay: String(row.quiz_day || '').slice(0, 10),
+        isCorrect: Boolean(row.is_correct),
+        timeTakenSeconds: Number(row.time_taken_seconds) || 0,
+        questionPrompt: String(row.question_prompt || ''),
+        submittedAt: row.submitted_at,
+      })),
+    });
+  } catch (e) {
+    if (e && e.code === '42P01') {
+      const empty = emptyDailyQuizStatsPayload(rangeDays);
+      try {
+        const publishedPayload = await getJsonSetting('dailyQuizItems', { items: [] });
+        empty.kpis.publishedItems = Array.isArray(publishedPayload.items)
+          ? publishedPayload.items.filter((x) => x && x.isPublished !== false).length
+          : 0;
+      } catch (_inner) {
+        empty.kpis.publishedItems = 0;
+      }
+      return res.json(empty);
+    }
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load daily quiz stats' });
+  }
+});
+
 router.get('/articles/feed-kinds', async (_req, res) => {
   try {
     const kinds = await getArticleFeedKindList();

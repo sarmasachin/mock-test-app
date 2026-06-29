@@ -69,6 +69,79 @@ private data class ExamHierarchyNode(
     val children: List<ExamHierarchyNode> = emptyList(),
 )
 
+/**
+ * Central (all-India) categories use a shorter path: when an exam group has exactly one test,
+ * Level 3 is skipped and Apply opens with that test name. State and other Level 1 values
+ * always use the full 3-step hierarchy.
+ */
+private fun normalizeExamLevel1Key(label: String): String =
+    label.trim().lowercase().replace(Regex("\\s+"), " ")
+
+private fun isStateExamLevel1(label: String): Boolean {
+    val key = normalizeExamLevel1Key(label)
+    if (key.isBlank()) return false
+    return key == "state" ||
+        key == "state exams" ||
+        key == "state exam" ||
+        key.startsWith("state ")
+}
+
+private fun isCentralExamLevel1(label: String): Boolean {
+    val key = normalizeExamLevel1Key(label)
+    if (key.isBlank()) return false
+    if (isStateExamLevel1(label)) return false
+    return key == "central" ||
+        key == "central exams" ||
+        key == "central exam" ||
+        key.startsWith("central ") ||
+        key == "all india" ||
+        key.startsWith("all india ") ||
+        key == "national" ||
+        key == "national level" ||
+        key.startsWith("national ")
+}
+
+/** Level 3 test name used for Apply when this node has exactly one enabled test child. */
+private fun centralDirectApplyTarget(node: ExamHierarchyNode): String? {
+    val sole = node.children.singleOrNull() ?: return null
+    val name = sole.label.trim()
+    return name.takeIf { it.isNotEmpty() }
+}
+
+private fun handleExamCategoryPick(
+    hierarchy: List<ExamHierarchyNode>,
+    level1: String?,
+    level2: String?,
+    picked: String,
+    onOpenCategory: (String) -> Unit,
+    setLevel1: (String?) -> Unit,
+    setLevel2: (String?) -> Unit,
+) {
+    val trimmedPicked = picked.trim()
+    if (trimmedPicked.isEmpty()) return
+
+    when {
+        level1 == null -> {
+            setLevel1(trimmedPicked)
+        }
+        level2 == null -> {
+            if (isCentralExamLevel1(level1)) {
+                val l1Node = hierarchy.firstOrNull { it.label == level1 }
+                val l2Node = l1Node?.children?.firstOrNull { it.label == trimmedPicked }
+                val applyTarget = l2Node?.let { centralDirectApplyTarget(it) }
+                if (applyTarget != null) {
+                    onOpenCategory(applyTarget)
+                    setLevel1(null)
+                    setLevel2(null)
+                    return
+                }
+            }
+            setLevel2(trimmedPicked)
+        }
+        else -> onOpenCategory(trimmedPicked)
+    }
+}
+
 private fun buildExamHierarchy(remote: List<ContentRepository.ExamCategoryItemRemote>): List<ExamHierarchyNode> {
     if (remote.isEmpty()) return emptyList()
     val grouped = remote.groupBy { it.level1.trim() }
@@ -257,15 +330,15 @@ fun SeeAllCategoriesScreenNew(
                             right = rowCats.getOrNull(1)?.label,
                             rightIconKey = rowCats.getOrNull(1)?.iconKey,
                             onOpenCategory = { picked ->
-                                if (level1 == null) {
-                                    level1 = picked
-                                    return@AllCategoryRow
-                                }
-                                if (level2 == null) {
-                                    level2 = picked
-                                    return@AllCategoryRow
-                                }
-                                onOpenCategory(picked)
+                                handleExamCategoryPick(
+                                    hierarchy = hierarchy,
+                                    level1 = level1,
+                                    level2 = level2,
+                                    picked = picked,
+                                    onOpenCategory = onOpenCategory,
+                                    setLevel1 = { level1 = it },
+                                    setLevel2 = { level2 = it },
+                                )
                             },
                         )
                     }

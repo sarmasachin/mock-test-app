@@ -103,6 +103,8 @@ object AppPreferencesRepository {
     private val keyLoginTestPickDone = intPreferencesKey("login_test_pick_done")
     /** JSON array of test titles the user selected after login. */
     private val keyLoginTestPickTitles = stringPreferencesKey("login_test_pick_titles")
+    /** Daily Quiz only — not mock-test attempts. JSON object: date (yyyy-MM-dd) → result blob. */
+    private val keyDailyQuizResultsByDayJson = stringPreferencesKey("daily_quiz_results_by_day_v1")
 
     private const val DefaultStartSeriesLockMs = 20_000L
     private const val DefaultStartSeriesActiveWindowMs = 30 * 60 * 1000L
@@ -904,6 +906,181 @@ object AppPreferencesRepository {
             Log.e(TAG, "recordDigestOpenedToday failed", e)
             0
         }
+    }
+
+    data class DailyQuizQuestionResult(
+        val itemId: String = "",
+        val selectedOptionIndex: Int?,
+        val correctIndex: Int,
+        val isCorrect: Boolean,
+        val questionPrompt: String,
+        val options: List<String>,
+        val explanation: String,
+        val timeTakenSeconds: Long = 0L,
+    ) {
+        val isAnswered: Boolean get() = selectedOptionIndex != null
+    }
+
+    /** Local snapshot for Daily Quiz result UI (separate from mock-test [PendingResultState]). */
+    data class DailyQuizDayResult(
+        val day: LocalDate,
+        val questions: List<DailyQuizQuestionResult>,
+        val totalTimeTakenSeconds: Long,
+        val savedAtMillis: Long = System.currentTimeMillis(),
+        /** Daily Quiz leaderboard for that calendar day only (not mock-test rank). */
+        val rank: Int? = null,
+        val rankTotal: Int? = null,
+    ) {
+        val correctCount: Int get() = questions.count { it.isAnswered && it.isCorrect }
+        val wrongCount: Int get() = questions.count { it.isAnswered && !it.isCorrect }
+        val skippedCount: Int get() = questions.count { !it.isAnswered }
+        val totalQuestions: Int get() = questions.size.coerceAtLeast(1)
+
+        /** Legacy single-question fields (first question) for older call sites. */
+        val selectedOptionIndex: Int? get() = questions.firstOrNull()?.selectedOptionIndex
+        val correctIndex: Int get() = questions.firstOrNull()?.correctIndex ?: 0
+        val isCorrect: Boolean get() = questions.size == 1 && correctCount == 1
+        val timeTakenSeconds: Long get() = totalTimeTakenSeconds
+        val questionPrompt: String get() = questions.firstOrNull()?.questionPrompt.orEmpty()
+        val options: List<String> get() = questions.firstOrNull()?.options.orEmpty()
+        val explanation: String get() = questions.firstOrNull()?.explanation.orEmpty()
+    }
+
+    suspend fun loadDailyQuizAttemptedDates(): Set<LocalDate> {
+        if (!::appContext.isInitialized) return emptySet()
+        return runCatching {
+            val raw = store().data.first()[keyDailyQuizResultsByDayJson].orEmpty()
+            val root = parseDailyQuizResultsRoot(raw)
+            val keyIter = root.keys()
+            val dates = mutableSetOf<LocalDate>()
+            while (keyIter.hasNext()) {
+                val key = keyIter.next()
+                runCatching { LocalDate.parse(key) }.getOrNull()?.let { dates.add(it) }
+            }
+            dates
+        }.getOrElse { e ->
+            Log.e(TAG, "loadDailyQuizAttemptedDates failed", e)
+            emptySet()
+        }
+    }
+
+    suspend fun loadDailyQuizDayResult(day: LocalDate): DailyQuizDayResult? {
+        if (!::appContext.isInitialized) return null
+        return runCatching {
+            val raw = store().data.first()[keyDailyQuizResultsByDayJson].orEmpty()
+            parseDailyQuizDayResult(day, parseDailyQuizResultsRoot(raw))
+        }.getOrElse { e ->
+            Log.e(TAG, "loadDailyQuizDayResult failed", e)
+            null
+        }
+    }
+
+    suspend fun saveDailyQuizDayResult(result: DailyQuizDayResult): Boolean {
+        if (!::appContext.isInitialized) return false
+        return runCatching {
+            store().edit { prefs ->
+                val root = parseDailyQuizResultsRoot(prefs[keyDailyQuizResultsByDayJson].orEmpty())
+                val dayKey = result.day.toString()
+                val questionsArr = JSONArray()
+                result.questions.forEach { q ->
+                    val optionsArr = JSONArray()
+                    q.options.forEach { optionsArr.put(it) }
+                    questionsArr.put(
+                        JSONObject()
+                            .put("itemId", q.itemId)
+                            .put("selectedOptionIndex", q.selectedOptionIndex ?: JSONObject.NULL)
+                            .put("correctIndex", q.correctIndex)
+                            .put("isCorrect", q.isCorrect)
+                            .put("timeTakenSeconds", q.timeTakenSeconds)
+                            .put("questionPrompt", q.questionPrompt)
+                            .put("options", optionsArr)
+                            .put("explanation", q.explanation),
+                    )
+                }
+                root.put(
+                    dayKey,
+                    JSONObject()
+                        .put("questions", questionsArr)
+                        .put("totalTimeTakenSeconds", result.totalTimeTakenSeconds)
+                        .put("savedAtMillis", result.savedAtMillis)
+                        .put("rank", result.rank ?: JSONObject.NULL)
+                        .put("rankTotal", result.rankTotal ?: JSONObject.NULL),
+                )
+                prefs[keyDailyQuizResultsByDayJson] = root.toString()
+            }
+            true
+        }.getOrElse { e ->
+            Log.e(TAG, "saveDailyQuizDayResult failed", e)
+            false
+        }
+    }
+
+    private fun parseDailyQuizResultsRoot(raw: String): JSONObject {
+        if (raw.isBlank()) return JSONObject()
+        return runCatching { JSONObject(raw) }.getOrElse { JSONObject() }
+    }
+
+    private fun parseDailyQuizQuestionResult(obj: JSONObject): DailyQuizQuestionResult {
+        val options = mutableListOf<String>()
+        val optArr = obj.optJSONArray("options")
+        if (optArr != null) {
+            for (i in 0 until optArr.length()) {
+                options.add(optArr.optString(i, ""))
+            }
+        }
+        val selectedRaw = obj.opt("selectedOptionIndex")
+        val selectedOptionIndex = when (selectedRaw) {
+            null, JSONObject.NULL -> null
+            else -> obj.optInt("selectedOptionIndex", -1).takeIf { it in 0..3 }
+        }
+        return DailyQuizQuestionResult(
+            itemId = obj.optString("itemId", ""),
+            selectedOptionIndex = selectedOptionIndex,
+            correctIndex = obj.optInt("correctIndex", 0).coerceIn(0, 3),
+            isCorrect = obj.optBoolean("isCorrect", false),
+            questionPrompt = obj.optString("questionPrompt", ""),
+            options = options,
+            explanation = obj.optString("explanation", ""),
+            timeTakenSeconds = obj.optLong("timeTakenSeconds", 0L).coerceAtLeast(0L),
+        )
+    }
+
+    private fun parseDailyQuizDayResult(day: LocalDate, root: JSONObject): DailyQuizDayResult? {
+        val entry = root.optJSONObject(day.toString()) ?: return null
+        val questionsArr = entry.optJSONArray("questions")
+        val questions = if (questionsArr != null && questionsArr.length() > 0) {
+            buildList {
+                for (i in 0 until questionsArr.length()) {
+                    val qObj = questionsArr.optJSONObject(i) ?: continue
+                    add(parseDailyQuizQuestionResult(qObj))
+                }
+            }
+        } else {
+            // Legacy single-question format
+            listOf(parseDailyQuizQuestionResult(entry))
+        }
+        if (questions.isEmpty()) return null
+        val rankRaw = entry.opt("rank")
+        val rank = when (rankRaw) {
+            null, JSONObject.NULL -> null
+            else -> entry.optInt("rank", 0).takeIf { it > 0 }
+        }
+        val rankTotalRaw = entry.opt("rankTotal")
+        val rankTotal = when (rankTotalRaw) {
+            null, JSONObject.NULL -> null
+            else -> entry.optInt("rankTotal", 0).takeIf { it > 0 }
+        }
+        return DailyQuizDayResult(
+            day = day,
+            questions = questions,
+            totalTimeTakenSeconds = entry.optLong(
+                "totalTimeTakenSeconds",
+                entry.optLong("timeTakenSeconds", 0L),
+            ).coerceAtLeast(0L),
+            savedAtMillis = entry.optLong("savedAtMillis", 0L),
+            rank = rank,
+            rankTotal = rankTotal,
+        )
     }
 
     suspend fun clearAllLocalPreferences(): Boolean {

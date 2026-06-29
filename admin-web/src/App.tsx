@@ -26,6 +26,7 @@ import {
   type AdminDashboardSummary,
   type DashboardRange,
 } from './components/DashboardAnalytics';
+import { DailyQuizAdminStats } from './components/DailyQuizAdminStats';
 
 const ADMIN_IMAGE_UPLOAD_MIME_TYPES = [
   'image/jpeg',
@@ -1227,10 +1228,13 @@ function App() {
         <main className="main">
           <header className="topbar">
             <div>
-              <h1>{TAB_LABELS[tab]}</h1>
-              <p>Professional control center</p>
+              {tab !== 'pushNotificationSettings' ? <h1>{TAB_LABELS[tab]}</h1> : null}
             </div>
             <button
+              type="button"
+              aria-label="Logout"
+              className="ghost"
+              title="Logout"
               onClick={() => {
                 clearStoredAuth();
                 setIsAdmin(false);
@@ -1240,9 +1244,7 @@ function App() {
                 setIdentifier('');
                 setPassword('');
               }}
-            >
-              Logout
-            </button>
+            />
           </header>
           {tab === 'dashboard' && <DashboardTab apiClient={authedApi} />}
           {tab === 'analyticsInsights' && <AnalyticsInsightsTab apiClient={authedApi} />}
@@ -3452,7 +3454,9 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
   }, [items, safeQuizPage]);
 
   return (
-    <section className="panel-card">
+    <>
+      <DailyQuizAdminStats apiClient={apiClient} />
+      <section className="panel-card">
       <div className="panel-head">
         <h3>Daily Quiz (separate from Daily Digest)</h3>
       </div>
@@ -3604,6 +3608,7 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
         </div>
       ) : null}
     </section>
+    </>
   );
 }
 

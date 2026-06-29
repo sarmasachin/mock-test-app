@@ -24,6 +24,7 @@ const meRouter = require('./routes/me');
 const attemptsRouter = require('./routes/attempts');
 const newsRouter = require('./routes/news');
 const digestRouter = require('./routes/digest');
+const dailyQuizRouter = require('./routes/dailyQuiz');
 const testsCatalogRouter = require('./routes/tests');
 const leaderboardRouter = require('./routes/leaderboard');
 const homeRouter = require('./routes/home');
@@ -127,6 +128,7 @@ app.use('/v1/me', requireAuth, meRouter);
 app.use('/v1/attempts', requireAuth, attemptsRouter);
 app.use('/v1/news', newsRouter);
 app.use('/v1/digest', digestRouter);
+app.use('/v1/daily-quiz', requireAuth, dailyQuizRouter);
 app.use('/v1/tests', testsCatalogRouter);
 app.use('/v1/leaderboard', leaderboardRouter);
 app.use('/v1/home', homeRouter);
@@ -284,6 +286,51 @@ async function ensureOptionalColumns() {
         )
       )
     `);
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS daily_quiz_attempts (
+         id BIGSERIAL PRIMARY KEY,
+         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         quiz_day DATE NOT NULL,
+         item_id VARCHAR(80) NOT NULL,
+         selected_option_index SMALLINT CHECK (
+           selected_option_index IS NULL
+           OR (selected_option_index >= 0 AND selected_option_index <= 3)
+         ),
+         correct_index SMALLINT NOT NULL CHECK (correct_index >= 0 AND correct_index <= 3),
+         is_correct BOOLEAN NOT NULL DEFAULT false,
+         time_taken_seconds INTEGER NOT NULL DEFAULT 0 CHECK (
+           time_taken_seconds >= 0 AND time_taken_seconds <= 86400
+         ),
+         question_prompt TEXT NOT NULL DEFAULT '',
+         options_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+         explanation TEXT NOT NULL DEFAULT '',
+         client_submission_id VARCHAR(120),
+         submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+         CONSTRAINT daily_quiz_attempts_user_day_item_unique UNIQUE (user_id, quiz_day, item_id)
+       )`,
+    );
+    await pool.query(
+      `ALTER TABLE daily_quiz_attempts
+       DROP CONSTRAINT IF EXISTS daily_quiz_attempts_user_day_unique`,
+    );
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_quiz_attempts_user_day_item
+       ON daily_quiz_attempts (user_id, quiz_day, item_id)`,
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_daily_quiz_attempts_user_submitted
+       ON daily_quiz_attempts (user_id, submitted_at DESC)`,
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_daily_quiz_attempts_quiz_day
+       ON daily_quiz_attempts (quiz_day, is_correct, time_taken_seconds)`,
+    );
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_quiz_attempts_client_submission
+       ON daily_quiz_attempts (user_id, client_submission_id)
+       WHERE client_submission_id IS NOT NULL AND trim(client_submission_id) <> ''`,
+    );
     /** Locked super-admin roster — sourced from `./constants/protectedSuperAdminEmails.js`. */
     for (const em of PROTECTED_SUPER_ADMIN_EMAIL_LIST) {
       await pool.query(
