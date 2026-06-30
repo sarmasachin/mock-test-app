@@ -11,7 +11,12 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+import com.freemocktest.app.R
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -232,31 +237,46 @@ fun NotificationsScreenNew(
                             colors = CardDefaults.cardColors(containerColor = p.surface),
                             border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
                         ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.Top,
-                                ) {
-                                    Text(
-                                        text = item.title,
-                                        color = p.textPrimary,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 15.sp,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    val dateText = formatNotificationDateTime(item.createdAt)
-                                    if (dateText.isNotBlank()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                Image(
+                                    painter = painterResource(R.drawable.ic_notification_large),
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .clip(CircleShape),
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.Top,
+                                    ) {
                                         Text(
-                                            text = dateText,
-                                            color = p.textSecondary.copy(alpha = 0.9f),
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Medium,
+                                            text = item.title,
+                                            color = p.textPrimary,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp,
+                                            modifier = Modifier.weight(1f),
                                         )
+                                        val dateText = formatNotificationDateTime(item.createdAt)
+                                        if (dateText.isNotBlank()) {
+                                            Text(
+                                                text = dateText,
+                                                color = p.textSecondary.copy(alpha = 0.9f),
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium,
+                                            )
+                                        }
                                     }
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(item.message, color = p.textSecondary, fontSize = 13.sp)
                                 }
-                                Spacer(Modifier.height(4.dp))
-                                Text(item.message, color = p.textSecondary, fontSize = 13.sp)
                             }
                         }
                     }

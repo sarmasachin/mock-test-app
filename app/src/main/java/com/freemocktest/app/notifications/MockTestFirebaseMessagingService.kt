@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.freemocktest.app.MainActivity
 import com.freemocktest.app.R
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -23,7 +24,9 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         super.onMessageReceived(message)
-        val title = message.notification?.title?.trim().orEmpty().ifBlank { "MockTestApp" }
+        val title = message.notification?.title?.trim().orEmpty()
+            .ifBlank { message.data["title"]?.trim().orEmpty() }
+            .ifBlank { "Gov Mock Test" }
         val body = message.notification?.body?.trim().orEmpty()
             .ifBlank { message.data["message"]?.trim().orEmpty() }
         if (body.isBlank()) return
@@ -46,8 +49,11 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val largeIcon = NotificationBitmaps.largeIcon(this)
         val notification = NotificationCompat.Builder(this, MockTestNotificationChannels.GENERAL_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_notification)
+            .apply { largeIcon?.let { setLargeIcon(it) } }
+            .setColor(ContextCompat.getColor(this@MockTestFirebaseMessagingService, R.color.launcher_icon_blue))
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))

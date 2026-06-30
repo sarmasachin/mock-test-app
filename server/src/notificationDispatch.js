@@ -56,7 +56,10 @@ async function sendPushToToken(deviceToken, payload) {
   if (!title || !body) {
     return { ok: false, code: 'INVALID_PAYLOAD' };
   }
-  const data = {};
+  const data = {
+    title,
+    message: body,
+  };
   if (deepLink) data.deepLink = deepLink;
   if (campaignId) data.campaignId = campaignId;
   const { token: accessToken, projectId } = await getAccessToken();
@@ -70,16 +73,14 @@ async function sendPushToToken(deviceToken, payload) {
     body: JSON.stringify({
       message: {
         token,
-        notification: {
-          title,
-          body,
-        },
         data,
         android: {
           priority: 'HIGH',
           notification: {
             channel_id: 'general_notifications',
             default_sound: true,
+            icon: 'ic_stat_notification',
+            color: '#0B4CC9',
           },
         },
       },
