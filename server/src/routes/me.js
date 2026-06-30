@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const { pool } = require('../db');
 const { sha256Hex } = require('../cryptoUtil');
 const { mapUserRow } = require('../userMapper');
+const { getEffectiveAdminPermissions } = require('../lib/adminPermissions');
 const {
   isMailConfigured,
   mapSmtpSendErrorToClientMessage,
@@ -131,7 +132,18 @@ router.get('/', async (req, res) => {
     const { rows } = await pool.query(`SELECT * FROM users WHERE id = $1::uuid LIMIT 1`, [req.userId]);
     const row = rows[0];
     if (!row) return res.status(404).json({ error: 'User not found' });
-    return res.json({ user: mapUserRow(row) });
+    const user = mapUserRow(row);
+    if (user.isAdmin) {
+      const effective = await getEffectiveAdminPermissions({
+        userId: req.userId,
+        isAdmin: user.isAdmin,
+        isSuperAdmin: user.isSuperAdmin,
+        email: user.email,
+      });
+      user.adminPermissions = effective.keys;
+      user.adminPermissionsImplicitFull = effective.isImplicitFullAccess;
+    }
+    return res.json({ user });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to load profile' });

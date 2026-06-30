@@ -38,6 +38,14 @@ const {
   PROTECTED_SUPER_ADMIN_EMAILS,
   isProtectedSuperAdminDbEmail,
 } = require('../constants/protectedSuperAdminEmails');
+const {
+  getPermissionCatalogResponse,
+  loadStoredPermissionKeys,
+  getEffectiveAdminPermissions,
+  replaceAdminUserPermissions,
+  seedFullPermissionsForAdmin,
+  clearAdminPermissions,
+} = require('../lib/adminPermissions');
 
 const router = express.Router();
 
@@ -3784,6 +3792,118 @@ router.delete('/articles/:id', async (req, res) => {
   }
 });
 
+router.get('/permissions/catalog', async (_req, res) => {
+  try {
+    return res.json({ ok: true, catalog: getPermissionCatalogResponse() });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load permission catalog' });
+  }
+});
+
+router.get('/permissions/me', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT email, is_admin, is_super_admin FROM users WHERE id = $1::uuid LIMIT 1`,
+      [req.userId],
+    );
+    const user = rows[0];
+    if (!user || !user.is_admin) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    const effective = await getEffectiveAdminPermissions({
+      userId: req.userId,
+      isAdmin: Boolean(user.is_admin),
+      isSuperAdmin: Boolean(user.is_super_admin),
+      email: user.email,
+    });
+    const stored = user.is_super_admin ? [] : await loadStoredPermissionKeys(req.userId);
+    return res.json({
+      ok: true,
+      isSuperAdmin: Boolean(user.is_super_admin),
+      implicitFullAccess: effective.isImplicitFullAccess,
+      permissionKeys: effective.keys,
+      storedPermissionKeys: stored,
+      total: effective.keys.length,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load admin permissions' });
+  }
+});
+
+router.get('/users/:id/permissions', async (req, res) => {
+  if (!req.isSuperAdmin) {
+    return res.status(403).json({ error: 'Super admin access required' });
+  }
+  const { id } = req.params;
+  if (!isUuid(id)) return res.status(400).json({ error: 'Invalid user id' });
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, email, display_name, is_admin, is_super_admin
+       FROM users WHERE id = $1::uuid LIMIT 1`,
+      [id],
+    );
+    const user = rows[0];
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!user.is_admin) {
+      return res.status(400).json({ error: 'User is not an admin' });
+    }
+    const effective = await getEffectiveAdminPermissions({
+      userId: id,
+      isAdmin: Boolean(user.is_admin),
+      isSuperAdmin: Boolean(user.is_super_admin),
+      email: user.email,
+    });
+    const stored = user.is_super_admin ? [] : await loadStoredPermissionKeys(id);
+    return res.json({
+      ok: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.display_name,
+        isAdmin: Boolean(user.is_admin),
+        isSuperAdmin: Boolean(user.is_super_admin),
+      },
+      implicitFullAccess: effective.isImplicitFullAccess,
+      permissionKeys: effective.keys,
+      storedPermissionKeys: stored,
+      total: effective.keys.length,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load user permissions' });
+  }
+});
+
+router.put('/users/:id/permissions', async (req, res) => {
+  if (!req.isSuperAdmin) {
+    return res.status(403).json({ error: 'Super admin access required' });
+  }
+  const { id } = req.params;
+  if (!isUuid(id)) return res.status(400).json({ error: 'Invalid user id' });
+  const keys = (req.body && req.body.permissionKeys) || (req.body && req.body.permissions) || [];
+  try {
+    const result = await replaceAdminUserPermissions({
+      targetUserId: id,
+      permissionKeys: keys,
+      grantedByUserId: req.userId,
+      actorIsSuperAdmin: true,
+    });
+    await logAdminAction(req, 'admin_permissions_updated', 'user', id, {
+      permissionKeys: result.permissionKeys,
+      total: result.total,
+    });
+    return res.json({ ok: true, ...result });
+  } catch (e) {
+    if (e && e.status) {
+      return res.status(e.status).json({ error: e.message });
+    }
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to update user permissions' });
+  }
+});
+
 router.get('/users', async (req, res) => {
   const q = String(req.query.q || '').trim();
   const limitRaw = Number(req.query.limit);
@@ -4109,6 +4229,11 @@ router.patch('/users/:id/admin', async (req, res) => {
     const wasSuper = Boolean(existing.rows[0].is_super_admin);
     const nowAdmin = Boolean(rows[0].is_admin);
     const nowSuper = Boolean(rows[0].is_super_admin);
+    if (!nowAdmin) {
+      await clearAdminPermissions(id);
+    } else if (nowAdmin && !wasAdmin && !nowSuper) {
+      await seedFullPermissionsForAdmin(id, req.userId);
+    }
     const grantEmail = String(rows[0].email || '').trim();
     if (grantEmail && isMailConfigured()) {
       if (nowAdmin && !wasAdmin) {

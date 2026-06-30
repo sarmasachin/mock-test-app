@@ -342,6 +342,12 @@ async function ensureOptionalColumns() {
         [em],
       );
     }
+    const { ensureAdminPermissionsSchema, backfillLegacyAdminPermissions } = require('./lib/adminPermissions');
+    await ensureAdminPermissionsSchema();
+    const backfill = await backfillLegacyAdminPermissions();
+    if (backfill.backfilledUsers > 0) {
+      console.log('admin_permissions_backfill', backfill);
+    }
   } catch (e) {
     if (e && e.code === '42P01') return;
     console.error('optional_columns_init_error', e);

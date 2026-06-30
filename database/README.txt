@@ -76,6 +76,10 @@ What postgres/*.sql creates (run in order: 001 → 002 → 003 → 004 → 005 �
     Drops legacy UNIQUE (user_id, quiz_day); adds UNIQUE (user_id, quiz_day, item_id).
     Required when admin publishes multiple Daily Quiz questions per day.
 
+019_admin_permissions.sql
+  - admin_user_permissions: RBAC grants per admin user (permission_key rows).
+    Super admin has implicit full access in API code; regular admins backfilled on server start.
+
 Quick local database (Docker)
 -----------------------------
 From the database/ folder:
