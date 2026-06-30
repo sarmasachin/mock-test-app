@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.data.RestoreSessionStatus
@@ -83,6 +84,7 @@ private suspend fun resolveColdStartDestination(): String {
 
 @Composable
 fun AppNavGraphNew() {
+    val context = LocalContext.current
     val navController = rememberNavController()
     val startDestination = remember {
         runBlocking(Dispatchers.IO) { resolveColdStartDestination() }
@@ -140,7 +142,7 @@ fun AppNavGraphNew() {
                 launchSingleTop = true
             }
         }
-        PushNavigationBridge.consume()
+        PushNavigationBridge.consume(context)
     }
 
     Column(

@@ -83,6 +83,7 @@ import com.freemocktest.app.newui.tests.StartTestPreviewScreenNew
 import com.freemocktest.app.newui.tests.TestsScreenNew
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import com.freemocktest.app.notifications.PushNavigationBridge
+import com.freemocktest.app.notifications.PushRouteNormalizer
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -234,7 +235,11 @@ fun MainBottomNavHost(
     }
 
     val openByPushRoute: (String) -> Unit = { rawRoute ->
-        val route = rawRoute.trim()
+        val route = PushRouteNormalizer.normalize(rawRoute).orEmpty()
+        if (route.isBlank()) {
+            mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
+            return@Unit
+        }
         val lower = route.lowercase()
 
         fun navigateIfKnownDestination(target: String) {
@@ -259,8 +264,12 @@ fun MainBottomNavHost(
 
             // Tab routes (support both shorthand + actual NavHost routes).
             lower == MainTabRoutes.News.lowercase() || lower == "news" -> mainNavController.navigateMainTab(MainTabRoutes.News)
-            lower == MainTabRoutes.Tests.lowercase() || lower == "tests" -> mainNavController.navigateMainTab(MainTabRoutes.Tests)
-            lower == MainTabRoutes.Home.lowercase() || lower == "home" -> mainNavController.goToHomeTab()
+            lower == MainTabRoutes.Tests.lowercase() || lower == "tests" || lower == "main/tests" ->
+                mainNavController.navigateMainTab(MainTabRoutes.Tests)
+            lower == MainTabRoutes.Home.lowercase() || lower == "home" || lower == "main/home" ->
+                mainNavController.goToHomeTab()
+            lower == MainTabRoutes.Profile.lowercase() || lower == "profile" || lower == "main/profile" ->
+                mainNavController.navigateMainTab(MainTabRoutes.Profile)
 
             // Deep links to article/detail screens (send these from FCM `data.deepLink`).
             lower.startsWith("${RoutesNew.NEWS_DETAIL.lowercase()}/") -> navigateIfKnownDestination(route)
@@ -273,9 +282,10 @@ fun MainBottomNavHost(
 
     LaunchedEffect(pendingPushRoute) {
         val route = pendingPushRoute?.trim().orEmpty()
+            .ifBlank { PushNavigationBridge.peek(context).orEmpty() }
         if (route.isBlank()) return@LaunchedEffect
         openByPushRoute(route)
-        PushNavigationBridge.consume()
+        PushNavigationBridge.consume(context)
     }
 
     Scaffold(

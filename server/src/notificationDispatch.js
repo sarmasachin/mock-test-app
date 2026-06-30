@@ -73,6 +73,10 @@ async function sendPushToToken(deviceToken, payload) {
     body: JSON.stringify({
       message: {
         token,
+        notification: {
+          title,
+          body,
+        },
         data,
         android: {
           priority: 'HIGH',

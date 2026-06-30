@@ -42,12 +42,12 @@ class MainActivity : ComponentActivity() {
         }
         val route = intent.extractPushRoute()
         if (route.isNotBlank()) {
-            PushNavigationBridge.publish(route)
+            PushNavigationBridge.publish(applicationContext, route)
             return
         }
         val deeplinkRoute = intent?.data?.toAppRoute()
         if (!deeplinkRoute.isNullOrBlank()) {
-            PushNavigationBridge.publish(deeplinkRoute)
+            PushNavigationBridge.publish(applicationContext, deeplinkRoute)
         }
     }
 
@@ -59,10 +59,23 @@ class MainActivity : ComponentActivity() {
         if (this == null) return ""
         getStringExtra("push_deep_link")?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
         getStringExtra("deepLink")?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        getStringExtra("deeplink")?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
         val bundle = extras ?: return ""
         for (key in bundle.keySet()) {
-            if (!key.equals("deepLink", ignoreCase = true)) continue
-            bundle.getString(key)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+            val value = bundle.get(key)
+            when {
+                key.equals("deepLink", ignoreCase = true) || key.equals("deeplink", ignoreCase = true) -> {
+                    (value as? String)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+                }
+                key.equals("gcm.notification.data", ignoreCase = true) && value is String -> {
+                    value.split("&").forEach { pair ->
+                        val parts = pair.split("=", limit = 2)
+                        if (parts.size == 2 && parts[0].equals("deepLink", ignoreCase = true)) {
+                            Uri.decode(parts[1]).trim().takeIf { it.isNotEmpty() }?.let { return it }
+                        }
+                    }
+                }
+            }
         }
         return ""
     }

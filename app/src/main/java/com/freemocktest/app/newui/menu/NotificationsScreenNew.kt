@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.sp
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.notifications.LocalNotificationInbox
+import com.freemocktest.app.notifications.PushRouteNormalizer
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.CancellationException
@@ -288,7 +289,7 @@ fun NotificationsScreenNew(
 }
 
 private fun resolveNotificationRoute(item: ContentRepository.PushNotificationItemRemote): String {
-    val direct = item.deepLink?.trim().orEmpty()
+    val direct = PushRouteNormalizer.normalize(item.deepLink).orEmpty()
     if (direct.isNotBlank()) return direct
     val haystack = "${item.title.lowercase(Locale.US)} ${item.message.lowercase(Locale.US)}"
     return when {
