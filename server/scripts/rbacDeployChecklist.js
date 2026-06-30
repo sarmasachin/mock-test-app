@@ -119,7 +119,7 @@ async function main() {
 
   console.log('\n--- Automated tests (run manually on deploy host) ---');
   console.log('  cd server && node scripts/e2eAdminPermissions.js');
-  console.log('  cd server && node scripts/e2eAdminPermissionsLive.js');
+  console.log('  cd server && node scripts/e2eAdminPermissionsLive.js   # live API auto-skips on prod OTP');
   console.log('  cd admin-web && npm run build');
 
   console.log('\n--- VPS deploy sequence ---');

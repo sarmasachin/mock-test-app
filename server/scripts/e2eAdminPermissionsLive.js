@@ -8,6 +8,7 @@
  *   - API running (default http://127.0.0.1:3000)
  *   - DATABASE_URL in server/.env
  *   - ADMIN_DEV_PASSWORD_LOGIN=true for password-only login (local), OR set E2E_SUPER_ADMIN_TOKEN
+ *   - On production (OTP required), live API tests auto-skip unless E2E_SUPER_ADMIN_TOKEN is set.
  *
  *   cd server && node scripts/e2eAdminPermissionsLive.js
  *
@@ -15,7 +16,8 @@
  *   E2E_API_BASE              default http://127.0.0.1:3000/v1
  *   E2E_SUPER_ADMIN_EMAIL     default sharma.sachinctr@gmail.com
  *   E2E_SUPER_ADMIN_PASSWORD  default from seed (commingsoon@123)
- *   E2E_SUPER_ADMIN_TOKEN     skip login if set
+ *   E2E_SUPER_ADMIN_TOKEN     Bearer token for live API tests (required on production OTP)
+ *   E2E_SKIP_LIVE             set 1 to skip live API block (optional; auto-skips without token on prod)
  *   E2E_LIMITED_ADMIN_EMAIL   default rbac-e2e-limited@mocktest.local
  *   E2E_LIMITED_ADMIN_PASSWORD default RbacE2eTest!99
  */
@@ -131,6 +133,20 @@ async function setStoredPermissions(pool, userId, keys) {
   }
 }
 
+function isDevPasswordLoginEnabled() {
+  const raw = String(process.env.ADMIN_DEV_PASSWORD_LOGIN || '').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(raw);
+}
+
+function shouldSkipLiveApiTests() {
+  if (['1', 'true', 'yes', 'on'].includes(String(process.env.E2E_SKIP_LIVE || '').trim().toLowerCase())) {
+    return true;
+  }
+  const hasToken = Boolean(String(process.env.E2E_SUPER_ADMIN_TOKEN || '').trim());
+  if (hasToken) return false;
+  return !isDevPasswordLoginEnabled();
+}
+
 async function main() {
   if (!process.env.DATABASE_URL) {
     console.error('Missing DATABASE_URL');
@@ -150,6 +166,15 @@ async function main() {
   }
   assert('ALL_NAV_TABS has rolesPermissions', FRONTEND_ALL_NAV_TABS.includes('rolesPermissions'));
   assert('catalog total 36', buildPermissionCatalog().total === 36, buildPermissionCatalog().total);
+
+  if (shouldSkipLiveApiTests()) {
+    console.log('\nSKIP  live API tests — production uses email OTP.');
+    console.log('      Deploy is OK if rbacDeployChecklist.js passed and admin panel loads.');
+    console.log('      Optional: export E2E_SUPER_ADMIN_TOKEN=<jwt> then re-run for full live checks.');
+    await pool.end();
+    console.log(ok ? '\nStatic RBAC checks passed (live API skipped).' : '\nStatic RBAC checks failed.');
+    process.exit(ok ? 0 : 1);
+  }
 
   console.log('\n--- Phase 5: live API (super admin) ---');
   let superToken;
