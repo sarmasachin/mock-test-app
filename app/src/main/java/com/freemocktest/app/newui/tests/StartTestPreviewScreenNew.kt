@@ -37,14 +37,19 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.data.AppPreferencesRepository
+import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import java.time.LocalDate
@@ -66,6 +72,14 @@ import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
+/** Route names that mean "show my applied tests", not a catalog title lookup. */
+private fun isGenericStartTestRoute(name: String): Boolean {
+    val route = name.trim()
+    return route.isBlank() ||
+        route.equals("Test", ignoreCase = true) ||
+        route.equals("applied", ignoreCase = true)
+}
+
 @Composable
 fun StartTestPreviewScreenNew(
     modifier: Modifier = Modifier,
@@ -73,6 +87,7 @@ fun StartTestPreviewScreenNew(
     onBack: () -> Unit,
     onStartTest: (String) -> Unit,
     onApplyForTest: (String) -> Unit,
+    onBrowseTests: () -> Unit = {},
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -81,6 +96,7 @@ fun StartTestPreviewScreenNew(
     val appliedSnapshots = remember { mutableStateMapOf<String, TestCardNew?>() }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val appliedSeries by AppPreferencesRepository.appliedTestSeries.collectAsState(initial = emptyList())
+    val pendingResult by AppPreferencesRepository.pendingResultState.collectAsState(initial = null)
     val loginPickedTitles by AppPreferencesRepository.loginPickedTestTitles.collectAsState(initial = emptyList())
     val pickedTitlesForApply = remember(loginPickedTitles) {
         loginPickedTitles
@@ -88,54 +104,94 @@ fun StartTestPreviewScreenNew(
             .filter { it.isNotBlank() }
             .distinctBy { it.lowercase(Locale.US) }
     }
-    /**
-     * When home sends a generic title ("Test") but the user saved picks at login, load the first
-     * picked catalog title so Apply / Start match that selection. Specific route names are unchanged.
-     */
-    val effectiveTestName = remember(testName, pickedTitlesForApply) {
-        val route = testName.trim()
-        val routeGeneric = route.isBlank() || route.equals("Test", ignoreCase = true)
-        if (routeGeneric && pickedTitlesForApply.isNotEmpty()) {
-            pickedTitlesForApply.first()
+    val isListRoute = remember(testName) { isGenericStartTestRoute(testName) }
+    /** Specific catalog title when opening a single test (Apply flow); null on the applied-tests list route. */
+    val specificTestName = remember(testName, pickedTitlesForApply, isListRoute) {
+        if (isListRoute) {
+            pickedTitlesForApply.firstOrNull()
         } else {
-            route.ifBlank { "Test" }
+            testName.trim().takeIf { it.isNotBlank() }
         }
     }
-    var testSnapshot by remember(effectiveTestName) { mutableStateOf<TestCardNew?>(null) }
-    /** True until the first `loadTestByTitle` settles so we can show a spinner instead of a dummy card. */
-    var primaryLoading by remember(effectiveTestName) { mutableStateOf(true) }
+    var testSnapshot by remember(specificTestName) { mutableStateOf<TestCardNew?>(null) }
+    /** True until applied-tests sync from server finishes on first load / resume refresh. */
+    var appliedSyncLoading by remember { mutableStateOf(true) }
+    /** True until a specific (non-list) test card load settles. */
+    var primaryLoading by remember(specificTestName) { mutableStateOf(specificTestName != null) }
     /** Debounce rapid taps without toggling `enabled` (disabled styling was causing visible blink). */
     var lastPrimaryNavAt by remember { mutableLongStateOf(0L) }
-    /** Bumped by the Retry button to force `LaunchedEffect(effectiveTestName, reloadKey)` to re-run. */
-    var reloadKey by remember(effectiveTestName) { mutableStateOf(0) }
-    LaunchedEffect(effectiveTestName, reloadKey) {
+    /** Bumped by Retry / ON_RESUME to force enrollment refresh after apply or background return. */
+    var reloadKey by remember(testName) { mutableIntStateOf(0) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                reloadKey += 1
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+    LaunchedEffect(reloadKey) {
+        appliedSyncLoading = true
         try {
-            val cached = runCatching { ContentRepository.loadCachedTestByTitle(effectiveTestName) }.getOrNull()
-            if (cached != null) {
+            val home = runCatching { ContentRepository.loadHomeContent() }.getOrNull()
+            val lockMs = (home?.startSeriesLockSeconds ?: 20).coerceAtLeast(0).toLong() * 1000L
+            val activeWindowMs = (home?.startSeriesActiveWindowMinutes ?: 30).coerceAtLeast(1).toLong() * 60_000L
+            runCatching {
+                AuthRepository.syncAppliedTestSeriesFromServer(
+                    lockMs = lockMs,
+                    activeWindowMs = activeWindowMs,
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } finally {
+            appliedSyncLoading = false
+        }
+    }
+    LaunchedEffect(specificTestName, reloadKey) {
+        val target = specificTestName?.trim().orEmpty()
+        if (target.isBlank()) {
+            testSnapshot = null
+            primaryLoading = false
+            return@LaunchedEffect
+        }
+        try {
+            val cached = runCatching { ContentRepository.loadCachedTestByTitle(target) }.getOrNull()
+            if (cached != null && cached.id.isNotBlank()) {
                 testSnapshot = cached
             }
-            primaryLoading = cached == null
+            primaryLoading = testSnapshot == null
             testSnapshot = runCatching {
-                ContentRepository.loadTestByTitle(effectiveTestName, forceRefresh = true)
-            }.getOrNull() ?: testSnapshot
+                ContentRepository.loadTestByTitle(
+                    title = target,
+                    forceRefresh = true,
+                    allowDefaultFallback = false,
+                )
+            }.getOrNull()?.takeIf { it.id.isNotBlank() } ?: testSnapshot
         } catch (e: CancellationException) {
             throw e
         } finally {
             primaryLoading = false
         }
     }
-    LaunchedEffect(appliedSeries) {
+    LaunchedEffect(appliedSeries, reloadKey) {
         try {
             val names = appliedSeries.map { it.testName.trim() }.filter { it.isNotBlank() }.distinct()
             appliedSnapshots.keys.toList().forEach { existing ->
                 if (existing !in names) appliedSnapshots.remove(existing)
             }
             names.forEach { name ->
-                if (!appliedSnapshots.containsKey(name)) {
-                    appliedSnapshots[name] = runCatching {
-                        ContentRepository.loadTestByTitle(name)
-                    }.getOrNull()
-                }
+                appliedSnapshots[name] = runCatching {
+                    ContentRepository.loadTestByTitle(
+                        title = name,
+                        forceRefresh = true,
+                        allowDefaultFallback = false,
+                    )
+                }.getOrNull()?.takeIf { it.id.isNotBlank() } ?: appliedSnapshots[name]
             }
         } catch (e: CancellationException) {
             throw e
@@ -160,14 +216,6 @@ fun StartTestPreviewScreenNew(
         }
     }
 
-    val test = testSnapshot ?: TestCardNew(
-        title = effectiveTestName,
-        meta = "Test details are currently unavailable",
-        examDate = null,
-        durationLabel = null,
-        questionsMarks = null,
-        enrolledLabel = null,
-    )
     val activeAppliedEntries = remember(appliedSeries, nowMs) {
         appliedSeries
             .filter { it.expiresAtMillis > nowMs }
@@ -176,9 +224,15 @@ fun StartTestPreviewScreenNew(
     val hiddenExpiredCount = remember(appliedSeries, activeAppliedEntries) {
         (appliedSeries.size - activeAppliedEntries.size).coerceAtLeast(0)
     }
-    val unlockAt = remember(test.examDate) { parseUnlockAtMillis(test.examDate) }
+    val specificTest = testSnapshot
+    val unlockAt = remember(specificTest?.examDate) { parseUnlockAtMillis(specificTest?.examDate) }
     val fallbackRemainingMs = unlockAt?.let { (it - nowMs).coerceAtLeast(0L) } ?: 0L
     val fallbackLocked = fallbackRemainingMs > 0L
+    val showAppliedList = activeAppliedEntries.isNotEmpty()
+    val showLoading = appliedSyncLoading || (specificTestName != null && primaryLoading && !showAppliedList)
+    val showSpecificApply = !showAppliedList && !showLoading && specificTest != null
+    val showEmptyList = isListRoute && !showAppliedList && !showLoading
+    val showSpecificLoadError = !isListRoute && !showAppliedList && !showLoading && specificTest == null && specificTestName != null
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -234,7 +288,7 @@ fun StartTestPreviewScreenNew(
                 Spacer(Modifier.height(12.dp))
             }
 
-            if (activeAppliedEntries.isNotEmpty()) {
+            if (showAppliedList) {
                 Text(
                     text = "Applied Tests",
                     color = p.textPrimary,
@@ -254,14 +308,19 @@ fun StartTestPreviewScreenNew(
                 activeAppliedEntries.forEach { entry ->
                     val name = entry.testName.trim()
                     val snapshot = appliedSnapshots[name]
-                    val card = snapshot ?: TestCardNew(
-                        title = name,
-                        meta = "Test details are currently unavailable",
-                        examDate = null,
-                        durationLabel = null,
-                        questionsMarks = null,
-                        enrolledLabel = null,
-                    )
+                    if (snapshot == null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(120.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(color = p.accent, modifier = Modifier.size(24.dp))
+                        }
+                        Spacer(Modifier.height(14.dp))
+                        return@forEach
+                    }
+                    val card = snapshot
                     val remainingMs = (entry.unlockAtMillis - nowMs).coerceAtLeast(0L)
                     val totalLockMs = (entry.expiresAtMillis - entry.unlockAtMillis).coerceAtLeast(1L)
                     val hours = (remainingMs / 3_600_000L).toInt()
@@ -269,6 +328,7 @@ fun StartTestPreviewScreenNew(
                     val secs = ((remainingMs % 60_000L) / 1_000L).toInt()
                     val countdown = String.format(Locale.US, "%02d:%02d:%02d", hours, mins, secs)
                     val isLocked = remainingMs > 0L
+                    val isPendingResult = AppPreferencesRepository.isTestBlockedByPendingResult(name, pendingResult)
                     val progress = if (isLocked) {
                         1f - (remainingMs.toFloat() / totalLockMs.toFloat()).coerceIn(0f, 1f)
                     } else {
@@ -293,7 +353,11 @@ fun StartTestPreviewScreenNew(
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = if (isLocked) "Starts in $countdown" else "Ready to start",
+                        text = when {
+                            isPendingResult -> "Result will be available soon"
+                            isLocked -> "Starts in $countdown"
+                            else -> "Ready to start"
+                        },
                         color = p.textSecondary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
@@ -301,13 +365,13 @@ fun StartTestPreviewScreenNew(
                     Spacer(Modifier.height(8.dp))
                     Button(
                         onClick = {
-                            if (card.title.isBlank()) return@Button
+                            if (card.title.isBlank() || isPendingResult) return@Button
                             val now = System.currentTimeMillis()
                             if (now - lastPrimaryNavAt < 600L) return@Button
                             lastPrimaryNavAt = now
                             onStartTest(card.title)
                         },
-                        enabled = !isLocked && card.title.isNotBlank(),
+                        enabled = !isLocked && !isPendingResult && card.title.isNotBlank(),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp),
@@ -320,20 +384,28 @@ fun StartTestPreviewScreenNew(
                         ),
                     ) {
                         Icon(
-                            imageVector = if (isLocked) Icons.Outlined.Lock else Icons.Outlined.PlayArrow,
+                            imageVector = when {
+                                isPendingResult -> Icons.Outlined.Lock
+                                isLocked -> Icons.Outlined.Lock
+                                else -> Icons.Outlined.PlayArrow
+                            },
                             contentDescription = null,
                             modifier = Modifier.size(18.dp),
                         )
                         Spacer(Modifier.size(8.dp))
                         Text(
-                            text = if (isLocked) "Start Test (Locked)" else "Start Test",
+                            text = when {
+                                isPendingResult -> "Result Pending"
+                                isLocked -> "Start Test (Locked)"
+                                else -> "Start Test"
+                            },
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                         )
                     }
                     Spacer(Modifier.height(14.dp))
                 }
-            } else if (primaryLoading) {
+            } else if (showLoading) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -342,38 +414,85 @@ fun StartTestPreviewScreenNew(
                 ) {
                     CircularProgressIndicator(color = p.accent)
                 }
-            } else {
-                PreviewCard(test = test)
-                Spacer(Modifier.height(10.dp))
-                if (testSnapshot == null) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
+            } else if (showEmptyList) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
                         Text(
-                            text = "Couldn't load latest details.",
-                            color = p.textSecondary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.weight(1f),
+                            text = "No applied tests yet",
+                            color = p.textPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
                         )
-                        TextButton(
-                            onClick = {
-                                if (primaryLoading) return@TextButton
-                                reloadKey += 1
-                            },
-                            enabled = !primaryLoading,
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "Apply for a test from the Tests tab. After you apply, your tests will appear here ready to start.",
+                            color = p.textSecondary,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                        )
+                        Spacer(Modifier.height(14.dp))
+                        Button(
+                            onClick = onBrowseTests,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp),
+                            shape = RoundedCornerShape(999.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.systemBlue,
+                                contentColor = Color.White,
+                            ),
                         ) {
                             Text(
-                                text = "Retry",
-                                color = p.systemBlue,
-                                fontSize = 13.sp,
+                                text = "Browse Tests",
+                                fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
                             )
                         }
                     }
-                    Spacer(Modifier.height(6.dp))
                 }
+            } else if (showSpecificLoadError) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Text(
+                            text = "Couldn't load test",
+                            color = p.textPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "This test may be unpublished or unavailable. Try again or apply from the Tests tab.",
+                            color = p.textSecondary,
+                            fontSize = 13.sp,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            TextButton(onClick = { reloadKey += 1 }) {
+                                Text(text = "Retry", color = p.systemBlue, fontWeight = FontWeight.Bold)
+                            }
+                            TextButton(onClick = onBrowseTests) {
+                                Text(text = "Browse Tests", color = p.systemBlue, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            } else if (showSpecificApply) {
+                val test = specificTest!!
+                PreviewCard(test = test)
+                Spacer(Modifier.height(10.dp))
                 if (fallbackLocked) {
                     val hours = (fallbackRemainingMs / 3_600_000L).toInt()
                     val mins = ((fallbackRemainingMs % 3_600_000L) / 60_000L).toInt()

@@ -875,7 +875,7 @@ async function setJsonSetting(settingKey, value, userId) {
 
 async function loadSubjectSectionsForTest(testId) {
   const advancedMap = await getJsonSetting('testAdvancedConfigs', {});
-  return normalizeSubjectSectionsInput((advancedMap[testId] || {}).subjectSections || []);
+  return normalizeSubjectSectionsInput((resolveAdvancedConfigForTest(advancedMap, testId) || {}).subjectSections || []);
 }
 
 /** Returns error message string or null when OK. */
@@ -1495,6 +1495,25 @@ function parseBulkQuestionRows(rawRows) {
     return { error: `Invalid row at ${invalid.rowNo}. Ensure stem/options/correctIndex (0-3) are valid.` };
   }
   return { value: rows };
+}
+
+function testSettingKey(testId) {
+  return String(testId || '').trim();
+}
+
+function resolveAdvancedConfigForTest(advancedMap, testId) {
+  if (!advancedMap || typeof advancedMap !== 'object') return null;
+  const key = testSettingKey(testId);
+  if (!key) return null;
+  const direct = advancedMap[key];
+  if (direct && typeof direct === 'object') return direct;
+  const lower = key.toLowerCase();
+  for (const [mapKey, value] of Object.entries(advancedMap)) {
+    if (String(mapKey).trim().toLowerCase() === lower && value && typeof value === 'object') {
+      return value;
+    }
+  }
+  return null;
 }
 
 function normalizeTestAdvancedConfig(rawValue) {
@@ -2678,10 +2697,7 @@ router.get('/tests', async (_req, res) => {
     );
     const mapped = rows.map((row) => ({
       ...row,
-      advanced_config:
-        advancedMap && typeof advancedMap === 'object' && advancedMap[row.id] && typeof advancedMap[row.id] === 'object'
-          ? advancedMap[row.id]
-          : null,
+      advanced_config: resolveAdvancedConfigForTest(advancedMap, row.id),
     }));
     return res.json({ items: mapped });
   } catch (e) {
@@ -2795,7 +2811,7 @@ router.post('/tests', async (req, res) => {
     const currentAdvancedMap = await getJsonSetting('testAdvancedConfigs', {});
     const nextAdvancedMap =
       currentAdvancedMap && typeof currentAdvancedMap === 'object' ? { ...currentAdvancedMap } : {};
-    nextAdvancedMap[rows[0].id] = advancedConfig;
+    nextAdvancedMap[testSettingKey(rows[0].id)] = advancedConfig;
     await setJsonSetting('testAdvancedConfigs', nextAdvancedMap, req.userId);
     return res.status(201).json({ item: { ...rows[0], advanced_config: advancedConfig } });
   } catch (e) {
@@ -2818,7 +2834,8 @@ router.patch('/tests/:id', async (req, res) => {
   const hasDynamicFluctuationValue = Object.prototype.hasOwnProperty.call(body, 'dynamicFluctuationOnPublish');
   try {
     const before = await pool.query(
-      `SELECT id, title, is_published, COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
+      `SELECT id, title, is_published, last_cycle_started_at,
+              COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
        FROM tests
        WHERE id = $1::uuid
        LIMIT 1`,
@@ -2872,13 +2889,22 @@ router.patch('/tests/:id', async (req, res) => {
       ],
     );
     if (!rows[0]) return res.status(404).json({ error: 'Test not found' });
-    if (!beforeRow.is_published && rows[0].is_published) {
-      await pool.query(
-        `UPDATE tests
-         SET last_cycle_started_at = now(), updated_at = now()
-         WHERE id = $1::uuid`,
-        [rows[0].id],
-      );
+    const justPublished = !beforeRow.is_published && rows[0].is_published;
+    if (rows[0].is_published) {
+      const startedMs = Date.parse(String(beforeRow.last_cycle_started_at || ''));
+      const durationMinutes = Math.max(1, Number(rows[0].duration_minutes || 0));
+      const cycleEndMs = Number.isFinite(startedMs) ? startedMs + durationMinutes * 60 * 1000 : Number.NaN;
+      const cycleExpired = Number.isFinite(cycleEndMs) && Date.now() >= cycleEndMs;
+      if (justPublished || cycleExpired) {
+        await pool.query(
+          `UPDATE tests
+           SET last_cycle_started_at = now(), updated_at = now()
+           WHERE id = $1::uuid`,
+          [id],
+        );
+      }
+    }
+    if (justPublished) {
       await regenerateTestFromSubcategoryPool(rows[0].id);
       if (advancedConfig.notifyOnPublish !== false) {
         await enqueueNotification(req.userId, {
@@ -2902,7 +2928,7 @@ router.patch('/tests/:id', async (req, res) => {
     const currentAdvancedMap = await getJsonSetting('testAdvancedConfigs', {});
     const nextAdvancedMap =
       currentAdvancedMap && typeof currentAdvancedMap === 'object' ? { ...currentAdvancedMap } : {};
-    nextAdvancedMap[id] = advancedConfig;
+    nextAdvancedMap[testSettingKey(id)] = advancedConfig;
     await setJsonSetting('testAdvancedConfigs', nextAdvancedMap, req.userId);
     return res.json({ item: { ...rows[0], advanced_config: advancedConfig } });
   } catch (e) {
@@ -2919,10 +2945,26 @@ router.delete('/tests/:id', async (req, res) => {
     const del = await pool.query(`DELETE FROM tests WHERE id = $1::uuid`, [id]);
     if (!del.rowCount) return res.status(404).json({ error: 'Test not found' });
     const currentAdvancedMap = await getJsonSetting('testAdvancedConfigs', {});
-    if (currentAdvancedMap && typeof currentAdvancedMap === 'object' && currentAdvancedMap[id]) {
+    if (currentAdvancedMap && typeof currentAdvancedMap === 'object') {
       const nextAdvancedMap = { ...currentAdvancedMap };
-      delete nextAdvancedMap[id];
-      await setJsonSetting('testAdvancedConfigs', nextAdvancedMap, req.userId);
+      const key = testSettingKey(id);
+      let removed = false;
+      if (nextAdvancedMap[key]) {
+        delete nextAdvancedMap[key];
+        removed = true;
+      } else {
+        const lower = key.toLowerCase();
+        for (const mapKey of Object.keys(nextAdvancedMap)) {
+          if (String(mapKey).trim().toLowerCase() === lower) {
+            delete nextAdvancedMap[mapKey];
+            removed = true;
+            break;
+          }
+        }
+      }
+      if (removed) {
+        await setJsonSetting('testAdvancedConfigs', nextAdvancedMap, req.userId);
+      }
     }
     return res.status(204).send();
   } catch (e) {

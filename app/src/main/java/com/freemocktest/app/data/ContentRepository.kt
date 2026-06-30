@@ -585,7 +585,11 @@ object ContentRepository {
         card
     }
 
-    suspend fun loadTestByTitle(title: String, forceRefresh: Boolean = false): TestCardNew? = withContext(Dispatchers.IO) {
+    suspend fun loadTestByTitle(
+        title: String,
+        forceRefresh: Boolean = false,
+        allowDefaultFallback: Boolean = true,
+    ): TestCardNew? = withContext(Dispatchers.IO) {
         val target = title.trim()
         if (target.isBlank()) return@withContext null
         val key = target.lowercase(Locale.US)
@@ -599,29 +603,124 @@ object ContentRepository {
                 val k = card.title.trim().lowercase(Locale.US)
                 if (k.isNotBlank()) testCardMemory[k] = card
             }
-            val resolved = mapped
-                .firstOrNull { it.title.equals(target, ignoreCase = true) }
-                ?: defaultTests(target).firstOrNull()
+            val resolved = mapped.firstOrNull { it.title.equals(target, ignoreCase = true) }
+                ?: if (allowDefaultFallback) defaultTests(target).firstOrNull() else null
             if (resolved != null && resolved.title.isNotBlank()) {
                 testCardMemory[key] = resolved
-                runCatching { persistTestCardDiskCache(key, resolved) }
-                    .onFailure { Log.w(TAG, "persistTestCardDiskCache $key", it) }
+                if (resolved.id.isNotBlank()) {
+                    runCatching { persistTestCardDiskCache(key, resolved) }
+                        .onFailure { Log.w(TAG, "persistTestCardDiskCache $key", it) }
+                }
             }
             resolved
         } catch (e: Exception) {
             Log.w(TAG, "loadTestByTitle $target", e)
             val fromDisk = runCatching { loadCachedTestByTitle(target) }.getOrNull()
-            if (fromDisk != null && fromDisk.title.isNotBlank()) {
+            if (fromDisk != null && fromDisk.title.isNotBlank() && fromDisk.id.isNotBlank()) {
                 testCardMemory[key] = fromDisk
                 return@withContext fromDisk
             }
-            val fallback = defaultTests(target).firstOrNull()
+            val fallback = if (allowDefaultFallback) defaultTests(target).firstOrNull() else null
             if (fallback != null && fallback.title.isNotBlank()) {
                 testCardMemory[key] = fallback
                 runCatching { persistTestCardDiskCache(key, fallback) }
                     .onFailure { Log.w(TAG, "persistTestCardDiskCache fallback $key", it) }
             }
             fallback
+        }
+    }
+
+    /**
+     * Keep in-memory and disk test caches aligned with the apply API response so enrollment
+     * counts update immediately on every screen without waiting for a cold start.
+     */
+    suspend fun updateTestEnrollmentAfterApply(
+        testId: String?,
+        testTitle: String?,
+        enrolledCount: Int,
+        capacityTotal: Int,
+        remainingSeats: Int,
+    ) = withContext(Dispatchers.IO) {
+        val enrolled = enrolledCount.coerceAtLeast(0)
+        val capacity = capacityTotal.coerceAtLeast(0)
+        val remaining = remainingSeats.coerceAtLeast(0)
+        val id = testId?.trim().orEmpty()
+        val title = testTitle?.trim().orEmpty()
+        if (id.isBlank() && title.isBlank()) return@withContext
+
+        fun matches(card: TestCardNew): Boolean =
+            (id.isNotBlank() && card.id == id) ||
+                (title.isNotBlank() && card.title.equals(title, ignoreCase = true))
+
+        fun patch(card: TestCardNew): TestCardNew {
+            val cap = if (capacity > 0) {
+                capacity
+            } else {
+                (card.capacityTotal ?: 0).coerceAtLeast(0)
+            }
+            return card.copy(
+                capacityTotal = cap,
+                enrolledCount = enrolled,
+                remainingSeats = remaining,
+                enrolledLabel = if (cap > 0) "$enrolled/$cap" else "$enrolled",
+                remainingSeatsLabel = "$remaining seats left",
+            )
+        }
+
+        val titleKeysToPersist = mutableSetOf<String>()
+        if (title.isNotBlank()) {
+            titleKeysToPersist.add(title.lowercase(Locale.US))
+        }
+
+        for ((key, card) in testCardMemory) {
+            if (matches(card)) {
+                val patched = patch(card)
+                testCardMemory[key] = patched
+                titleKeysToPersist.add(key)
+            }
+        }
+
+        for ((subKey, list) in testListBySubcategoryMemory) {
+            var changed = false
+            val updated = list.map { card ->
+                if (matches(card)) {
+                    changed = true
+                    val patched = patch(card)
+                    val tKey = patched.title.trim().lowercase(Locale.US)
+                    if (tKey.isNotBlank()) {
+                        testCardMemory[tKey] = patched
+                        titleKeysToPersist.add(tKey)
+                    }
+                    patched
+                } else {
+                    card
+                }
+            }
+            if (changed) {
+                testListBySubcategoryMemory[subKey] = updated
+                runCatching { persistTestsListDiskCache(subKey, updated) }
+                    .onFailure { Log.w(TAG, "persistTestsListDiskCache after apply $subKey", it) }
+            }
+        }
+
+        if (title.isNotBlank() && titleKeysToPersist.none { testCardMemory.containsKey(it) }) {
+            val key = title.lowercase(Locale.US)
+            val blob = AppPreferencesRepository.peekCachedTestCardsBlob().orEmpty()
+            val map = linkedTestCardCacheFromJson(
+                if (blob.isBlank()) "{\"v\":1,\"entries\":[]}" else blob,
+            )
+            map[key]?.let { decodeTestCardNew(it) }?.let { card ->
+                val patched = patch(card)
+                testCardMemory[key] = patched
+                titleKeysToPersist.add(key)
+            }
+        }
+
+        for (key in titleKeysToPersist) {
+            testCardMemory[key]?.let { patched ->
+                runCatching { persistTestCardDiskCache(key, patched) }
+                    .onFailure { Log.w(TAG, "persistTestCardDiskCache after apply $key", it) }
+            }
         }
     }
 

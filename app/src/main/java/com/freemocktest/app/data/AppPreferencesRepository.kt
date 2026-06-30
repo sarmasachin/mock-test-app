@@ -175,6 +175,17 @@ object AppPreferencesRepository {
         val viewed: Boolean,
     )
 
+    /** True when [testName] already has a submitted attempt awaiting scheduled result release. */
+    fun isTestBlockedByPendingResult(testName: String, pending: PendingResultState?): Boolean {
+        if (pending == null) return false
+        val name = testName.trim()
+        if (name.isBlank()) return false
+        return pending.testName.equals(name, ignoreCase = true)
+    }
+
+    fun canStartTest(testName: String, pending: PendingResultState?): Boolean =
+        !isTestBlockedByPendingResult(testName, pending)
+
     data class AppliedTestSeriesEntry(
         val testName: String,
         val unlockAtMillis: Long,
@@ -627,27 +638,48 @@ object AppPreferencesRepository {
         activeWindowMs: Long = DefaultStartSeriesActiveWindowMs,
     ) {
         if (!::appContext.isInitialized) return
-        val safeName = testName.trim().ifBlank { "Test" }
+        scope.launch {
+            runCatching {
+                addAppliedTestSeriesNow(testName, lockMs, activeWindowMs)
+            }.onFailure { Log.e(TAG, "addAppliedTestSeries failed", it) }
+        }
+    }
+
+    /**
+     * Persist an applied test locally and await the DataStore write. Skips duplicate active entries
+     * for the same test title (case-insensitive).
+     */
+    suspend fun addAppliedTestSeriesNow(
+        testName: String,
+        lockMs: Long = DefaultStartSeriesLockMs,
+        activeWindowMs: Long = DefaultStartSeriesActiveWindowMs,
+    ): Boolean {
+        if (!::appContext.isInitialized) return false
+        val safeName = testName.trim()
+        if (safeName.isBlank()) return false
         val now = System.currentTimeMillis()
         val safeLockMs = lockMs.coerceAtLeast(0L)
         val safeActiveWindowMs = activeWindowMs.coerceAtLeast(60_000L)
-        scope.launch {
-            runCatching {
-                store().edit { prefs ->
-                    val existing = parseAppliedTestSeries(prefs[keyAppliedTestSeries])
-                        .filter { it.expiresAtMillis > now }
-                    val nextUnlockBase = existing.maxOfOrNull { it.expiresAtMillis } ?: now
-                    val unlockAt = maxOf(now + safeLockMs, nextUnlockBase)
-                    val expiresAt = unlockAt + safeActiveWindowMs
-                    val updated = existing + AppliedTestSeriesEntry(
-                        testName = safeName,
-                        unlockAtMillis = unlockAt,
-                        expiresAtMillis = expiresAt,
-                    )
-                    prefs[keyAppliedTestSeries] = encodeAppliedTestSeries(updated)
+        return runCatching {
+            store().edit { prefs ->
+                val existing = parseAppliedTestSeries(prefs[keyAppliedTestSeries])
+                    .filter { it.expiresAtMillis > now }
+                if (existing.any { it.testName.equals(safeName, ignoreCase = true) }) {
+                    return@edit
                 }
-            }.onFailure { Log.e(TAG, "addAppliedTestSeries failed", it) }
-        }
+                val nextUnlockBase = existing.maxOfOrNull { it.expiresAtMillis } ?: now
+                val unlockAt = maxOf(now + safeLockMs, nextUnlockBase)
+                val expiresAt = unlockAt + safeActiveWindowMs
+                val updated = existing + AppliedTestSeriesEntry(
+                    testName = safeName,
+                    unlockAtMillis = unlockAt,
+                    expiresAtMillis = expiresAt,
+                )
+                prefs[keyAppliedTestSeries] = encodeAppliedTestSeries(updated)
+            }
+            true
+        }.onFailure { Log.e(TAG, "addAppliedTestSeriesNow failed", it) }
+            .getOrDefault(false)
     }
 
     suspend fun removeAppliedTestSeriesNow(testName: String) {

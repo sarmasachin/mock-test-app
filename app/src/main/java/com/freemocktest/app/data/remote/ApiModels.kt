@@ -553,6 +553,21 @@ data class TestWaitlistStatusResponse(
     @SerializedName("waitingTotal") val waitingTotal: Int = 0,
 )
 
+data class MyTestApplicationDto(
+    @SerializedName("testId") val testId: String = "",
+    @SerializedName("testTitle") val testTitle: String = "",
+    @SerializedName("appliedAt") val appliedAt: String? = null,
+    @SerializedName("isPublished") val isPublished: Boolean = false,
+    @SerializedName("enrolledCount") val enrolledCount: Int = 0,
+    @SerializedName("capacityTotal") val capacityTotal: Int = 0,
+    @SerializedName("remainingSeats") val remainingSeats: Int = 0,
+    @SerializedName("slotLabel") val slotLabel: String? = null,
+)
+
+data class MyTestApplicationsResponse(
+    val items: List<MyTestApplicationDto> = emptyList(),
+)
+
 data class LeaderboardFilterTestDto(
     val id: String,
     val title: String,

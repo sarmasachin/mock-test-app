@@ -487,7 +487,7 @@ function normalizeApiBaseUrl(raw: string): string {
 
 const envApiBase = import.meta.env.VITE_API_BASE_URL?.trim();
 /** Production fallback when `.env.production` omits `VITE_API_BASE_URL` — same host as live API (VPS), not a second deploy. */
-const DEFAULT_PRODUCTION_API_BASE = 'https://indiaapk.com/v1';
+const DEFAULT_PRODUCTION_API_BASE = 'https://admin-admin.govmocktest.com/v1';
 const apiBase = normalizeApiBaseUrl(
   envApiBase && envApiBase.length > 0
     ? envApiBase
@@ -665,6 +665,68 @@ function toDateTimeLocal(value?: string | null) {
   if (Number.isNaN(date.getTime())) return '';
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
   return local.toISOString().slice(0, 16);
+}
+
+function fromDateTimeLocal(value?: string | null) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString();
+}
+
+function mapApiTestItem(x: any): TestItem {
+  return {
+    ...x,
+    dynamic_fluctuation_on_publish: normalizeBoolean(x.dynamic_fluctuation_on_publish, true),
+    exam_date: x.exam_date || '',
+    total_marks: Number(x.total_marks || 0),
+    slot_label: String(x.slot_label || ''),
+    capacity_total: Number(x.capacity_total || 0),
+    enrolled_count: Number(x.enrolled_count || 0),
+    attempts_allowed: Number(x.attempts_allowed || 1),
+    language_mode: String(x.language_mode || 'Bilingual'),
+    exam_mode: String(x.exam_mode || 'Practice'),
+    negative_marking_text: String(x.negative_marking_text || 'No'),
+    test_type_label: String(x.test_type_label || 'Full Mock'),
+    badge_enabled: normalizeBoolean(x.badge_enabled, false),
+    badge_text: String(x.badge_text || 'Live'),
+    valid_until: x.valid_until || '',
+    answer_key_release_at: x.answer_key_release_at || '',
+    result_release_at: x.result_release_at || '',
+    dynamic_date_enabled: normalizeBoolean(x.dynamic_date_enabled, false),
+    date_cycle_days: Number(x.date_cycle_days || 0),
+    advanced_config:
+      x.advanced_config && typeof x.advanced_config === 'object'
+        ? {
+            publishAt: String(x.advanced_config.publishAt || ''),
+            unpublishAt: String(x.advanced_config.unpublishAt || ''),
+            resultVisibility:
+              String(x.advanced_config.resultVisibility || 'immediate') === 'after_result_time'
+                ? 'after_result_time'
+                : 'immediate',
+            reattemptCooldownMinutes: Number(x.advanced_config.reattemptCooldownMinutes || 0),
+            lateJoinMinutes: Number(x.advanced_config.lateJoinMinutes || 0),
+            notifyBeforeMinutes: Number(x.advanced_config.notifyBeforeMinutes || 0),
+            resumeEnabled: normalizeBoolean(x.advanced_config.resumeEnabled, true),
+            shuffleQuestions: normalizeBoolean(x.advanced_config.shuffleQuestions, false),
+            shuffleOptions: normalizeBoolean(x.advanced_config.shuffleOptions, false),
+            fullscreenRequired: normalizeBoolean(x.advanced_config.fullscreenRequired, false),
+            copyPasteBlocked: normalizeBoolean(x.advanced_config.copyPasteBlocked, false),
+            notifyOnPublish: normalizeBoolean(x.advanced_config.notifyOnPublish, true),
+            sendEmailOnPublish: normalizeBoolean(x.advanced_config.sendEmailOnPublish, false),
+            subjectSections: Array.isArray(x.advanced_config.subjectSections)
+              ? x.advanced_config.subjectSections
+                  .filter((s: unknown) => s && typeof s === 'object')
+                  .map((s: any) => ({
+                    key: String(s.key || '').trim(),
+                    label: String(s.label || s.key || '').trim(),
+                  }))
+                  .slice(0, 40)
+              : [],
+          }
+        : null,
+  };
 }
 
 function splitDelimitedLine(line: string, delimiter: string) {
@@ -1782,13 +1844,13 @@ function TestsTab({
         badgeEnabled: input.badgeEnabled === true,
         badgeText: badgeTextValue,
         validUntil: validUntilValue,
-        answerKeyReleaseAt: answerKeyValue,
-        resultReleaseAt: resultReleaseValue,
+        answerKeyReleaseAt: fromDateTimeLocal(answerKeyValue),
+        resultReleaseAt: fromDateTimeLocal(resultReleaseValue),
         dynamicDateEnabled: input.dynamicDateEnabled === true,
         dateCycleDays: Math.max(0, dateCycleDaysValue),
         advancedConfig: {
-          publishAt: publishAtValue,
-          unpublishAt: unpublishAtValue,
+          publishAt: fromDateTimeLocal(publishAtValue),
+          unpublishAt: fromDateTimeLocal(unpublishAtValue),
           resultVisibility: resultVisibilityValue as 'immediate' | 'after_result_time',
           reattemptCooldownMinutes: Math.max(0, reattemptCooldownValue),
           lateJoinMinutes: Math.max(0, lateJoinValue),
@@ -1828,57 +1890,7 @@ function TestsTab({
       setIsRefreshingTests(true);
       const res = await apiClient.get('/admin/tests');
       const mapped = Array.isArray(res.data?.items)
-        ? res.data.items.map((x: any) => ({
-            ...x,
-            dynamic_fluctuation_on_publish: normalizeBoolean(x.dynamic_fluctuation_on_publish, true),
-            exam_date: x.exam_date || '',
-            total_marks: Number(x.total_marks || 0),
-            slot_label: String(x.slot_label || ''),
-            capacity_total: Number(x.capacity_total || 0),
-            enrolled_count: Number(x.enrolled_count || 0),
-            attempts_allowed: Number(x.attempts_allowed || 1),
-            language_mode: String(x.language_mode || 'Bilingual'),
-            exam_mode: String(x.exam_mode || 'Practice'),
-            negative_marking_text: String(x.negative_marking_text || 'No'),
-            test_type_label: String(x.test_type_label || 'Full Mock'),
-            badge_enabled: normalizeBoolean(x.badge_enabled, false),
-            badge_text: String(x.badge_text || 'Live'),
-            valid_until: x.valid_until || '',
-            answer_key_release_at: x.answer_key_release_at || '',
-            result_release_at: x.result_release_at || '',
-            dynamic_date_enabled: normalizeBoolean(x.dynamic_date_enabled, false),
-            date_cycle_days: Number(x.date_cycle_days || 0),
-            advanced_config:
-              x.advanced_config && typeof x.advanced_config === 'object'
-                ? {
-                    publishAt: String(x.advanced_config.publishAt || ''),
-                    unpublishAt: String(x.advanced_config.unpublishAt || ''),
-                    resultVisibility:
-                      String(x.advanced_config.resultVisibility || 'immediate') === 'after_result_time'
-                        ? 'after_result_time'
-                        : 'immediate',
-                    reattemptCooldownMinutes: Number(x.advanced_config.reattemptCooldownMinutes || 0),
-                    lateJoinMinutes: Number(x.advanced_config.lateJoinMinutes || 0),
-                    notifyBeforeMinutes: Number(x.advanced_config.notifyBeforeMinutes || 0),
-                    resumeEnabled: normalizeBoolean(x.advanced_config.resumeEnabled, true),
-                    shuffleQuestions: normalizeBoolean(x.advanced_config.shuffleQuestions, false),
-                    shuffleOptions: normalizeBoolean(x.advanced_config.shuffleOptions, false),
-                    fullscreenRequired: normalizeBoolean(x.advanced_config.fullscreenRequired, false),
-                    copyPasteBlocked: normalizeBoolean(x.advanced_config.copyPasteBlocked, false),
-                    notifyOnPublish: normalizeBoolean(x.advanced_config.notifyOnPublish, true),
-                    sendEmailOnPublish: normalizeBoolean(x.advanced_config.sendEmailOnPublish, false),
-                    subjectSections: Array.isArray(x.advanced_config.subjectSections)
-                      ? x.advanced_config.subjectSections
-                          .filter((s: unknown) => s && typeof s === 'object')
-                          .map((s: any) => ({
-                            key: String(s.key || '').trim(),
-                            label: String(s.label || s.key || '').trim(),
-                          }))
-                          .slice(0, 40)
-                      : [],
-                  }
-                : null,
-          }))
+        ? res.data.items.map((x: any) => mapApiTestItem(x))
         : [];
       setItems(mapped);
       setSelectedTest((prev) => {
@@ -2045,18 +2057,24 @@ function TestsTab({
       return;
     }
     const data = parsed.value;
+    const editingId = editingTestId;
     try {
-      if (editingTestId) {
-        await apiClient.patch(`/admin/tests/${editingTestId}`, data);
+      if (editingId) {
+        const res = await apiClient.patch(`/admin/tests/${editingId}`, data);
+        const saved = mapApiTestItem(res.data?.item || {});
         pushToast('success', `Test "${data.title}" updated successfully.`);
+        await load();
+        applyTestToForm(saved);
+        setEditingTestId(editingId);
+        setAdvancedOpen(true);
       } else {
         await apiClient.post('/admin/tests', data);
         pushToast('success', `Test "${data.title}" created successfully.`);
+        resetTestFormToCreate();
+        await load();
       }
-      resetTestFormToCreate();
-      await load();
     } catch (err: any) {
-      pushToast('error', err?.response?.data?.error || (editingTestId ? 'Failed to update test' : 'Failed to create test'));
+      pushToast('error', err?.response?.data?.error || (editingId ? 'Failed to update test' : 'Failed to create test'));
     }
   }
 

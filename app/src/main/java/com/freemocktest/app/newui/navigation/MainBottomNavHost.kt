@@ -181,24 +181,27 @@ fun MainBottomNavHost(
     val currentDestination = navBackStackEntry?.destination
     val isOnHomeRoot = currentDestination?.route == MainTabRoutes.Home
     val pendingPushRoute by PushNavigationBridge.pendingRoute.collectAsState()
-    val showPendingSubmissionMessage = {
+    val showTestPendingBlockMessage: (String) -> Unit = { testName ->
         val pending = pendingResult
-        if (pending != null) {
+        if (pending != null && AppPreferencesRepository.isTestBlockedByPendingResult(testName, pending)) {
             val formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a")
             val whenText = runCatching {
                 formatter.format(Instant.ofEpochMilli(pending.publishAtMillis).atZone(ZoneId.systemDefault()))
             }.getOrDefault("the scheduled time")
             Toast.makeText(
                 context,
-                "You have successfully submitted the test. Your result will be available on $whenText.",
+                "You have successfully submitted ${pending.testName}. Your result will be available on $whenText.",
                 Toast.LENGTH_LONG,
             ).show()
         }
     }
 
     LaunchedEffect(attemptsUserKey, pendingResult?.publishAtMillis, navBackStackEntry?.destination?.id) {
-        if (pendingResult != null) return@LaunchedEffect
+        val pending = pendingResult
         val snap = AppPreferencesRepository.peekValidInProgressQuiz(attemptsUserKey) ?: return@LaunchedEffect
+        if (pending != null && AppPreferencesRepository.isTestBlockedByPendingResult(snap.testName, pending)) {
+            return@LaunchedEffect
+        }
         val route = navBackStackEntry?.destination?.route.orEmpty()
         val argName = navBackStackEntry?.arguments?.getString("name").orEmpty()
         val quizRoutePattern = "${RoutesNew.QUIZ}/{name}"
@@ -238,45 +241,45 @@ fun MainBottomNavHost(
         val route = PushRouteNormalizer.normalize(rawRoute).orEmpty()
         if (route.isBlank()) {
             mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
-            return@Unit
-        }
-        val lower = route.lowercase()
+        } else {
+            val lower = route.lowercase()
 
-        fun navigateIfKnownDestination(target: String) {
-            val dest = target.trim()
-            if (dest.isBlank()) return
-            runCatching {
-                mainNavController.navigate(dest) { launchSingleTop = true }
-            }.onFailure {
-                // If route isn't registered, fall back to notifications inbox (legacy behavior).
-                mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
+            fun navigateIfKnownDestination(target: String) {
+                val dest = target.trim()
+                if (dest.isBlank()) return
+                runCatching {
+                    mainNavController.navigate(dest) { launchSingleTop = true }
+                }.onFailure {
+                    // If route isn't registered, fall back to notifications inbox (legacy behavior).
+                    mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
+                }
             }
-        }
 
-        when {
-            lower == "poll" -> mainNavController.navigate(RoutesNew.POLL) { launchSingleTop = true }
-            lower == "notifications" || lower == "notification" ->
-                mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
-            lower == "menu_quiz" || lower == "daily" || lower == "daily_quiz" ->
-                mainNavController.navigate(RoutesNew.MENU_QUIZ) { launchSingleTop = true }
-            lower == "job_alert" || lower == "jobs" -> mainNavController.navigate(RoutesNew.JOB_ALERT) { launchSingleTop = true }
-            lower == "exam_alert" || lower == "exams" -> mainNavController.navigate(RoutesNew.EXAM_ALERT) { launchSingleTop = true }
+            when {
+                lower == "poll" -> mainNavController.navigate(RoutesNew.POLL) { launchSingleTop = true }
+                lower == "notifications" || lower == "notification" ->
+                    mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
+                lower == "menu_quiz" || lower == "daily" || lower == "daily_quiz" ->
+                    mainNavController.navigate(RoutesNew.MENU_QUIZ) { launchSingleTop = true }
+                lower == "job_alert" || lower == "jobs" -> mainNavController.navigate(RoutesNew.JOB_ALERT) { launchSingleTop = true }
+                lower == "exam_alert" || lower == "exams" -> mainNavController.navigate(RoutesNew.EXAM_ALERT) { launchSingleTop = true }
 
-            // Tab routes (support both shorthand + actual NavHost routes).
-            lower == MainTabRoutes.News.lowercase() || lower == "news" -> mainNavController.navigateMainTab(MainTabRoutes.News)
-            lower == MainTabRoutes.Tests.lowercase() || lower == "tests" || lower == "main/tests" ->
-                mainNavController.navigateMainTab(MainTabRoutes.Tests)
-            lower == MainTabRoutes.Home.lowercase() || lower == "home" || lower == "main/home" ->
-                mainNavController.goToHomeTab()
-            lower == MainTabRoutes.Profile.lowercase() || lower == "profile" || lower == "main/profile" ->
-                mainNavController.navigateMainTab(MainTabRoutes.Profile)
+                // Tab routes (support both shorthand + actual NavHost routes).
+                lower == MainTabRoutes.News.lowercase() || lower == "news" -> mainNavController.navigateMainTab(MainTabRoutes.News)
+                lower == MainTabRoutes.Tests.lowercase() || lower == "tests" || lower == "main/tests" ->
+                    mainNavController.navigateMainTab(MainTabRoutes.Tests)
+                lower == MainTabRoutes.Home.lowercase() || lower == "home" || lower == "main/home" ->
+                    mainNavController.goToHomeTab()
+                lower == MainTabRoutes.Profile.lowercase() || lower == "profile" || lower == "main/profile" ->
+                    mainNavController.navigateMainTab(MainTabRoutes.Profile)
 
-            // Deep links to article/detail screens (send these from FCM `data.deepLink`).
-            lower.startsWith("${RoutesNew.NEWS_DETAIL.lowercase()}/") -> navigateIfKnownDestination(route)
-            lower.startsWith("${RoutesNew.JOB_ALERT_DETAIL.lowercase()}/") -> navigateIfKnownDestination(route)
-            lower.startsWith("${RoutesNew.EXAM_ALERT_DETAIL.lowercase()}/") -> navigateIfKnownDestination(route)
+                // Deep links to article/detail screens (send these from FCM `data.deepLink`).
+                lower.startsWith("${RoutesNew.NEWS_DETAIL.lowercase()}/") -> navigateIfKnownDestination(route)
+                lower.startsWith("${RoutesNew.JOB_ALERT_DETAIL.lowercase()}/") -> navigateIfKnownDestination(route)
+                lower.startsWith("${RoutesNew.EXAM_ALERT_DETAIL.lowercase()}/") -> navigateIfKnownDestination(route)
 
-            else -> mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
+                else -> mainNavController.navigate(RoutesNew.NOTIFICATIONS) { launchSingleTop = true }
+            }
         }
     }
 
@@ -392,12 +395,15 @@ fun MainBottomNavHost(
                         mainNavController.navigateMainTab(MainTabRoutes.Tests)
                     },
                     onStartTest = { testName ->
-                        if (pendingResult != null) {
-                            showPendingSubmissionMessage()
-                            return@HomeRouteNew
+                        val safeName = testName.trim()
+                        val routeName = when {
+                            safeName.isBlank() ||
+                                safeName.equals("Test", ignoreCase = true) ||
+                                safeName.equals("applied", ignoreCase = true) -> "applied"
+                            AppPreferencesRepository.canStartTest(safeName, pendingResult) -> safeName
+                            else -> "applied"
                         }
-                        val safeName = testName.ifBlank { "Test" }
-                        mainNavController.navigate("${RoutesNew.START_TEST_PREVIEW}/$safeName")
+                        mainNavController.navigate("${RoutesNew.START_TEST_PREVIEW}/$routeName")
                     },
                     onLeaderboard = { mainNavController.navigate(RoutesNew.LEADERBOARD) },
                     onResults = {
@@ -495,8 +501,8 @@ fun MainBottomNavHost(
                     subcategory = name.ifBlank { "Topic" },
                     onBack = { mainNavController.popBackOrHome() },
                     onOpenTest = { test ->
-                        if (pendingResult != null) {
-                            showPendingSubmissionMessage()
+                        if (!AppPreferencesRepository.canStartTest(test, pendingResult)) {
+                            showTestPendingBlockMessage(test)
                             return@TestsScreenNew
                         }
                         mainNavController.navigate("${RoutesNew.INSTRUCTIONS}/$test")
@@ -510,20 +516,21 @@ fun MainBottomNavHost(
             ) { entry ->
                 val name = entry.arguments?.getString("name").orEmpty()
                 StartTestPreviewScreenNew(
-                    testName = name.ifBlank { "Test" },
+                    testName = name.ifBlank { "applied" },
                     onBack = { mainNavController.popBackOrHome() },
                     onStartTest = { selectedTestName ->
-                        if (pendingResult != null) {
-                            showPendingSubmissionMessage()
+                        val safeSelectedName = selectedTestName.ifBlank { name.ifBlank { "applied" } }
+                        if (!AppPreferencesRepository.canStartTest(safeSelectedName, pendingResult)) {
+                            showTestPendingBlockMessage(safeSelectedName)
                             return@StartTestPreviewScreenNew
                         }
-                        val safeSelectedName = selectedTestName.ifBlank { name.ifBlank { "Test" } }
                         mainNavController.navigate("${RoutesNew.QUIZ}/$safeSelectedName")
                     },
                     onApplyForTest = { selectedTestName ->
-                        val safeSelectedName = selectedTestName.ifBlank { name.ifBlank { "Test" } }
+                        val safeSelectedName = selectedTestName.ifBlank { name.ifBlank { "applied" } }
                         mainNavController.navigate("${RoutesNew.APPLY}/$safeSelectedName")
                     },
+                    onBrowseTests = { mainNavController.navigateMainTab(MainTabRoutes.Tests) },
                 )
             }
 
@@ -536,11 +543,12 @@ fun MainBottomNavHost(
                     testName = name.ifBlank { "Test" },
                     onBack = { mainNavController.popBackOrHome() },
                     onStartTest = {
-                        if (pendingResult != null) {
-                            showPendingSubmissionMessage()
+                        val safeName = name.ifBlank { "Test" }
+                        if (!AppPreferencesRepository.canStartTest(safeName, pendingResult)) {
+                            showTestPendingBlockMessage(safeName)
                             return@InstructionsScreenNew
                         }
-                        mainNavController.navigate("${RoutesNew.QUIZ}/$name")
+                        mainNavController.navigate("${RoutesNew.QUIZ}/$safeName")
                     },
                 )
             }
@@ -550,15 +558,16 @@ fun MainBottomNavHost(
                 arguments = listOf(navArgument("name") { type = NavType.StringType }),
             ) { entry ->
                 val name = entry.arguments?.getString("name").orEmpty()
-                if (pendingResult != null) {
-                    LaunchedEffect(pendingResult?.publishAtMillis) {
-                        showPendingSubmissionMessage()
+                val decodedQuizName = runCatching { Uri.decode(name) }.getOrDefault(name).ifBlank { "Test" }
+                if (!AppPreferencesRepository.canStartTest(decodedQuizName, pendingResult)) {
+                    LaunchedEffect(pendingResult?.publishAtMillis, decodedQuizName) {
+                        showTestPendingBlockMessage(decodedQuizName)
                         mainNavController.goToHomeTab()
                     }
                     return@composable
                 }
                 QuizScreenNew(
-                    testName = name.ifBlank { "Test" },
+                    testName = decodedQuizName,
                     attemptsUserKey = attemptsUserKey,
                     onBack = { mainNavController.popBackOrHome() },
                     onSubmit = { answered, correct, wrong, total, publishAt ->
@@ -566,7 +575,7 @@ fun MainBottomNavHost(
                             drawerProfile.userIdFormatted ?: "guest"
                         }
                         scope.launch {
-                            val testTitle = name.ifBlank { "Test" }
+                            val testTitle = decodedQuizName
                             val catalogId = runCatching {
                                 ContentRepository.loadTestByTitle(testTitle)?.id?.trim().orEmpty()
                             }.getOrElse { "" }

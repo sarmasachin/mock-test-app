@@ -62,6 +62,7 @@ import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
+import com.freemocktest.app.newui.tests.TestCardNew
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -105,7 +106,10 @@ fun ApplyForTestScreenNew(
     var refreshTick by remember { mutableIntStateOf(0) }
     var startSeriesLockMs by remember { mutableStateOf(20_000L) }
     var startSeriesActiveWindowMs by remember { mutableStateOf(30 * 60 * 1000L) }
-    var shouldQueueSeriesOnConfirm by remember { mutableStateOf(true) }
+    var localApplySeriesSaved by remember { mutableStateOf(false) }
+    var hasAlreadyApplied by remember { mutableStateOf(false) }
+    var testBetweenCycles by remember { mutableStateOf(false) }
+    var testUnavailable by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -148,33 +152,110 @@ fun ApplyForTestScreenNew(
         // On failure we deliberately KEEP previously-resolved values so the user doesn't
         // lose a good snapshot just because a single ON_RESUME refresh hit a network blip.
         try {
-            val directMatch = runCatching { ContentRepository.loadTestByTitle(title) }.getOrNull()
-            val test = if (directMatch?.id?.isNotBlank() == true) {
+            val routeTitle = title.trim()
+            val myApplications = runCatching { AuthRepository.loadMyTestApplications() }
+                .getOrNull()
+                ?.getOrNull()
+                .orEmpty()
+
+            val directMatch = runCatching {
+                ContentRepository.loadTestByTitle(routeTitle, forceRefresh = true, allowDefaultFallback = false)
+            }.getOrNull()
+            val publishedTest = if (directMatch?.id?.isNotBlank() == true) {
                 directMatch
             } else {
-                // Some routes pass category/subcategory label instead of exact test title.
-                // Fallback to the first live test in that bucket so submit always has a valid test id.
                 runCatching {
-                    ContentRepository.loadTestsForSubcategory(title)
+                    ContentRepository.loadTestsForSubcategory(routeTitle, forceRefresh = true)
                         .firstOrNull { it.id.isNotBlank() }
                 }.getOrNull()
             }
-            testId = test?.id?.trim().orEmpty()
-            resolvedTestName = test?.title?.trim()?.ifBlank { title } ?: title
-            slotInfo = test?.slotLabel?.ifBlank { "Morning Slot" } ?: "Morning Slot"
-            val enrolled = test?.enrolledCount
-            val capacity = test?.capacityTotal
-            val remaining = test?.remainingSeats
-            appliedInfo = if (enrolled != null && capacity != null && capacity > 0) {
-                "${enrolled.coerceAtLeast(0)}/${capacity.coerceAtLeast(0)}"
-            } else {
-                test?.enrolledLabel?.ifBlank { "0" } ?: "0"
+
+            val matchedApplication = myApplications.firstOrNull { app ->
+                val appTitle = app.testTitle.trim()
+                val appId = app.testId.trim()
+                when {
+                    publishedTest?.id?.isNotBlank() == true && appId == publishedTest.id -> true
+                    appTitle.equals(routeTitle, ignoreCase = true) -> true
+                    publishedTest?.title?.let { appTitle.equals(it, ignoreCase = true) } == true -> true
+                    else -> false
+                }
             }
-            remainingSeatsInfo = if (remaining != null) {
-                "${remaining.coerceAtLeast(0)} seats left"
-            } else {
-                test?.remainingSeatsLabel?.ifBlank { "0 seats left" } ?: "0 seats left"
+
+            val resolvedTest = publishedTest ?: matchedApplication?.let { app ->
+                TestCardNew(
+                    id = app.testId,
+                    title = app.testTitle.ifBlank { routeTitle },
+                    meta = if (app.isPublished) {
+                        "Live test"
+                    } else {
+                        "Between cycles — opens again when republished"
+                    },
+                    slotLabel = app.slotLabel,
+                    enrolledCount = app.enrolledCount,
+                    capacityTotal = app.capacityTotal,
+                    remainingSeats = app.remainingSeats,
+                    enrolledLabel = if (app.capacityTotal > 0) {
+                        "${app.enrolledCount.coerceAtLeast(0)}/${app.capacityTotal.coerceAtLeast(0)}"
+                    } else if (app.isPublished) {
+                        "${app.enrolledCount.coerceAtLeast(0)}"
+                    } else {
+                        null
+                    },
+                    remainingSeatsLabel = if (app.isPublished) {
+                        "${app.remainingSeats.coerceAtLeast(0)} seats left"
+                    } else {
+                        null
+                    },
+                )
             }
+
+            testId = resolvedTest?.id?.trim().orEmpty()
+            resolvedTestName = resolvedTest?.title?.trim()?.ifBlank { routeTitle } ?: routeTitle
+            slotInfo = resolvedTest?.slotLabel?.ifBlank { "Morning Slot" } ?: "Morning Slot"
+
+            hasAlreadyApplied = matchedApplication != null
+            testBetweenCycles = matchedApplication != null && !matchedApplication.isPublished
+            testUnavailable = resolvedTest == null || testId.isBlank()
+
+            when {
+                publishedTest != null -> {
+                    val enrolled = publishedTest.enrolledCount
+                    val capacity = publishedTest.capacityTotal
+                    val remaining = publishedTest.remainingSeats
+                    appliedInfo = if (enrolled != null && capacity != null && capacity > 0) {
+                        "${enrolled.coerceAtLeast(0)}/${capacity.coerceAtLeast(0)}"
+                    } else {
+                        publishedTest.enrolledLabel?.ifBlank { null } ?: "—"
+                    }
+                    remainingSeatsInfo = if (remaining != null) {
+                        "${remaining.coerceAtLeast(0)} seats left"
+                    } else {
+                        publishedTest.remainingSeatsLabel?.ifBlank { null } ?: "—"
+                    }
+                }
+                testBetweenCycles -> {
+                    appliedInfo = "—"
+                    remainingSeatsInfo = "Opens in next cycle"
+                }
+                matchedApplication != null && matchedApplication.isPublished -> {
+                    val app = matchedApplication
+                    appliedInfo = if (app.capacityTotal > 0) {
+                        "${app.enrolledCount.coerceAtLeast(0)}/${app.capacityTotal.coerceAtLeast(0)}"
+                    } else {
+                        "${app.enrolledCount.coerceAtLeast(0)}"
+                    }
+                    remainingSeatsInfo = "${app.remainingSeats.coerceAtLeast(0)} seats left"
+                }
+                else -> {
+                    appliedInfo = "—"
+                    remainingSeatsInfo = "Unavailable"
+                }
+            }
+
+            if (hasAlreadyApplied) {
+                revealSubmitSection = false
+            }
+
             if (testId.isNotBlank()) {
                 runCatching { AuthRepository.getTestWaitlistStatus(testId) }
                     .getOrNull()
@@ -316,15 +397,18 @@ fun ApplyForTestScreenNew(
                             .heightIn(min = 18.dp)
                             .graphicsLayer { alpha = if (isRefreshing) 1f else 0f },
                     )
-                    // Manual retry surfaces only when test resolution actually failed
-                    // (no testId resolved AND no refresh currently in flight).
-                    if (testId.isBlank() && !isRefreshing) {
+                    // Manual retry when live catalog lookup failed and user has no saved application.
+                    if (testUnavailable && !hasAlreadyApplied && !isRefreshing) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                text = "Couldn't load test details.",
+                                text = if (testBetweenCycles) {
+                                    "This test is between cycles. Check back when it is republished."
+                                } else {
+                                    "Couldn't load test details."
+                                },
                                 color = p.textSecondary,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium,
@@ -346,24 +430,76 @@ fun ApplyForTestScreenNew(
                             }
                         }
                     }
+                    if (testBetweenCycles && hasAlreadyApplied) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "Your application is saved. The test will reopen in the next scheduled cycle.",
+                            color = Color(0xFF166534),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                     Spacer(Modifier.height(10.dp))
 
-                    if (!revealSubmitSection) {
-                        Spacer(Modifier.height(6.dp))
-                        Button(
-                            onClick = { revealSubmitSection = true },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp),
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = p.systemBlue,
-                                contentColor = Color.White,
-                            ),
-                        ) {
-                            Text(text = "Apply for Test", fontWeight = FontWeight.Bold)
+                    when {
+                        hasAlreadyApplied && !isWaitlisted -> {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = "You have already applied for this test.",
+                                color = Color(0xFF166534),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Button(
+                                onClick = onSubmit,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = p.primaryButton,
+                                    contentColor = p.onPrimaryButton,
+                                ),
+                            ) {
+                                Text(text = "Back to Start Test", fontWeight = FontWeight.Bold)
+                            }
                         }
-                    } else {
+                        testBetweenCycles && !hasAlreadyApplied -> {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = "Applications are closed while this test is between cycles.",
+                                color = p.textSecondary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        testUnavailable -> {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = "This test is not open for applications right now.",
+                                color = p.textSecondary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        !revealSubmitSection -> {
+                            Spacer(Modifier.height(6.dp))
+                            Button(
+                                onClick = { revealSubmitSection = true },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = p.systemBlue,
+                                    contentColor = Color.White,
+                                ),
+                            ) {
+                                Text(text = "Apply for Test", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        else -> {
                         Spacer(Modifier.height(10.dp))
                         Text(
                             text = benefitsTitle,
@@ -401,11 +537,26 @@ fun ApplyForTestScreenNew(
                                             isWaitlisted = response.waitlisted
                                             waitingPosition = response.waitingPosition.coerceAtLeast(0)
                                             waitingTotal = response.waitingTotal.coerceAtLeast(0)
-                                            shouldQueueSeriesOnConfirm = !response.alreadyApplied && !response.waitlisted
                                             successMessage = when {
                                                 response.message?.isNotBlank() == true -> response.message
                                                 response.alreadyApplied -> "You have already applied for this test."
                                                 else -> successMessage
+                                            }
+                                            if (!response.waitlisted) {
+                                                hasAlreadyApplied = true
+                                                revealSubmitSection = false
+                                                testBetweenCycles = false
+                                                testUnavailable = false
+                                                val titleToSave = response.testTitle?.trim()
+                                                    ?.takeIf { it.isNotBlank() }
+                                                    ?: resolvedTestName
+                                                localApplySeriesSaved = runCatching {
+                                                    AppPreferencesRepository.addAppliedTestSeriesNow(
+                                                        testName = titleToSave,
+                                                        lockMs = startSeriesLockMs,
+                                                        activeWindowMs = startSeriesActiveWindowMs,
+                                                    )
+                                                }.getOrDefault(false) || localApplySeriesSaved
                                             }
                                             if (response.waitlisted) {
                                                 submitWarning = successMessage
@@ -485,6 +636,7 @@ fun ApplyForTestScreenNew(
                                 fontWeight = FontWeight.SemiBold,
                             )
                         }
+                        }
                     }
                 }
             }
@@ -500,25 +652,26 @@ fun ApplyForTestScreenNew(
                 Button(
                     onClick = {
                         scope.launch {
-                            if (shouldQueueSeriesOnConfirm) {
-                                // DataStore write is best-effort: server already accepted the
-                                // application, so a local failure shouldn't block navigation.
-                                // Next "Start Test" entry will reconcile from server-side state.
-                                try {
-                                    AppPreferencesRepository.addAppliedTestSeries(
-                                        testName = resolvedTestName,
-                                        lockMs = startSeriesLockMs,
-                                        activeWindowMs = startSeriesActiveWindowMs,
-                                    )
-                                } catch (e: CancellationException) {
-                                    throw e
-                                } catch (_: Exception) {
-                                    // Swallow: nothing user-actionable here.
+                            try {
+                                if (!localApplySeriesSaved) {
+                                    val titleToSave = resolvedTestName.trim().ifBlank { title.trim() }
+                                    if (titleToSave.isNotBlank()) {
+                                        localApplySeriesSaved = AppPreferencesRepository.addAppliedTestSeriesNow(
+                                            testName = titleToSave,
+                                            lockMs = startSeriesLockMs,
+                                            activeWindowMs = startSeriesActiveWindowMs,
+                                        )
+                                    }
                                 }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                // Server already accepted the application; navigation must not block.
+                            } finally {
+                                showSuccessDialog = false
+                                onSubmit()
                             }
                         }
-                        showSuccessDialog = false
-                        onSubmit()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = p.primaryButton),
                 ) {

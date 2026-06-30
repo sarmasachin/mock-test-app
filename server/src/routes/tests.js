@@ -333,6 +333,44 @@ router.get('/', async (req, res) => {
   }
 });
 
+router.get('/my-applications', requireAuth, async (req, res) => {
+  try {
+    const rowsRes = await pool.query(
+      `SELECT t.id, t.title, t.is_published, ta.applied_at,
+              t.exam_date, t.dynamic_date_enabled, t.date_cycle_days, t.last_cycle_started_at,
+              t.capacity_total, t.enrolled_count, t.slot_label
+       FROM test_applications ta
+       INNER JOIN tests t ON t.id = ta.test_id
+       WHERE ta.user_id = $1::uuid
+       ORDER BY ta.applied_at DESC`,
+      [req.userId],
+    );
+    const items = rowsRes.rows
+      .filter((row) => !isApplicationFromOlderCycle(row, row.applied_at))
+      .map((row) => {
+        const capacityTotal = Math.max(0, Number(row.capacity_total || 0));
+        const enrolledCount = Math.max(0, Number(row.enrolled_count || 0));
+        return {
+          testId: String(row.id),
+          testTitle: String(row.title || 'Test'),
+          appliedAt: row.applied_at ? new Date(row.applied_at).toISOString() : null,
+          isPublished: row.is_published === true,
+          enrolledCount,
+          capacityTotal,
+          remainingSeats: Math.max(0, capacityTotal - enrolledCount),
+          slotLabel: String(row.slot_label || ''),
+        };
+      });
+    return res.json({ items });
+  } catch (e) {
+    if (e.code === '42P01') {
+      return res.json({ items: [] });
+    }
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load your test applications' });
+  }
+});
+
 router.get('/:id/questions', async (req, res) => {
   const id = String(req.params.id || '').trim();
   if (!id) return res.status(400).json({ error: 'test id required' });

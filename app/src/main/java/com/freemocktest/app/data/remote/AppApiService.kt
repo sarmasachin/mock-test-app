@@ -44,6 +44,9 @@ interface AppApiService {
     @POST("tests/{testId}/apply")
     suspend fun applyForTest(@Path("testId") testId: String): ApplyTestResponse
 
+    @GET("tests/my-applications")
+    suspend fun getMyTestApplications(): MyTestApplicationsResponse
+
     @GET("tests/{testId}/questions-attempt")
     suspend fun getAttemptQuestions(
         @Path("testId") testId: String,

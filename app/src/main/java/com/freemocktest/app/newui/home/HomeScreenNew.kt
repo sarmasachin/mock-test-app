@@ -107,6 +107,7 @@ import kotlinx.coroutines.yield
 import com.freemocktest.app.BuildConfig
 import com.freemocktest.app.MockTestApp
 import com.freemocktest.app.data.AppPreferencesRepository
+import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.data.TestHistoryRepository
 import com.freemocktest.app.newui.theme.palette.applyColorPresetFromRemote
@@ -284,10 +285,13 @@ fun HomeScreenNew(
     val appliedSeries by AppPreferencesRepository.appliedTestSeries.collectAsState(initial = emptyList())
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var hiddenSessionAt by remember { mutableStateOf(0L) }
-    val startSeriesState = remember(appliedSeries, nowMs) {
+    val startSeriesState = remember(appliedSeries, nowMs, pendingResult) {
         val eligible = appliedSeries
+            .filter { nowMs < it.expiresAtMillis }
             .sortedBy { it.unlockAtMillis }
-            .firstOrNull { nowMs < it.expiresAtMillis }
+            .firstOrNull { entry ->
+                !AppPreferencesRepository.isTestBlockedByPendingResult(entry.testName, pendingResult)
+            }
         if (eligible == null) {
             StartSeriesCardState(
                 isLocked = false,
@@ -528,6 +532,12 @@ fun HomeScreenNew(
     }
     LaunchedEffect(Unit) {
         refreshUnreadCounts()
+        runCatching {
+            val home = ContentRepository.loadHomeContent()
+            val lockMs = (home?.startSeriesLockSeconds ?: 20).coerceAtLeast(0).toLong() * 1000L
+            val activeWindowMs = (home?.startSeriesActiveWindowMinutes ?: 30).coerceAtLeast(1).toLong() * 60_000L
+            AuthRepository.syncAppliedTestSeriesFromServer(lockMs = lockMs, activeWindowMs = activeWindowMs)
+        }
     }
 
     // Pull-to-refresh: force reload CMS home payload so admin changes reflect without app restart.
@@ -564,16 +574,28 @@ fun HomeScreenNew(
                     try {
                         refreshUnreadCounts()
                         val now = System.currentTimeMillis()
-                        if (now - lastHomeContentFetchAt > 45_000L) {
-                            val remoteResult = runCatching { ContentRepository.loadHomeContent(forceRefresh = true) }
-                            val remote = remoteResult.getOrNull()
-                            if (remote != null) {
-                                lastHomeContentFetchAt = System.currentTimeMillis()
-                                applyHomeRemote(remote)
-                                homeRemoteRefreshFailed = false
-                            } else {
-                                homeRemoteRefreshFailed = remoteResult.isFailure || remote == null
-                            }
+                        val remoteResult = if (now - lastHomeContentFetchAt > 45_000L) {
+                            runCatching { ContentRepository.loadHomeContent(forceRefresh = true) }
+                        } else {
+                            runCatching { ContentRepository.loadHomeContent() }
+                        }
+                        val remote = remoteResult.getOrNull()
+                        if (remote != null && now - lastHomeContentFetchAt > 45_000L) {
+                            lastHomeContentFetchAt = System.currentTimeMillis()
+                            applyHomeRemote(remote)
+                            homeRemoteRefreshFailed = false
+                        } else if (remoteResult.isFailure && now - lastHomeContentFetchAt > 45_000L) {
+                            homeRemoteRefreshFailed = true
+                        }
+                        val homeForSync = remote ?: runCatching { ContentRepository.loadHomeContent() }.getOrNull()
+                        val lockMs = (homeForSync?.startSeriesLockSeconds ?: 20).coerceAtLeast(0).toLong() * 1000L
+                        val activeWindowMs = (homeForSync?.startSeriesActiveWindowMinutes ?: 30)
+                            .coerceAtLeast(1).toLong() * 60_000L
+                        runCatching {
+                            AuthRepository.syncAppliedTestSeriesFromServer(
+                                lockMs = lockMs,
+                                activeWindowMs = activeWindowMs,
+                            )
                         }
                     } catch (e: CancellationException) {
                         throw e
@@ -842,27 +864,19 @@ fun HomeScreenNew(
                                 ActionsGrid(
                                     actions = section.items,
                                     startSeriesState = startSeriesState,
-                                    allowStartTest = pendingResult == null,
+                                    allowStartTest = true,
                                     onAction = { actionKey ->
                                         val normalizedKey = actionKey.trim().lowercase()
                                         when {
                                             normalizedKey == "starttest" || normalizedKey == "start_test" || normalizedKey == "start test" -> {
-                                                val pending = pendingResult
-                                                if (pending != null) {
-                                                    val formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a")
-                                                    val whenText = runCatching {
-                                                        formatter.format(
-                                                            Instant.ofEpochMilli(pending.publishAtMillis).atZone(ZoneId.systemDefault()),
-                                                        )
-                                                    }.getOrElse { Date(pending.publishAtMillis).toString() }
-                                                    Toast.makeText(
-                                                        context,
-                                                        "You have successfully submitted the test. Your result will be available on $whenText.",
-                                                        Toast.LENGTH_LONG,
-                                                    ).show()
-                                                } else {
-                                                    onStartTest(startSeriesState.activeTestName ?: "Test")
+                                                val targetName = startSeriesState.activeTestName
+                                                val startName = when {
+                                                    targetName != null &&
+                                                        AppPreferencesRepository.canStartTest(targetName, pendingResult) ->
+                                                        targetName
+                                                    else -> "applied"
                                                 }
+                                                onStartTest(startName)
                                             }
                                             normalizedKey == "leaderboard" || normalizedKey == "leader_board" || normalizedKey == "leader board" -> onLeaderboard()
                                             normalizedKey.contains("result") || normalizedKey == "score" || normalizedKey == "results_history" -> onResults()

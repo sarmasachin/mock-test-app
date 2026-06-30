@@ -667,7 +667,7 @@ async function processTestCycleAutoReschedule() {
       try {
         await client.query('BEGIN');
         const lockedRes = await client.query(
-          `SELECT id, is_published, duration_minutes, last_cycle_started_at
+          `SELECT id, is_published, duration_minutes, last_cycle_started_at, updated_at
            FROM tests
            WHERE id = $1::uuid
            LIMIT 1
@@ -688,6 +688,11 @@ async function processTestCycleAutoReschedule() {
           await client.query('COMMIT');
           continue;
         }
+        const lockedUpdatedMs = Date.parse(String(locked.updated_at || ''));
+        if (Number.isFinite(lockedUpdatedMs) && Number.isFinite(lockedCycleEndMs) && lockedUpdatedMs > lockedCycleEndMs) {
+          await client.query('COMMIT');
+          continue;
+        }
 
         await client.query(
           `UPDATE tests
@@ -695,7 +700,9 @@ async function processTestCycleAutoReschedule() {
            WHERE id = $1::uuid`,
           [testId],
         );
-        await client.query(`DELETE FROM test_applications WHERE test_id = $1::uuid`, [testId]);
+        // Keep test_applications through the between-cycle window so users still see
+        // "already applied" in the app; stale rows are filtered on republish via
+        // isApplicationFromOlderCycle(last_cycle_started_at).
         await client.query(
           `UPDATE test_waitlist
            SET status = 'cancelled'

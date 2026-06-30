@@ -19,6 +19,7 @@ import com.freemocktest.app.data.remote.AuthUserDto
 import com.freemocktest.app.data.remote.RetrofitProvider
 import com.freemocktest.app.data.remote.TextMessageBody
 import com.freemocktest.app.data.remote.ApplyTestResponse
+import com.freemocktest.app.data.remote.MyTestApplicationDto
 import com.freemocktest.app.data.remote.TestWaitlistStatusResponse
 import com.freemocktest.app.notifications.PushTokenRegistrar
 import com.google.gson.JsonParser
@@ -647,7 +648,55 @@ object AuthRepository {
         }
         try {
             val resp = RetrofitProvider.appApi.applyForTest(testId.trim())
+            ContentRepository.updateTestEnrollmentAfterApply(
+                testId = resp.testId,
+                testTitle = resp.testTitle,
+                enrolledCount = resp.enrolledCount,
+                capacityTotal = resp.capacityTotal,
+                remainingSeats = resp.remainingSeats,
+            )
             Result.success(resp)
+        } catch (e: HttpException) {
+            Result.failure(Exception(parseHttpError(e)))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun syncAppliedTestSeriesFromServer(
+        lockMs: Long = 20_000L,
+        activeWindowMs: Long = 30 * 60 * 1000L,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        loadStoredTokens()
+        if (accessTokenMem.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("Sign in required"))
+        }
+        try {
+            val resp = RetrofitProvider.appApi.getMyTestApplications()
+            for (item in resp.items) {
+                val title = item.testTitle.trim()
+                if (title.isBlank()) continue
+                AppPreferencesRepository.addAppliedTestSeriesNow(
+                    testName = title,
+                    lockMs = lockMs,
+                    activeWindowMs = activeWindowMs,
+                )
+            }
+            Result.success(Unit)
+        } catch (e: HttpException) {
+            Result.failure(Exception(parseHttpError(e)))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun loadMyTestApplications(): Result<List<MyTestApplicationDto>> = withContext(Dispatchers.IO) {
+        loadStoredTokens()
+        if (accessTokenMem.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("Sign in required"))
+        }
+        try {
+            Result.success(RetrofitProvider.appApi.getMyTestApplications().items)
         } catch (e: HttpException) {
             Result.failure(Exception(parseHttpError(e)))
         } catch (e: Exception) {
