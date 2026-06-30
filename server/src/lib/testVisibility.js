@@ -63,7 +63,8 @@ function catalogVisibilityError(row, advancedConfig, nowMs = Date.now()) {
 }
 
 /**
- * Effective DB publish flag from admin checkbox + publishAt / unpublishAt windows.
+ * Catalog-only helper: whether publishAt/unpublishAt windows allow user-facing visibility.
+ * Admin save must NOT use this for DB is_published — checkbox is the source of truth.
  */
 function resolveEffectivePublishedState(isPublishedCheckbox, advancedConfig, nowMs = Date.now()) {
   const publishMs = parseScheduleMs(advancedConfig?.publishAt);
@@ -165,46 +166,11 @@ async function syncTestPublishScheduleFromAdvancedConfig(testId, advancedConfig,
 }
 
 /**
- * Keeps DB is_published aligned with publishAt / unpublishAt windows (safe: only hides, never force-republish).
+ * @deprecated Do not mutate DB is_published here — it overwrote admin checkbox and hid tests permanently.
+ * User-facing windows are enforced via isTestCatalogVisible + publishScheduling.
  */
 async function enforceTestPublicationWindows() {
-  const [testsRes, settingsRes] = await Promise.all([
-    pool.query(`SELECT id, is_published FROM tests WHERE is_published = true`),
-    pool.query(`SELECT setting_value FROM app_settings WHERE setting_key = 'testAdvancedConfigs' LIMIT 1`),
-  ]);
-  let advancedMap = {};
-  try {
-    const parsed = JSON.parse(String(settingsRes.rows?.[0]?.setting_value || '{}'));
-    advancedMap = parsed && typeof parsed === 'object' ? parsed : {};
-  } catch (_e) {
-    advancedMap = {};
-  }
-  const resolveAdv = (testId) => {
-    const key = String(testId || '').trim();
-    if (!key) return {};
-    if (advancedMap[key] && typeof advancedMap[key] === 'object') return advancedMap[key];
-    const lower = key.toLowerCase();
-    for (const [mapKey, value] of Object.entries(advancedMap)) {
-      if (String(mapKey).trim().toLowerCase() === lower && value && typeof value === 'object') {
-        return value;
-      }
-    }
-    return {};
-  };
-  const nowMs = Date.now();
-  for (const row of testsRes.rows || []) {
-    const testId = String(row.id || '').trim();
-    if (!testId) continue;
-    const adv = resolveAdv(testId);
-    const shouldHide =
-      isBeforeScheduledPublish(adv.publishAt, nowMs) || isAfterScheduledUnpublish(adv.unpublishAt, nowMs);
-    if (shouldHide) {
-      await pool.query(
-        `UPDATE tests SET is_published = false, updated_at = now() WHERE id = $1::uuid AND is_published = true`,
-        [testId],
-      );
-    }
-  }
+  return { updated: 0 };
 }
 
 module.exports = {

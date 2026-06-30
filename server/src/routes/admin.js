@@ -24,7 +24,6 @@ const {
   sendAdminRoleGrantedEmail,
 } = require('../mail');
 const {
-  resolveEffectivePublishedState,
   syncTestPublishScheduleFromAdvancedConfig,
 } = require('../lib/testVisibility');
 const { syncTestQuestionCount } = require('../lib/syncTestQuestionCount');
@@ -2745,7 +2744,7 @@ router.post('/tests', async (req, res) => {
   const advancedParsed = normalizeTestAdvancedConfig((req.body || {}).advancedConfig);
   if (advancedParsed.error) return res.status(400).json({ error: advancedParsed.error });
   const advancedConfig = advancedParsed.value;
-  const effectivePublished = resolveEffectivePublishedState(data.isPublished, advancedConfig);
+  const storedPublished = data.isPublished !== false;
   try {
     const { rows } = await pool.query(
       `INSERT INTO tests (
@@ -2766,7 +2765,7 @@ router.post('/tests', async (req, res) => {
         data.durationMinutes,
         data.questionCount,
         data.testKind,
-        effectivePublished,
+        storedPublished,
         data.dynamicFluctuationOnPublish,
         data.examDate || null,
         data.totalMarks,
@@ -2787,7 +2786,7 @@ router.post('/tests', async (req, res) => {
         data.dateCycleDays,
       ],
     );
-    if (effectivePublished) {
+    if (storedPublished) {
       await pool.query(
         `UPDATE tests
          SET last_cycle_started_at = now(), updated_at = now()
@@ -2837,7 +2836,7 @@ router.patch('/tests/:id', async (req, res) => {
   const advancedParsed = normalizeTestAdvancedConfig((req.body || {}).advancedConfig);
   if (advancedParsed.error) return res.status(400).json({ error: advancedParsed.error });
   const advancedConfig = advancedParsed.value;
-  const effectivePublished = resolveEffectivePublishedState(data.isPublished, advancedConfig);
+  const storedPublished = data.isPublished !== false;
   const body = req.body || {};
   const hasDynamicFluctuationValue = Object.prototype.hasOwnProperty.call(body, 'dynamicFluctuationOnPublish');
   try {
@@ -2874,7 +2873,7 @@ router.patch('/tests/:id', async (req, res) => {
         data.durationMinutes,
         data.questionCount,
         data.testKind,
-        effectivePublished,
+        storedPublished,
         dynamicFluctuationOnPublish,
         data.examDate || null,
         data.totalMarks,

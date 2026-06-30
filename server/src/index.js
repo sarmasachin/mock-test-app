@@ -35,7 +35,6 @@ const pollsRouter = require('./routes/polls');
 const { pool } = require('./db');
 const { clampMcqCorrectIndex } = require('./mcqShuffle');
 const { selectQuestionsFromSubcategoryPool } = require('./lib/subcategoryPoolSelection');
-const { enforceTestPublicationWindows } = require('./lib/testVisibility');
 const { sendPushToToken } = require('./notificationDispatch');
 const {
   isMailConfigured,
@@ -1752,12 +1751,6 @@ async function processBirthdayEmails() {
 
 setInterval(() => {
   processPublishSchedules();
-}, 60000);
-setInterval(() => {
-  enforceTestPublicationWindows().catch((e) => {
-    if (e && e.code === '42P01') return;
-    console.error('test_publication_window_enforcement_error', e);
-  });
 }, 60000);
 setInterval(() => {
   processNotificationSchedules();
