@@ -369,6 +369,13 @@ object ContentRepository {
         try {
             val resp = RetrofitProvider.publicApi.listTests(subcategory = sub, limit = 40)
             val mapped = resp.items.map { row -> row.toTestCard() }
+                .filter { card ->
+                    com.freemocktest.app.util.TestScheduleUtils.isTestListingVisible(
+                        validUntilIso = card.validUntilIso,
+                        publishAt = card.publishAt,
+                        unpublishAt = card.unpublishAt,
+                    )
+                }
             mapped.forEach { card ->
                 val tKey = card.title.trim().lowercase(Locale.US)
                 if (tKey.isNotBlank()) testCardMemory[tKey] = card
@@ -393,7 +400,14 @@ object ContentRepository {
         val resp = RetrofitProvider.publicApi.listTests(subcategory = null, limit = limit)
         resp.items
             .map { row -> row.toTestCard() }
-            .filter { it.title.isNotBlank() }
+            .filter { card ->
+                card.title.isNotBlank() &&
+                    com.freemocktest.app.util.TestScheduleUtils.isTestListingVisible(
+                        validUntilIso = card.validUntilIso,
+                        publishAt = card.publishAt,
+                        unpublishAt = card.unpublishAt,
+                    )
+            }
             .distinctBy { it.title.trim().lowercase(Locale.US) }
     }
 
@@ -448,6 +462,7 @@ object ContentRepository {
         put("badgeEnabled", c.badgeEnabled)
         put("badgeText", c.badgeText)
         c.validUntil?.let { put("validUntil", it) }
+        c.validUntilIso?.let { put("validUntilIso", it) }
         c.answerKeyReleaseAt?.let { put("answerKeyReleaseAt", it) }
         c.resultReleaseAt?.let { put("resultReleaseAt", it) }
         c.capacityTotal?.let { put("capacityTotal", it) } ?: run { put("capacityTotal", JSONObject.NULL) }
@@ -465,6 +480,9 @@ object ContentRepository {
         put("fullscreenRequired", c.fullscreenRequired)
         put("copyPasteBlocked", c.copyPasteBlocked)
         put("notifyOnPublish", c.notifyOnPublish)
+        put("attemptsAllowedCount", c.attemptsAllowedCount)
+        put("questionCountValue", c.questionCountValue)
+        put("totalMarksValue", c.totalMarksValue)
     }
 
     private fun decodeTestCardNew(o: JSONObject): TestCardNew? {
@@ -489,6 +507,7 @@ object ContentRepository {
             badgeEnabled = o.optBoolean("badgeEnabled", false),
             badgeText = o.optString("badgeText", "Live").ifBlank { "Live" },
             validUntil = o.optString("validUntil", "").trim().takeIf { it.isNotBlank() },
+            validUntilIso = o.optString("validUntilIso", "").trim().takeIf { it.isNotBlank() },
             answerKeyReleaseAt = o.optString("answerKeyReleaseAt", "").trim().takeIf { it.isNotBlank() },
             resultReleaseAt = o.optString("resultReleaseAt", "").trim().takeIf { it.isNotBlank() },
             capacityTotal = jsonOptIntOrNull(o, "capacityTotal"),
@@ -506,6 +525,9 @@ object ContentRepository {
             fullscreenRequired = o.optBoolean("fullscreenRequired", false),
             copyPasteBlocked = o.optBoolean("copyPasteBlocked", false),
             notifyOnPublish = o.optBoolean("notifyOnPublish", true),
+            attemptsAllowedCount = o.optInt("attemptsAllowedCount", 1).coerceAtLeast(1),
+            questionCountValue = o.optInt("questionCountValue", 0).coerceAtLeast(0),
+            totalMarksValue = o.optInt("totalMarksValue", 0).coerceAtLeast(0),
         )
     }
 
@@ -1727,9 +1749,10 @@ object ContentRepository {
             examMode = examMode,
             negativeMarkingText = negativeMarkingText,
             testTypeLabel = testTypeLabel,
-            badgeEnabled = badgeEnabled == true,
+            badgeEnabled = badgeEnabled == true || !badgeText.isNullOrBlank(),
             badgeText = badgeText?.trim().takeUnless { it.isNullOrBlank() } ?: "Live",
             validUntil = validUntil?.let { "Available till $it" },
+            validUntilIso = validUntil,
             answerKeyReleaseAt = answerKeyReleaseAt,
             resultReleaseAt = resultReleaseAt,
             capacityTotal = capacity,
@@ -1747,6 +1770,9 @@ object ContentRepository {
             fullscreenRequired = advancedConfig?.fullscreenRequired == true,
             copyPasteBlocked = advancedConfig?.copyPasteBlocked == true,
             notifyOnPublish = advancedConfig?.notifyOnPublish != false,
+            attemptsAllowedCount = (attemptsAllowed ?: 1).coerceAtLeast(1),
+            questionCountValue = questionCount.coerceAtLeast(0),
+            totalMarksValue = (totalMarks ?: 0).coerceAtLeast(0),
         )
     }
 

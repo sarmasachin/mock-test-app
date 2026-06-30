@@ -5,7 +5,14 @@ const { pool } = require('../db');
 const { requireAuth } = require('../middleware/requireAuth');
 const { clampMcqCorrectIndex } = require('../mcqShuffle');
 const { normalizeSubjectSectionsInput } = require('../util/subjectSections');
-const { isBeforeExamStart } = require('../lib/examSchedule');
+const { isBeforeExamStart, isExamJoinAllowed } = require('../lib/examSchedule');
+const {
+  isTestCatalogVisible,
+  catalogVisibilityError,
+} = require('../lib/testVisibility');
+const { assertUserCanStartAttempt } = require('../lib/testAttempts');
+
+const PUBLISHED_QUESTION_COUNT_SQL = `(SELECT COUNT(*)::int FROM questions q WHERE q.test_id = tests.id AND q.is_published = true) AS published_question_count`;
 
 const router = express.Router();
 
@@ -74,7 +81,9 @@ function mapTest(row) {
     subcategory: row.subcategory,
     metaLine: row.meta_line,
     durationMinutes: row.duration_minutes,
-    questionCount: row.question_count,
+    questionCount: Number.isFinite(Number(row.published_question_count))
+      ? Math.max(0, Number(row.published_question_count))
+      : Math.max(0, Number(row.question_count || 0)),
     testKind: row.test_kind,
     examDate: resolveExamDate(row),
     totalMarks: Number(row.total_marks || 0),
@@ -95,6 +104,33 @@ function mapTest(row) {
     dynamicDateEnabled: row.dynamic_date_enabled === true,
     dateCycleDays: Number(row.date_cycle_days || 0),
   };
+}
+
+function resolveAdvancedConfigForTest(advancedMap, testId) {
+  if (!advancedMap || typeof advancedMap !== 'object') return null;
+  const key = String(testId || '').trim();
+  if (!key) return null;
+  const direct = advancedMap[key];
+  if (direct && typeof direct === 'object') return direct;
+  const lower = key.toLowerCase();
+  for (const [mapKey, value] of Object.entries(advancedMap)) {
+    if (String(mapKey).trim().toLowerCase() === lower && value && typeof value === 'object') {
+      return value;
+    }
+  }
+  return null;
+}
+
+async function loadAdvancedConfigMap() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT setting_value FROM app_settings WHERE setting_key = 'testAdvancedConfigs' LIMIT 1`,
+    );
+    const parsed = JSON.parse(String(rows?.[0]?.setting_value || '{}'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_e) {
+    return {};
+  }
 }
 
 function normalizeTestAdvancedConfig(rawValue) {
@@ -270,7 +306,7 @@ router.get('/', async (req, res) => {
     let q;
     let params;
     if (sub && kind && ['mock', 'quiz'].includes(kind)) {
-      q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind,
+      q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, ${PUBLISHED_QUESTION_COUNT_SQL}, test_kind,
                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
                   language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
                   dynamic_date_enabled, date_cycle_days
@@ -281,7 +317,7 @@ router.get('/', async (req, res) => {
            LIMIT $3`;
       params = [kind, `%${sub}%`, limit];
     } else if (sub) {
-      q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind,
+      q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, ${PUBLISHED_QUESTION_COUNT_SQL}, test_kind,
                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
                   language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
                   dynamic_date_enabled, date_cycle_days
@@ -291,7 +327,7 @@ router.get('/', async (req, res) => {
            LIMIT $2`;
       params = [`%${sub}%`, limit];
     } else if (kind && ['mock', 'quiz'].includes(kind)) {
-      q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind,
+      q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, ${PUBLISHED_QUESTION_COUNT_SQL}, test_kind,
                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
                   language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
                   dynamic_date_enabled, date_cycle_days
@@ -301,7 +337,7 @@ router.get('/', async (req, res) => {
            LIMIT $2`;
       params = [kind, limit];
     } else {
-      q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind,
+      q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, ${PUBLISHED_QUESTION_COUNT_SQL}, test_kind,
                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
                   language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
                   dynamic_date_enabled, date_cycle_days
@@ -311,23 +347,21 @@ router.get('/', async (req, res) => {
            LIMIT $1`;
       params = [limit];
     }
-    const [rowsRes, advancedMapRaw] = await Promise.all([
+    const [rowsRes, advancedMap] = await Promise.all([
       pool.query(q, params),
-      pool.query(`SELECT setting_value FROM app_settings WHERE setting_key = 'testAdvancedConfigs' LIMIT 1`),
+      loadAdvancedConfigMap(),
     ]);
-    let advancedMap = {};
-    try {
-      const parsed = JSON.parse(String(advancedMapRaw.rows?.[0]?.setting_value || '{}'));
-      advancedMap = parsed && typeof parsed === 'object' ? parsed : {};
-    } catch (_e) {
-      advancedMap = {};
-    }
-    return res.json({
-      items: rowsRes.rows.map((row) => ({
+    const nowMs = Date.now();
+    const items = rowsRes.rows
+      .filter((row) => {
+        const adv = normalizeTestAdvancedConfig(resolveAdvancedConfigForTest(advancedMap, row.id));
+        return isTestCatalogVisible(row, adv, nowMs);
+      })
+      .map((row) => ({
         ...mapTest(row),
-        advancedConfig: normalizeTestAdvancedConfig(advancedMap[row.id]),
-      })),
-    });
+        advancedConfig: normalizeTestAdvancedConfig(resolveAdvancedConfigForTest(advancedMap, row.id)),
+      }));
+    return res.json({ items });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to list tests' });
@@ -421,36 +455,51 @@ router.get('/:id/questions-attempt', requireAuth, async (req, res) => {
   const id = String(req.params.id || '').trim();
   if (!id) return res.status(400).json({ error: 'test id required' });
   try {
-    const [testRes, advancedMapRaw] = await Promise.all([
+    const [testRes, advancedMap] = await Promise.all([
       pool.query(
-        `SELECT id, is_published, exam_date, slot_label, dynamic_date_enabled, date_cycle_days, last_cycle_started_at
+        `SELECT id, is_published, exam_date, valid_until, slot_label, attempts_allowed, total_marks,
+                negative_marking_text, question_count, dynamic_date_enabled, date_cycle_days, last_cycle_started_at
          FROM tests
          WHERE id = $1::uuid
          LIMIT 1`,
         [id],
       ),
-      pool.query(`SELECT setting_value FROM app_settings WHERE setting_key = 'testAdvancedConfigs' LIMIT 1`),
+      loadAdvancedConfigMap(),
     ]);
     const test = testRes.rows[0];
     if (!test || test.is_published !== true) {
       return res.status(404).json({ error: 'Test not found' });
     }
-    const resolvedExamDate = resolveExamDate(test);
-    if (isBeforeExamStart(resolvedExamDate, test.slot_label)) {
+    const advancedConfig = normalizeTestAdvancedConfig(resolveAdvancedConfigForTest(advancedMap, id));
+    const visibilityError = catalogVisibilityError(test, advancedConfig);
+    if (visibilityError) {
+      return res.status(403).json({ error: visibilityError });
+    }
+    const attemptAccess = await assertUserCanStartAttempt(pool, req.userId, test, advancedConfig);
+    if (!attemptAccess.allowed) {
       return res.status(403).json({
-        error: 'Test has not started yet',
-        examDate: resolvedExamDate,
-        slotLabel: String(test.slot_label || ''),
+        error: attemptAccess.error || 'Attempt not allowed',
+        attemptsUsed: attemptAccess.attemptsUsed,
+        attemptsAllowed: attemptAccess.attemptsAllowed,
+        retryAt: attemptAccess.retryAt || null,
       });
     }
-    let advancedMap = {};
-    try {
-      const parsed = JSON.parse(String(advancedMapRaw.rows?.[0]?.setting_value || '{}'));
-      advancedMap = parsed && typeof parsed === 'object' ? parsed : {};
-    } catch (_e) {
-      advancedMap = {};
+    const resolvedExamDate = resolveExamDate(test);
+    if (!isExamJoinAllowed(resolvedExamDate, test.slot_label, advancedConfig.lateJoinMinutes)) {
+      if (isBeforeExamStart(resolvedExamDate, test.slot_label)) {
+        return res.status(403).json({
+          error: 'Test has not started yet',
+          examDate: resolvedExamDate,
+          slotLabel: String(test.slot_label || ''),
+        });
+      }
+      return res.status(403).json({
+        error: 'Late join window has closed for this test',
+        examDate: resolvedExamDate,
+        slotLabel: String(test.slot_label || ''),
+        lateJoinMinutes: Math.max(0, Number(advancedConfig.lateJoinMinutes || 0)),
+      });
     }
-    const advancedConfig = normalizeTestAdvancedConfig(advancedMap[id]);
     const rowsRes = await pool.query(
       `SELECT id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation,
               COALESCE(subject_key, '') AS subject_key
@@ -485,7 +534,8 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
   try {
     await client.query('BEGIN');
     const testRes = await client.query(
-      `SELECT id, title, capacity_total, enrolled_count, exam_date, dynamic_date_enabled, date_cycle_days, last_cycle_started_at
+      `SELECT id, title, is_published, capacity_total, enrolled_count, exam_date, valid_until,
+              slot_label, dynamic_date_enabled, date_cycle_days, last_cycle_started_at
        FROM tests
        WHERE id = $1::uuid
        LIMIT 1
@@ -496,6 +546,13 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
     if (!test) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Test not found' });
+    }
+    const advancedMap = await loadAdvancedConfigMap();
+    const advancedConfig = normalizeTestAdvancedConfig(resolveAdvancedConfigForTest(advancedMap, test.id));
+    const visibilityError = catalogVisibilityError(test, advancedConfig);
+    if (visibilityError) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: visibilityError });
     }
     const alreadyRes = await client.query(
       `SELECT applied_at

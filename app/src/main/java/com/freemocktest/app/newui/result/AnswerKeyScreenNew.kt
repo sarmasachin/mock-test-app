@@ -95,9 +95,8 @@ fun AnswerKeyScreenNew(
             nowMs = System.currentTimeMillis()
         }
     }
-    val effectiveUnlockAtMs = maxOf(answerKeyReleaseAtMs ?: 0L, resultReleaseAtMs ?: 0L)
-    val isLocked = effectiveUnlockAtMs > nowMs
-    val countdown = formatCountdown(effectiveUnlockAtMs - nowMs)
+    val isLocked = (answerKeyReleaseAtMs ?: 0L) > nowMs
+    val countdown = formatCountdown((answerKeyReleaseAtMs ?: 0L) - nowMs)
 
     LaunchedEffect(testName, answerKeyReloadKey, isLocked) {
         if (isLocked) {

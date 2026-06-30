@@ -71,6 +71,7 @@ data class TestCardNew(
     val badgeEnabled: Boolean = false,
     val badgeText: String = "Live",
     val validUntil: String? = null,
+    val validUntilIso: String? = null,
     val answerKeyReleaseAt: String? = null,
     val resultReleaseAt: String? = null,
     val capacityTotal: Int? = null,
@@ -88,6 +89,9 @@ data class TestCardNew(
     val fullscreenRequired: Boolean = false,
     val copyPasteBlocked: Boolean = false,
     val notifyOnPublish: Boolean = true,
+    val attemptsAllowedCount: Int = 1,
+    val questionCountValue: Int = 0,
+    val totalMarksValue: Int = 0,
 )
 
 private const val TESTS_LOAD_ERROR_MESSAGE = "Couldn't load tests. Check your connection and try again."

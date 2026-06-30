@@ -333,6 +333,14 @@ fun StartTestPreviewScreenNew(
                     val secs = ((remainingMs % 60_000L) / 1_000L).toInt()
                     val countdown = String.format(Locale.US, "%02d:%02d:%02d", hours, mins, secs)
                     val isLocked = remainingMs > 0L
+                    val joinAllowed = TestScheduleUtils.isExamJoinAllowed(
+                        card.examDate,
+                        card.slotLabel,
+                        card.lateJoinMinutes,
+                        nowMs,
+                    )
+                    val lateJoinClosed = !isLocked && !joinAllowed &&
+                        TestScheduleUtils.isExamStartAllowed(card.examDate, card.slotLabel, nowMs)
                     val isPendingResult = AppPreferencesRepository.isTestBlockedByPendingResult(name, pendingResult)
                     val progress = if (isLocked) {
                         1f - (remainingMs.toFloat() / totalLockMs.toFloat()).coerceIn(0f, 1f)
@@ -360,6 +368,8 @@ fun StartTestPreviewScreenNew(
                     Text(
                         text = when {
                             isPendingResult -> "Result will be available soon"
+                            lateJoinClosed ->
+                                "Late join closed at ${TestScheduleUtils.formatLateJoinClosedLabel(card.examDate, card.slotLabel, card.lateJoinMinutes)}"
                             isLocked && cardScheduledMs != null && cardScheduledMs > nowMs ->
                                 "Locked until ${TestScheduleUtils.formatExamStartLabel(card.examDate, card.slotLabel)}"
                             isLocked -> "Starts in $countdown"
@@ -372,14 +382,13 @@ fun StartTestPreviewScreenNew(
                     Spacer(Modifier.height(8.dp))
                     Button(
                         onClick = {
-                            if (card.title.isBlank() || isPendingResult || isLocked) return@Button
-                            if (!TestScheduleUtils.isExamStartAllowed(card.examDate, card.slotLabel, nowMs)) return@Button
+                            if (card.title.isBlank() || isPendingResult || isLocked || !joinAllowed) return@Button
                             val now = System.currentTimeMillis()
                             if (now - lastPrimaryNavAt < 600L) return@Button
                             lastPrimaryNavAt = now
                             onStartTest(card.title)
                         },
-                        enabled = !isLocked && !isPendingResult && card.title.isNotBlank(),
+                        enabled = !isLocked && !isPendingResult && card.title.isNotBlank() && joinAllowed,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp),
@@ -394,7 +403,7 @@ fun StartTestPreviewScreenNew(
                         Icon(
                             imageVector = when {
                                 isPendingResult -> Icons.Outlined.Lock
-                                isLocked -> Icons.Outlined.Lock
+                                isLocked || lateJoinClosed -> Icons.Outlined.Lock
                                 else -> Icons.Outlined.PlayArrow
                             },
                             contentDescription = null,
@@ -404,6 +413,7 @@ fun StartTestPreviewScreenNew(
                         Text(
                             text = when {
                                 isPendingResult -> "Result Pending"
+                                lateJoinClosed -> "Late Join Closed"
                                 isLocked -> "Start Test (Locked)"
                                 else -> "Start Test"
                             },

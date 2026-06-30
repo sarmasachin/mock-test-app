@@ -35,6 +35,7 @@ const pollsRouter = require('./routes/polls');
 const { pool } = require('./db');
 const { clampMcqCorrectIndex } = require('./mcqShuffle');
 const { selectQuestionsFromSubcategoryPool } = require('./lib/subcategoryPoolSelection');
+const { enforceTestPublicationWindows } = require('./lib/testVisibility');
 const { sendPushToToken } = require('./notificationDispatch');
 const {
   isMailConfigured,
@@ -585,19 +586,43 @@ async function processPublishSchedules() {
         continue;
       }
       if (item.entityType === 'test') {
-        await regenerateTestFromSubcategoryPool(String(item.entityId || ''));
-        await pool.query(
-          `UPDATE tests
-           SET is_published = true, last_cycle_started_at = now(), updated_at = now()
-           WHERE id = $1::uuid`,
-          [String(item.entityId || '')],
-        );
-        await promoteWaitlistForTest(String(item.entityId || ''));
+        const action = String(item.action || 'publish').trim().toLowerCase();
+        if (action === 'unpublish') {
+          await pool.query(
+            `UPDATE tests
+             SET is_published = false, updated_at = now()
+             WHERE id = $1::uuid`,
+            [String(item.entityId || '')],
+          );
+        } else {
+          await regenerateTestFromSubcategoryPool(String(item.entityId || ''));
+          await pool.query(
+            `UPDATE tests
+             SET is_published = true, last_cycle_started_at = now(), updated_at = now()
+             WHERE id = $1::uuid`,
+            [String(item.entityId || '')],
+          );
+          await promoteWaitlistForTest(String(item.entityId || ''));
+          if (item.notifyOnPublish !== false) {
+            const advancedMap = await getSettingJson('testAdvancedConfigs', {});
+            const adv = resolveAdvancedConfigForTest(advancedMap, String(item.entityId || ''));
+            if (adv?.notifyOnPublish !== false) {
+              const titleRes = await pool.query(
+                `SELECT title FROM tests WHERE id = $1::uuid LIMIT 1`,
+                [String(item.entityId || '')],
+              );
+              const testTitle = String(titleRes.rows[0]?.title || 'New test').trim() || 'New test';
+              await enqueueScheduledPushNotification({
+                title: 'New Test Published',
+                message: `${testTitle} is now available.`,
+                target: 'all',
+                deepLink: 'main/tests',
+              });
+            }
+          }
+        }
       } else if (item.entityType === 'article') {
         await pool.query(`UPDATE news_articles SET is_published = true WHERE id = $1::uuid`, [String(item.entityId || '')]);
-      }
-      if (item.notifyOnPublish) {
-        // Push notification dispatch removed.
       }
       nextItems.push({
         ...item,
@@ -1013,6 +1038,7 @@ async function processMockTestStartReminderEmails() {
        ORDER BY created_at DESC
        LIMIT 8000`,
     );
+    const advancedMap = await getSettingJson('testAdvancedConfigs', {});
     const nowMs = Date.now();
     let changed = false;
 
@@ -1022,7 +1048,10 @@ async function processMockTestStartReminderEmails() {
       const startAtIso = buildExamStartIso(testRow.exam_date, testRow.slot_label);
       if (!startAtIso) continue;
       const diffMin = (Date.parse(startAtIso) - nowMs) / 60000;
-      if (diffMin < 55 || diffMin > 65) continue;
+      const adv = resolveAdvancedConfigForTest(advancedMap, testId) || {};
+      const notifyBefore = Math.max(0, Number(adv.notifyBeforeMinutes || 0));
+      const targetMinutes = notifyBefore > 0 ? notifyBefore : 60;
+      if (diffMin < targetMinutes - 5 || diffMin > targetMinutes + 5) continue;
 
       for (const userRow of usersRes.rows || []) {
         const email = String(userRow.email || '').trim();
@@ -1079,6 +1108,48 @@ async function setSettingJson(settingKey, value) {
      DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = now()`,
     [settingKey, JSON.stringify(value)],
   );
+}
+
+function resolveAdvancedConfigForTest(advancedMap, testId) {
+  const key = String(testId || '').trim();
+  if (!key || !advancedMap || typeof advancedMap !== 'object') return null;
+  const direct = advancedMap[key];
+  if (direct && typeof direct === 'object') return direct;
+  const lower = key.toLowerCase();
+  for (const [mapKey, value] of Object.entries(advancedMap)) {
+    if (String(mapKey).trim().toLowerCase() === lower && value && typeof value === 'object') {
+      return value;
+    }
+  }
+  return null;
+}
+
+async function enqueueScheduledPushNotification(payload) {
+  const current = await getSettingJson('notificationScheduling', { items: [] });
+  const items = Array.isArray(current.items) ? current.items : [];
+  const next = {
+    ...current,
+    items: [
+      {
+        id: `schedule-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
+        title: String(payload.title || '').slice(0, 100),
+        message: String(payload.message || '').slice(0, 300),
+        target: String(payload.target || 'all'),
+        segmentKey: String(payload.segmentKey || ''),
+        scheduleAt: String(payload.scheduleAt || new Date().toISOString()),
+        repeatType: 'none',
+        dayOfWeek: 1,
+        dayOfMonth: 1,
+        repeatUntil: '',
+        status: 'scheduled',
+        createdAt: new Date().toISOString(),
+        sentAt: '',
+        deepLink: String(payload.deepLink || '').trim(),
+      },
+      ...items,
+    ],
+  };
+  await setSettingJson('notificationScheduling', next);
 }
 
 async function sendPushToAudience({ title, message, target, deepLink }) {
@@ -1681,6 +1752,12 @@ async function processBirthdayEmails() {
 
 setInterval(() => {
   processPublishSchedules();
+}, 60000);
+setInterval(() => {
+  enforceTestPublicationWindows().catch((e) => {
+    if (e && e.code === '42P01') return;
+    console.error('test_publication_window_enforcement_error', e);
+  });
 }, 60000);
 setInterval(() => {
   processNotificationSchedules();

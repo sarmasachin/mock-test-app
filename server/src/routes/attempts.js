@@ -3,6 +3,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { insertAttemptRow } = require('../queues/attemptSubmitQueue');
+const { assertUserCanStartAttempt } = require('../lib/testAttempts');
 
 const router = express.Router();
 const submitWindowMs = Math.max(1000, Number(process.env.ATTEMPT_SUBMIT_WINDOW_MS || 10000));
@@ -90,6 +91,35 @@ router.post('/', async (req, res) => {
         total: row.total,
         completedAt: row.completed_at,
         testCatalogId: row.test_catalog_id,
+      });
+    }
+
+    const testRes = await pool.query(
+      `SELECT id, attempts_allowed FROM tests WHERE id = $1::uuid LIMIT 1`,
+      [catalog],
+    );
+    const testRow = testRes.rows[0];
+    if (!testRow) {
+      return res.status(400).json({ error: 'Invalid testCatalogId' });
+    }
+    let advancedConfig = {};
+    try {
+      const advRes = await pool.query(
+        `SELECT setting_value FROM app_settings WHERE setting_key = 'testAdvancedConfigs' LIMIT 1`,
+      );
+      const parsed = JSON.parse(String(advRes.rows?.[0]?.setting_value || '{}'));
+      const map = parsed && typeof parsed === 'object' ? parsed : {};
+      advancedConfig = map[catalog] || map[String(catalog).toLowerCase()] || {};
+    } catch (_e) {
+      advancedConfig = {};
+    }
+    const attemptAccess = await assertUserCanStartAttempt(pool, req.userId, testRow, advancedConfig);
+    if (!attemptAccess.allowed) {
+      return res.status(403).json({
+        error: attemptAccess.error || 'Attempt not allowed',
+        attemptsUsed: attemptAccess.attemptsUsed,
+        attemptsAllowed: attemptAccess.attemptsAllowed,
+        retryAt: attemptAccess.retryAt || null,
       });
     }
 

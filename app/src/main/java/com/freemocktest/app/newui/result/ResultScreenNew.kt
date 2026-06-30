@@ -92,6 +92,9 @@ fun ResultScreenNew(
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var answerKeyReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
     var resultReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
+    var resultVisibility by remember(testName) { mutableStateOf("immediate") }
+    var totalMarksValue by remember(testName) { mutableStateOf(0) }
+    var negativeMarkingText by remember(testName) { mutableStateOf<String?>(null) }
     var questionCount by remember(testName) { mutableStateOf<Int?>(null) }
     var questionsLoadFailed by remember(testName) { mutableStateOf(false) }
     var questionsReloadKey by remember(testName) { mutableIntStateOf(0) }
@@ -101,11 +104,19 @@ fun ResultScreenNew(
         cached?.let {
             answerKeyReleaseAtMs = parseIsoMillis(it.answerKeyReleaseAt)
             resultReleaseAtMs = parseIsoMillis(it.resultReleaseAt)
+            resultVisibility = it.resultVisibility?.trim()?.lowercase(java.util.Locale.US).orEmpty()
+                .ifBlank { "immediate" }
+            totalMarksValue = it.totalMarksValue
+            negativeMarkingText = it.negativeMarkingText
         }
         val remote = runCatching { ContentRepository.loadTestByTitle(testName, forceRefresh = true) }.getOrNull()
         remote?.let {
             answerKeyReleaseAtMs = parseIsoMillis(it.answerKeyReleaseAt)
             resultReleaseAtMs = parseIsoMillis(it.resultReleaseAt)
+            resultVisibility = it.resultVisibility?.trim()?.lowercase(java.util.Locale.US).orEmpty()
+                .ifBlank { "immediate" }
+            totalMarksValue = it.totalMarksValue
+            negativeMarkingText = it.negativeMarkingText
         }
     }
     LaunchedEffect(Unit) {
@@ -115,10 +126,27 @@ fun ResultScreenNew(
         }
     }
     val safeTotal = total.coerceAtLeast(answered).coerceAtLeast(correct + wrong)
-    val scoreDisplayText = if (scoreVisible) "$correct / ${safeTotal.coerceAtLeast(1)}" else "-"
+    val scored = com.freemocktest.app.util.ExamScoringUtils.computeExamScore(
+        correct = correct,
+        wrong = wrong,
+        totalQuestions = questionCount ?: safeTotal,
+        totalMarks = totalMarksValue,
+        negativeMarkingText = negativeMarkingText,
+    )
+    val scoreDisplayText = when {
+        !scoreVisible -> "-"
+        totalMarksValue > 0 || scored.negativeMarkingEnabled -> {
+            "${formatScoreMarks(scored.scoreMarks)} / ${formatScoreMarks(scored.maxMarks)} marks"
+        }
+        else -> "$correct / ${safeTotal.coerceAtLeast(1)}"
+    }
     val hasAttemptData = safeTotal > 0 || answered > 0 || correct > 0 || wrong > 0
     val shouldShowSubmitApplicationGate = !hasAttemptData && appliedSeries.isEmpty()
-    val effectiveResultReleaseAt = maxOf(resultReleaseAtMs ?: 0L, publishAtMillisOverride ?: 0L)
+    val effectiveResultReleaseAt = if (com.freemocktest.app.util.TestScheduleUtils.isResultReleaseDeferred(resultVisibility)) {
+        maxOf(resultReleaseAtMs ?: 0L, publishAtMillisOverride ?: 0L)
+    } else {
+        0L
+    }
     val isResultLocked = effectiveResultReleaseAt > nowMs
     val isAnswerKeyLocked = (answerKeyReleaseAtMs ?: 0L) > nowMs
     val resultCountdown = formatCountdown(effectiveResultReleaseAt - nowMs)
@@ -667,6 +695,10 @@ private fun SolidPillButton(
     ) {
         Text(text = text, fontWeight = FontWeight.Bold)
     }
+}
+
+private fun formatScoreMarks(value: Double): String {
+    return if (value % 1.0 == 0.0) value.toInt().toString() else String.format(java.util.Locale.US, "%.2f", value)
 }
 
 private fun parseIsoMillis(iso: String?): Long? {

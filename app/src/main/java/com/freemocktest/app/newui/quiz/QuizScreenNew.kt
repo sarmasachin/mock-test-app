@@ -1,13 +1,14 @@
 @file:OptIn(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     kotlinx.coroutines.FlowPreview::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
 )
 
 package com.freemocktest.app.newui.quiz
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -37,7 +38,14 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.foundation.clickable
+import android.app.Activity
+import android.view.WindowManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.material3.AlertDialog
@@ -83,6 +91,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import java.time.Instant
+import java.util.Locale
 
 @Composable
 fun QuizScreenNew(
@@ -94,6 +103,7 @@ fun QuizScreenNew(
     onSubmit: (Int, Int, Int, Int, Long) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val defaultResultReleaseAtMs = remember {
         System.currentTimeMillis() + BuildConfig.RESULT_RELEASE_DELAY_HOURS * 60L * 60L * 1000L
     }
@@ -134,6 +144,7 @@ fun QuizScreenNew(
     var submitDialogTitle by remember { mutableStateOf("Are you sure want to submit test") }
     var submitDialogSubtitle by remember { mutableStateOf("After submitting test you won't be able to re-attempt") }
     var resultReleaseAtMs by remember(testName) { mutableStateOf<Long?>(null) }
+    var resultVisibility by remember(testName) { mutableStateOf("immediate") }
     var fullscreenRequired by remember(testName) { mutableStateOf(false) }
     var copyPasteBlocked by remember(testName) { mutableStateOf(false) }
     var resumeEnabled by remember(testName) { mutableStateOf(true) }
@@ -155,6 +166,8 @@ fun QuizScreenNew(
             questionNavigationMode = mode
             val testCard = ContentRepository.loadTestByTitle(testName)
             resultReleaseAtMs = parseIsoMillis(testCard?.resultReleaseAt)
+            resultVisibility = testCard?.resultVisibility?.trim()?.lowercase(Locale.US).orEmpty()
+                .ifBlank { "immediate" }
             fullscreenRequired = testCard?.fullscreenRequired == true
             copyPasteBlocked = testCard?.copyPasteBlocked == true
             resumeEnabled = testCard?.resumeEnabled != false
@@ -206,12 +219,29 @@ fun QuizScreenNew(
         quizSessionInitialized = true
         val trimmedName = testName.trim().ifBlank { "Test" }
         val owner = attemptsUserKey.trim().ifBlank { "guest" }
+        var allowResume = true
         // Resume snapshot read can throw (DataStore corruption / IO). On any failure we fall
         // back to a fresh session with the configured duration so the user is never stranded
         // with `quizSessionReady = false` (which would leave the timer effect inert and the
         // quiz UI permanently disabled).
         try {
-            val saved = AppPreferencesRepository.getResumableQuizSession(owner, trimmedName)
+            val testCard = runCatching { ContentRepository.loadTestByTitle(trimmedName) }.getOrNull()
+            if (testCard != null) {
+                allowResume = testCard.resumeEnabled != false
+                resumeEnabled = allowResume
+                fullscreenRequired = testCard.fullscreenRequired
+                copyPasteBlocked = testCard.copyPasteBlocked
+            } else {
+                allowResume = resumeEnabled
+            }
+            if (!allowResume) {
+                runCatching { AppPreferencesRepository.clearInProgressQuizNow() }
+            }
+            val saved = if (allowResume) {
+                AppPreferencesRepository.getResumableQuizSession(owner, trimmedName)
+            } else {
+                null
+            }
             val now = System.currentTimeMillis()
             if (saved != null) {
                 deadlineAtMillis = saved.deadlineAtMillis
@@ -232,20 +262,22 @@ fun QuizScreenNew(
             deadlineAtMillis = System.currentTimeMillis() + durSec * 1000L
         }
         quizSessionReady = true
-        runCatching {
-            AppPreferencesRepository.saveInProgressQuizNow(
-                AppPreferencesRepository.InProgressQuizState(
-                    ownerUserKey = owner,
-                    testName = trimmedName,
-                    testCatalogId = testCatalogId.trim(),
-                    deadlineAtMillis = deadlineAtMillis,
-                    currentQuestionIndex = current,
-                    answers = answers.toMap(),
-                    questionNavigationMode = questionNavigationMode,
-                    resultReleaseAtMillis = resultReleaseAtMs,
-                    configuredDurationSeconds = configuredDurationSeconds.coerceAtLeast(60),
-                ),
-            )
+        if (allowResume) {
+            runCatching {
+                AppPreferencesRepository.saveInProgressQuizNow(
+                    AppPreferencesRepository.InProgressQuizState(
+                        ownerUserKey = owner,
+                        testName = trimmedName,
+                        testCatalogId = testCatalogId.trim(),
+                        deadlineAtMillis = deadlineAtMillis,
+                        currentQuestionIndex = current,
+                        answers = answers.toMap(),
+                        questionNavigationMode = questionNavigationMode,
+                        resultReleaseAtMillis = resultReleaseAtMs,
+                        configuredDurationSeconds = configuredDurationSeconds.coerceAtLeast(60),
+                    ),
+                )
+            }
         }
     }
 
@@ -272,7 +304,17 @@ fun QuizScreenNew(
         val correct = answers.count { (q, ans) -> displayQuestions.getOrNull(q)?.correctIndex == ans }
         val answered = answers.size
         val wrong = (answered - correct).coerceAtLeast(0)
-        onSubmit(answered, correct, wrong, totalQuestions, resultReleaseAtMs ?: defaultResultReleaseAtMs)
+        onSubmit(
+            answered,
+            correct,
+            wrong,
+            totalQuestions,
+            com.freemocktest.app.util.TestScheduleUtils.resolveResultReleaseMillisForSubmit(
+                resultVisibility = resultVisibility,
+                resultReleaseAtMs = resultReleaseAtMs,
+                defaultReleaseAtMs = defaultResultReleaseAtMs,
+            ),
+        )
     }
 
     LaunchedEffect(
@@ -284,8 +326,9 @@ fun QuizScreenNew(
         resultReleaseAtMs,
         configuredDurationSeconds,
         testCatalogId,
+        resumeEnabled,
     ) {
-        if (!quizSessionReady || deadlineAtMillis <= 0L) return@LaunchedEffect
+        if (!quizSessionReady || deadlineAtMillis <= 0L || !resumeEnabled) return@LaunchedEffect
         val trimmedName = testName.trim().ifBlank { "Test" }
         val owner = attemptsUserKey.trim().ifBlank { "guest" }
         snapshotFlow { current to answers.toMap() }
@@ -327,10 +370,12 @@ fun QuizScreenNew(
     val testNameRef = rememberUpdatedState(testName)
     val attemptsUserKeyRef = rememberUpdatedState(attemptsUserKey)
     val suppressOnPauseProgressFlushRef = rememberUpdatedState(suppressOnPauseProgressFlush)
+    val resumeEnabledRef = rememberUpdatedState(resumeEnabled)
     DisposableEffect(lifecycleOwner, scope) {
         val observer = LifecycleEventObserver { _, event ->
             if (event != Lifecycle.Event.ON_PAUSE) return@LifecycleEventObserver
             if (suppressOnPauseProgressFlushRef.value) return@LifecycleEventObserver
+            if (!resumeEnabledRef.value) return@LifecycleEventObserver
             if (
                 !quizSessionReadyRef.value ||
                 deadlineAtMillisRef.value <= 0L ||
@@ -383,6 +428,35 @@ fun QuizScreenNew(
 
     BackHandler {
         showExitConfirm = true
+    }
+
+    DisposableEffect(fullscreenRequired, copyPasteBlocked) {
+        val activity = context as? Activity
+        if (activity == null) return@DisposableEffect onDispose {}
+        val window = activity.window
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        var appliedFullscreen = false
+        var appliedSecure = false
+        if (fullscreenRequired) {
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            appliedFullscreen = true
+        }
+        if (copyPasteBlocked) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            appliedSecure = true
+        }
+        onDispose {
+            if (appliedFullscreen) {
+                controller.show(WindowInsetsCompat.Type.systemBars())
+                WindowCompat.setDecorFitsSystemWindows(window, true)
+            }
+            if (appliedSecure) {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
+        }
     }
 
     val isLoadingQuestions = !questionsLoaded
@@ -567,6 +641,7 @@ fun QuizScreenNew(
                     title = questionTitle,
                     options = activeQuestion.options,
                     selected = answers[current],
+                    copyPasteBlocked = copyPasteBlocked,
                     onSelect = { option -> answers[current] = option },
                 )
             }
@@ -658,7 +733,17 @@ fun QuizScreenNew(
                     val correct = answers.count { (q, ans) -> displayQuestions.getOrNull(q)?.correctIndex == ans }
                     val answered = answers.size
                     val wrong = (answered - correct).coerceAtLeast(0)
-                    onSubmit(answered, correct, wrong, totalQuestions, resultReleaseAtMs ?: defaultResultReleaseAtMs)
+                    onSubmit(
+            answered,
+            correct,
+            wrong,
+            totalQuestions,
+            com.freemocktest.app.util.TestScheduleUtils.resolveResultReleaseMillisForSubmit(
+                resultVisibility = resultVisibility,
+                resultReleaseAtMs = resultReleaseAtMs,
+                defaultReleaseAtMs = defaultResultReleaseAtMs,
+            ),
+        )
                 }
             },
         )
@@ -1006,6 +1091,7 @@ private fun QuestionCard(
     title: String,
     options: List<String>,
     selected: Int?,
+    copyPasteBlocked: Boolean,
     onSelect: (Int) -> Unit,
 ) {
     val p = mockTestPalette()
@@ -1028,6 +1114,7 @@ private fun QuestionCard(
                 OptionRow(
                     text = text,
                     selected = selected == idx,
+                    copyPasteBlocked = copyPasteBlocked,
                     onClick = { onSelect(idx) },
                 )
                 Spacer(Modifier.height(10.dp))
@@ -1040,20 +1127,31 @@ private fun QuestionCard(
 private fun OptionRow(
     text: String,
     selected: Boolean,
+    copyPasteBlocked: Boolean,
     onClick: () -> Unit,
 ) {
     val p = mockTestPalette()
     val shape = RoundedCornerShape(16.dp)
     val borderCol = if (selected) p.primaryButton else p.border.copy(alpha = 0.14f)
+    val rowModifier = Modifier
+        .fillMaxWidth()
+        .defaultMinSize(minHeight = 52.dp)
+        .clip(shape)
+        .background(p.surface)
+        .border(1.dp, borderCol, shape)
+        .then(
+            if (copyPasteBlocked) {
+                Modifier.combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { /* consume long-press copy */ },
+                )
+            } else {
+                Modifier.clickable(onClick = onClick)
+            },
+        )
+        .padding(horizontal = 14.dp, vertical = 10.dp)
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .defaultMinSize(minHeight = 52.dp)
-            .clip(shape)
-            .background(p.surface)
-            .border(1.dp, borderCol, shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+        modifier = rowModifier,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioDot(selected = selected)

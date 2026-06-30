@@ -38,6 +38,53 @@ object TestScheduleUtils {
         return nowMs >= startMs
     }
 
+    fun isLateJoinWindowClosed(
+        examDate: String?,
+        slotLabel: String?,
+        lateJoinMinutes: Int,
+        nowMs: Long = System.currentTimeMillis(),
+    ): Boolean {
+        val lateMin = lateJoinMinutes.coerceAtLeast(0)
+        if (lateMin <= 0) return false
+        val startMs = parseExamStartMillis(examDate, slotLabel) ?: return false
+        return nowMs > startMs + lateMin * 60_000L
+    }
+
+    /** True when user may enter the test (started and within late-join window, if configured). */
+    fun isExamJoinAllowed(
+        examDate: String?,
+        slotLabel: String?,
+        lateJoinMinutes: Int = 0,
+        nowMs: Long = System.currentTimeMillis(),
+    ): Boolean {
+        if (!isExamStartAllowed(examDate, slotLabel, nowMs)) return false
+        if (isLateJoinWindowClosed(examDate, slotLabel, lateJoinMinutes, nowMs)) return false
+        return true
+    }
+
+    fun formatLateJoinClosedLabel(examDate: String?, slotLabel: String?, lateJoinMinutes: Int): String {
+        val startMs = parseExamStartMillis(examDate, slotLabel) ?: return "the late join window"
+        val endMs = startMs + lateJoinMinutes.coerceAtLeast(0) * 60_000L
+        val formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a", Locale.getDefault())
+        return formatter.format(java.time.Instant.ofEpochMilli(endMs).atZone(EXAM_ZONE))
+    }
+
+    /** User-facing reason when join is blocked; null when join is allowed. */
+    fun examJoinBlockMessage(
+        examDate: String?,
+        slotLabel: String?,
+        lateJoinMinutes: Int = 0,
+        nowMs: Long = System.currentTimeMillis(),
+    ): String? {
+        if (!isExamStartAllowed(examDate, slotLabel, nowMs)) {
+            return "Test starts on ${formatExamStartLabel(examDate, slotLabel)}"
+        }
+        if (isLateJoinWindowClosed(examDate, slotLabel, lateJoinMinutes, nowMs)) {
+            return "Late join window closed at ${formatLateJoinClosedLabel(examDate, slotLabel, lateJoinMinutes)}"
+        }
+        return null
+    }
+
     fun formatExamStartLabel(examDate: String?, slotLabel: String?): String {
         val startMs = parseExamStartMillis(examDate, slotLabel) ?: return "the scheduled time"
         val formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a", Locale.getDefault())
@@ -75,6 +122,72 @@ object TestScheduleUtils {
         } else {
             base
         }
+    }
+
+    fun isTestListingVisible(
+        validUntilIso: String?,
+        publishAt: String?,
+        unpublishAt: String?,
+        nowMs: Long = System.currentTimeMillis(),
+    ): Boolean {
+        if (isPastValidUntil(validUntilIso, nowMs)) return false
+        if (isBeforeScheduledPublish(publishAt, nowMs)) return false
+        if (isAfterScheduledUnpublish(unpublishAt, nowMs)) return false
+        return true
+    }
+
+    fun isPastValidUntil(validUntilIso: String?, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val raw = validUntilIso?.trim()?.takeIf { it.isNotBlank() } ?: return false
+        val dateOnly = if (raw.length >= 10) raw.substring(0, 10) else raw
+        val localDate = parseLocalExamDate(dateOnly) ?: return false
+        val endMs = localDate.atTime(23, 59, 59, 999_000_000)
+            .atZone(EXAM_ZONE)
+            .toInstant()
+            .toEpochMilli()
+        return nowMs > endMs
+    }
+
+    fun isBeforeScheduledPublish(publishAt: String?, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val ms = parseIsoMillis(publishAt) ?: return false
+        return nowMs < ms
+    }
+
+    fun isAfterScheduledUnpublish(unpublishAt: String?, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val ms = parseIsoMillis(unpublishAt) ?: return false
+        return nowMs >= ms
+    }
+
+    fun parseIsoMillis(iso: String?): Long? {
+        val raw = iso?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        return try {
+            java.time.Instant.parse(raw).toEpochMilli()
+        } catch (_: Exception) {
+            try {
+                java.time.ZonedDateTime.parse(raw).toInstant().toEpochMilli()
+            } catch (_: Exception) {
+                try {
+                    LocalDateTime.parse(raw, DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                        .atZone(EXAM_ZONE)
+                        .toInstant()
+                        .toEpochMilli()
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        }
+    }
+
+    fun isResultReleaseDeferred(resultVisibility: String?): Boolean {
+        return resultVisibility?.trim()?.equals("after_result_time", ignoreCase = true) == true
+    }
+
+    fun resolveResultReleaseMillisForSubmit(
+        resultVisibility: String?,
+        resultReleaseAtMs: Long?,
+        defaultReleaseAtMs: Long,
+    ): Long {
+        if (!isResultReleaseDeferred(resultVisibility)) return 0L
+        return resultReleaseAtMs?.takeIf { it > 0L } ?: defaultReleaseAtMs
     }
 
     private fun parseLocalExamDate(raw: String): LocalDate? {

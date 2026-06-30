@@ -47,8 +47,24 @@ function isBeforeExamStart(examDate, slotLabel, nowMs = Date.now()) {
   return nowMs < startMs;
 }
 
+function isAfterLateJoinWindow(examDate, slotLabel, lateJoinMinutes, nowMs = Date.now()) {
+  const lateMin = Math.max(0, Number(lateJoinMinutes || 0));
+  if (lateMin <= 0) return false;
+  const startMs = buildExamStartMs(examDate, slotLabel);
+  if (startMs == null) return false;
+  return nowMs > startMs + lateMin * 60 * 1000;
+}
+
+function isExamJoinAllowed(examDate, slotLabel, lateJoinMinutes, nowMs = Date.now()) {
+  if (isBeforeExamStart(examDate, slotLabel, nowMs)) return false;
+  if (isAfterLateJoinWindow(examDate, slotLabel, lateJoinMinutes, nowMs)) return false;
+  return true;
+}
+
 module.exports = {
   parseHourMinuteFromSlotLabel,
   buildExamStartMs,
   isBeforeExamStart,
+  isAfterLateJoinWindow,
+  isExamJoinAllowed,
 };

@@ -24,6 +24,11 @@ const {
   sendAdminRoleGrantedEmail,
 } = require('../mail');
 const {
+  resolveEffectivePublishedState,
+  syncTestPublishScheduleFromAdvancedConfig,
+} = require('../lib/testVisibility');
+const { syncTestQuestionCount } = require('../lib/syncTestQuestionCount');
+const {
   INPUT_MIME_TO_EXT,
   normalizeAdminImageExportFormats,
   processAdminImageUpload,
@@ -1617,8 +1622,8 @@ function normalizeTestPayload(body) {
   const examMode = String(payload.examMode || 'Practice').trim().slice(0, 40) || 'Practice';
   const negativeMarkingText = String(payload.negativeMarkingText || 'No').trim().slice(0, 40) || 'No';
   const testTypeLabel = String(payload.testTypeLabel || 'Full Mock').trim().slice(0, 40) || 'Full Mock';
-  const badgeEnabled = payload.badgeEnabled === true;
   const badgeText = String(payload.badgeText || 'Live').trim().slice(0, 40) || 'Live';
+  const badgeEnabled = payload.badgeEnabled === true || badgeText.length > 0;
   const examDate = String(payload.examDate || '').trim();
   const validUntil = String(payload.validUntil || '').trim();
   const answerKeyReleaseAt = String(payload.answerKeyReleaseAt || '').trim();
@@ -2740,6 +2745,7 @@ router.post('/tests', async (req, res) => {
   const advancedParsed = normalizeTestAdvancedConfig((req.body || {}).advancedConfig);
   if (advancedParsed.error) return res.status(400).json({ error: advancedParsed.error });
   const advancedConfig = advancedParsed.value;
+  const effectivePublished = resolveEffectivePublishedState(data.isPublished, advancedConfig);
   try {
     const { rows } = await pool.query(
       `INSERT INTO tests (
@@ -2760,7 +2766,7 @@ router.post('/tests', async (req, res) => {
         data.durationMinutes,
         data.questionCount,
         data.testKind,
-        data.isPublished,
+        effectivePublished,
         data.dynamicFluctuationOnPublish,
         data.examDate || null,
         data.totalMarks,
@@ -2781,7 +2787,7 @@ router.post('/tests', async (req, res) => {
         data.dateCycleDays,
       ],
     );
-    if (data.isPublished) {
+    if (effectivePublished) {
       await pool.query(
         `UPDATE tests
          SET last_cycle_started_at = now(), updated_at = now()
@@ -2813,6 +2819,7 @@ router.post('/tests', async (req, res) => {
       currentAdvancedMap && typeof currentAdvancedMap === 'object' ? { ...currentAdvancedMap } : {};
     nextAdvancedMap[testSettingKey(rows[0].id)] = advancedConfig;
     await setJsonSetting('testAdvancedConfigs', nextAdvancedMap, req.userId);
+    await syncTestPublishScheduleFromAdvancedConfig(rows[0].id, advancedConfig, req.userId);
     return res.status(201).json({ item: { ...rows[0], advanced_config: advancedConfig } });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'Slug already exists' });
@@ -2830,11 +2837,12 @@ router.patch('/tests/:id', async (req, res) => {
   const advancedParsed = normalizeTestAdvancedConfig((req.body || {}).advancedConfig);
   if (advancedParsed.error) return res.status(400).json({ error: advancedParsed.error });
   const advancedConfig = advancedParsed.value;
+  const effectivePublished = resolveEffectivePublishedState(data.isPublished, advancedConfig);
   const body = req.body || {};
   const hasDynamicFluctuationValue = Object.prototype.hasOwnProperty.call(body, 'dynamicFluctuationOnPublish');
   try {
     const before = await pool.query(
-      `SELECT id, title, is_published, last_cycle_started_at,
+      `SELECT id, title, is_published, last_cycle_started_at, enrolled_count,
               COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
        FROM tests
        WHERE id = $1::uuid
@@ -2866,13 +2874,13 @@ router.patch('/tests/:id', async (req, res) => {
         data.durationMinutes,
         data.questionCount,
         data.testKind,
-        data.isPublished,
+        effectivePublished,
         dynamicFluctuationOnPublish,
         data.examDate || null,
         data.totalMarks,
         data.slotLabel,
         data.capacityTotal,
-        data.enrolledCount,
+        Math.max(0, Number(beforeRow.enrolled_count || 0)),
         data.attemptsAllowed,
         data.languageMode,
         data.examMode,
@@ -2930,6 +2938,7 @@ router.patch('/tests/:id', async (req, res) => {
       currentAdvancedMap && typeof currentAdvancedMap === 'object' ? { ...currentAdvancedMap } : {};
     nextAdvancedMap[testSettingKey(id)] = advancedConfig;
     await setJsonSetting('testAdvancedConfigs', nextAdvancedMap, req.userId);
+    await syncTestPublishScheduleFromAdvancedConfig(id, advancedConfig, req.userId);
     return res.json({ item: { ...rows[0], advanced_config: advancedConfig } });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'Slug already exists' });
@@ -3038,6 +3047,7 @@ router.post('/tests/:id/questions', async (req, res) => {
     if (!created) {
       return res.status(409).json({ error: 'Please retry. Could not assign question position safely.' });
     }
+    await syncTestQuestionCount(pool, id);
     return res.status(201).json({ item: created });
   } catch (e) {
     console.error(e);
@@ -3115,6 +3125,7 @@ router.post('/tests/:id/questions/import', async (req, res) => {
         inserted += 1;
       }
       await client.query('COMMIT');
+      await syncTestQuestionCount(pool, id);
       return res.status(201).json({ ok: true, inserted, mode });
     } catch (e) {
       await client.query('ROLLBACK').catch(() => {});
@@ -3162,6 +3173,7 @@ router.patch('/tests/:id/questions/:questionId', async (req, res) => {
       ],
     );
     if (!rows[0]) return res.status(404).json({ error: 'Question not found' });
+    await syncTestQuestionCount(pool, id);
     return res.json({ item: rows[0] });
   } catch (e) {
     console.error(e);
@@ -3177,6 +3189,7 @@ router.delete('/tests/:id/questions/:questionId', async (req, res) => {
   try {
     const del = await pool.query(`DELETE FROM questions WHERE id = $1 AND test_id = $2::uuid`, [qid, id]);
     if (!del.rowCount) return res.status(404).json({ error: 'Question not found' });
+    await syncTestQuestionCount(pool, id);
     return res.status(204).send();
   } catch (e) {
     console.error(e);

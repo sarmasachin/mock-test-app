@@ -51,6 +51,7 @@ import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.data.TestHistoryRepository
 import com.freemocktest.app.util.TestScheduleUtils
+import com.freemocktest.app.util.TestAttemptPolicy
 import com.freemocktest.app.newui.alerts.ExamAlertFeedImageSeedPrefix
 import com.freemocktest.app.newui.alerts.ExamAlertScreenNew
 import com.freemocktest.app.newui.alerts.JobAlertFeedImageSeedPrefix
@@ -208,10 +209,29 @@ fun MainBottomNavHost(
             val card = runCatching {
                 ContentRepository.loadTestByTitle(safeName, allowDefaultFallback = false)
             }.getOrNull()
-            if (card != null && !TestScheduleUtils.isExamStartAllowed(card.examDate, card.slotLabel)) {
+            if (card != null) {
+                val blockMsg = TestScheduleUtils.examJoinBlockMessage(
+                    card.examDate,
+                    card.slotLabel,
+                    card.lateJoinMinutes,
+                )
+                if (blockMsg != null) {
+                    Toast.makeText(context, blockMsg, Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+            }
+            val attemptsUsed = TestHistoryRepository.countAttempts(attemptsUserKey, safeName)
+            val lastAttemptAt = TestHistoryRepository.lastAttemptAtMillis(attemptsUserKey, safeName)
+            val attemptAccess = TestAttemptPolicy.evaluate(
+                attemptsAllowed = card?.attemptsAllowedCount ?: 1,
+                reattemptCooldownMinutes = card?.reattemptCooldownMinutes ?: 0,
+                attemptsUsed = attemptsUsed,
+                lastAttemptAtMillis = lastAttemptAt,
+            )
+            if (!attemptAccess.allowed) {
                 Toast.makeText(
                     context,
-                    "Test starts on ${TestScheduleUtils.formatExamStartLabel(card.examDate, card.slotLabel)}",
+                    attemptAccess.message ?: "Attempt not allowed for this test",
                     Toast.LENGTH_LONG,
                 ).show()
                 return@launch
@@ -224,6 +244,13 @@ fun MainBottomNavHost(
         val pending = pendingResult
         val snap = AppPreferencesRepository.peekValidInProgressQuiz(attemptsUserKey) ?: return@LaunchedEffect
         if (pending != null && AppPreferencesRepository.isTestBlockedByPendingResult(snap.testName, pending)) {
+            return@LaunchedEffect
+        }
+        val card = runCatching {
+            ContentRepository.loadTestByTitle(snap.testName.trim(), allowDefaultFallback = false)
+        }.getOrNull()
+        if (card?.resumeEnabled == false) {
+            runCatching { AppPreferencesRepository.clearInProgressQuizNow() }
             return@LaunchedEffect
         }
         val route = navBackStackEntry?.destination?.route.orEmpty()
@@ -533,13 +560,16 @@ fun MainBottomNavHost(
                             val card = runCatching {
                                 ContentRepository.loadTestByTitle(test.trim(), allowDefaultFallback = false)
                             }.getOrNull()
-                            if (card != null && !TestScheduleUtils.isExamStartAllowed(card.examDate, card.slotLabel)) {
-                                Toast.makeText(
-                                    context,
-                                    "Test starts on ${TestScheduleUtils.formatExamStartLabel(card.examDate, card.slotLabel)}",
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                                return@launch
+                            if (card != null) {
+                                val blockMsg = TestScheduleUtils.examJoinBlockMessage(
+                                    card.examDate,
+                                    card.slotLabel,
+                                    card.lateJoinMinutes,
+                                )
+                                if (blockMsg != null) {
+                                    Toast.makeText(context, blockMsg, Toast.LENGTH_LONG).show()
+                                    return@launch
+                                }
                             }
                             mainNavController.navigate("${RoutesNew.INSTRUCTIONS}/$test")
                         }
@@ -595,14 +625,34 @@ fun MainBottomNavHost(
                     }
                     return@composable
                 }
-                LaunchedEffect(decodedQuizName) {
+                LaunchedEffect(decodedQuizName, attemptsUserKey) {
                     val card = runCatching {
                         ContentRepository.loadTestByTitle(decodedQuizName, allowDefaultFallback = false)
                     }.getOrNull()
-                    if (card != null && !TestScheduleUtils.isExamStartAllowed(card.examDate, card.slotLabel)) {
+                    if (card != null) {
+                        val blockMsg = TestScheduleUtils.examJoinBlockMessage(
+                            card.examDate,
+                            card.slotLabel,
+                            card.lateJoinMinutes,
+                        )
+                        if (blockMsg != null) {
+                            Toast.makeText(context, blockMsg, Toast.LENGTH_LONG).show()
+                            mainNavController.goToHomeTab()
+                            return@LaunchedEffect
+                        }
+                    }
+                    val attemptsUsed = TestHistoryRepository.countAttempts(attemptsUserKey, decodedQuizName)
+                    val lastAttemptAt = TestHistoryRepository.lastAttemptAtMillis(attemptsUserKey, decodedQuizName)
+                    val attemptAccess = TestAttemptPolicy.evaluate(
+                        attemptsAllowed = card?.attemptsAllowedCount ?: 1,
+                        reattemptCooldownMinutes = card?.reattemptCooldownMinutes ?: 0,
+                        attemptsUsed = attemptsUsed,
+                        lastAttemptAtMillis = lastAttemptAt,
+                    )
+                    if (!attemptAccess.allowed) {
                         Toast.makeText(
                             context,
-                            "Test starts on ${TestScheduleUtils.formatExamStartLabel(card.examDate, card.slotLabel)}",
+                            attemptAccess.message ?: "Attempt not allowed for this test",
                             Toast.LENGTH_LONG,
                         ).show()
                         mainNavController.goToHomeTab()

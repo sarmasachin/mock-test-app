@@ -93,4 +93,24 @@ object TestHistoryRepository {
             }
         }
     }
+
+    suspend fun countAttempts(userKey: String, testName: String): Int {
+        val d = dao ?: return 0
+        val safeUserKey = userKey.trim().ifBlank { "guest" }
+        val safeName = testName.trim()
+        if (safeName.isBlank()) return 0
+        return withContext(Dispatchers.IO) {
+            runCatching { d.countByUserAndTest(safeUserKey, safeName) }.getOrDefault(0)
+        }
+    }
+
+    suspend fun lastAttemptAtMillis(userKey: String, testName: String): Long? {
+        val d = dao ?: return null
+        val safeUserKey = userKey.trim().ifBlank { "guest" }
+        val safeName = testName.trim()
+        if (safeName.isBlank()) return null
+        return withContext(Dispatchers.IO) {
+            runCatching { d.lastCompletedAtMillis(safeUserKey, safeName) }.getOrNull()
+        }
+    }
 }
