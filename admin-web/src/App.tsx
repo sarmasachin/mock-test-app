@@ -1703,6 +1703,7 @@ function TestsTab({
     isPublished: boolean;
     dynamicFluctuationOnPublish: boolean;
     subjectSectionRows?: SubjectSectionRow[];
+    isEditing?: boolean;
   }) {
     const titleValue = String(input.title || '').trim().slice(0, 180);
     const slugValue = String(input.slug || '').trim().slice(0, 180).toLowerCase();
@@ -1721,7 +1722,9 @@ function TestsTab({
     const examModeValue = String(input.examMode || 'Practice').trim().slice(0, 40) || 'Practice';
     const negativeMarkingValue = String(input.negativeMarkingText || 'No').trim().slice(0, 40) || 'No';
     const testTypeValue = String(input.testTypeLabel || 'Full Mock').trim().slice(0, 40) || 'Full Mock';
-    const badgeTextValue = String(input.badgeText || 'Live').trim().slice(0, 40) || 'Live';
+    const badgeTextRaw = String(input.badgeText || '').trim().slice(0, 40);
+    const badgeEnabledValue = input.badgeEnabled === true;
+    const badgeTextValue = badgeEnabledValue ? (badgeTextRaw || 'Live') : badgeTextRaw;
     const validUntilValue = String(input.validUntil || '').trim();
     const answerKeyValue = String(input.answerKeyReleaseAt || '').trim();
     const resultReleaseValue = String(input.resultReleaseAt || '').trim();
@@ -1754,7 +1757,7 @@ function TestsTab({
     if (!Number.isFinite(enrolledValue) || !Number.isInteger(enrolledValue) || enrolledValue < 0 || enrolledValue > 1000000) {
       return { error: 'enrolledCount must be an integer between 0 and 1000000' };
     }
-    if (enrolledValue > capacityValue) {
+    if (!input.isEditing && enrolledValue > capacityValue) {
       return { error: 'enrolledCount cannot be greater than capacityTotal' };
     }
     if (!Number.isFinite(attemptsValue) || !Number.isInteger(attemptsValue) || attemptsValue < 1 || attemptsValue > 20) {
@@ -1841,7 +1844,7 @@ function TestsTab({
         examMode: examModeValue,
         negativeMarkingText: negativeMarkingValue,
         testTypeLabel: testTypeValue,
-        badgeEnabled: input.badgeEnabled === true,
+        badgeEnabled: badgeEnabledValue,
         badgeText: badgeTextValue,
         validUntil: validUntilValue,
         answerKeyReleaseAt: fromDateTimeLocal(answerKeyValue),
@@ -2047,6 +2050,7 @@ function TestsTab({
       isPublished,
       dynamicFluctuationOnPublish,
       subjectSectionRows,
+      isEditing: Boolean(editingTestId),
     });
     if (parsed.error) {
       pushToast('error', parsed.error);
@@ -2120,6 +2124,13 @@ function TestsTab({
       setBadgeEnabled(true);
       setBadgeText(finalText);
       await load();
+      if (updatedCount <= 0) {
+        pushToast(
+          'error',
+          'No published tests were updated. Mark tests as Published (checkbox) and save, then try again.',
+        );
+        return;
+      }
       pushToast('success', `Live badge applied to ${updatedCount} published test(s).`);
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to apply live badge to published tests');

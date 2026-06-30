@@ -1603,8 +1603,9 @@ function normalizeTestAdvancedConfig(rawValue) {
   };
 }
 
-function normalizeTestPayload(body) {
+function normalizeTestPayload(body, options = {}) {
   const payload = body || {};
+  const skipEnrolledCapacityCheck = options.skipEnrolledCapacityCheck === true;
   const title = String(payload.title || '').trim().slice(0, 180);
   const slug = String(payload.slug || '').trim().slice(0, 180).toLowerCase();
   const subcategory = String(payload.subcategory || '').trim().slice(0, 120);
@@ -1621,8 +1622,9 @@ function normalizeTestPayload(body) {
   const examMode = String(payload.examMode || 'Practice').trim().slice(0, 40) || 'Practice';
   const negativeMarkingText = String(payload.negativeMarkingText || 'No').trim().slice(0, 40) || 'No';
   const testTypeLabel = String(payload.testTypeLabel || 'Full Mock').trim().slice(0, 40) || 'Full Mock';
-  const badgeText = String(payload.badgeText || 'Live').trim().slice(0, 40) || 'Live';
-  const badgeEnabled = payload.badgeEnabled === true || badgeText.length > 0;
+  const badgeTextRaw = String(payload.badgeText || '').trim().slice(0, 40);
+  const badgeEnabled = payload.badgeEnabled === true;
+  const badgeText = badgeEnabled ? (badgeTextRaw || 'Live') : badgeTextRaw;
   const examDate = String(payload.examDate || '').trim();
   const validUntil = String(payload.validUntil || '').trim();
   const answerKeyReleaseAt = String(payload.answerKeyReleaseAt || '').trim();
@@ -1649,7 +1651,7 @@ function normalizeTestPayload(body) {
   if (!Number.isFinite(enrolledCount) || !Number.isInteger(enrolledCount) || enrolledCount < 0 || enrolledCount > 1000000) {
     return { error: 'enrolledCount must be an integer between 0 and 1000000' };
   }
-  if (enrolledCount > capacityTotal) {
+  if (!skipEnrolledCapacityCheck && enrolledCount > capacityTotal) {
     return { error: 'enrolledCount cannot be greater than capacityTotal' };
   }
   if (!Number.isFinite(attemptsAllowed) || !Number.isInteger(attemptsAllowed) || attemptsAllowed < 1 || attemptsAllowed > 20) {
@@ -2830,7 +2832,7 @@ router.post('/tests', async (req, res) => {
 router.patch('/tests/:id', async (req, res) => {
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid test id' });
-  const parsed = normalizeTestPayload(req.body);
+  const parsed = normalizeTestPayload(req.body, { skipEnrolledCapacityCheck: true });
   if (parsed.error) return res.status(400).json({ error: parsed.error });
   const data = parsed.value;
   const advancedParsed = normalizeTestAdvancedConfig((req.body || {}).advancedConfig);
@@ -2938,7 +2940,19 @@ router.patch('/tests/:id', async (req, res) => {
     nextAdvancedMap[testSettingKey(id)] = advancedConfig;
     await setJsonSetting('testAdvancedConfigs', nextAdvancedMap, req.userId);
     await syncTestPublishScheduleFromAdvancedConfig(id, advancedConfig, req.userId);
-    return res.json({ item: { ...rows[0], advanced_config: advancedConfig } });
+    await syncTestQuestionCount(pool, id);
+    const refreshed = await pool.query(
+      `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
+              exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed, language_mode,
+              exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days,
+              COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
+       FROM tests
+       WHERE id = $1::uuid
+       LIMIT 1`,
+      [id],
+    );
+    const savedRow = refreshed.rows[0] || rows[0];
+    return res.json({ item: { ...savedRow, advanced_config: advancedConfig } });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'Slug already exists' });
     console.error(e);
