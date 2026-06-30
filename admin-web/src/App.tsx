@@ -331,6 +331,87 @@ type HomeQuickActionSection = {
   title: string;
   items: HomeQuickActionItem[];
 };
+
+function pickGlobalSettingsFields(raw: Record<string, unknown>): AppSettings {
+  const resultUnlock = raw.resultUnlockEmailSettings;
+  const resultUnlockObj =
+    resultUnlock && typeof resultUnlock === 'object'
+      ? (resultUnlock as { enabled?: boolean; delayHours?: number })
+      : null;
+  return {
+    maintenanceMode: raw.maintenanceMode === true,
+    maintenanceMessage: String(raw.maintenanceMessage || ''),
+    registrationOpen: raw.registrationOpen !== false,
+    jobExamArticleAnnouncementEmail: raw.jobExamArticleAnnouncementEmail !== false,
+    emailEventToggles: {
+      ...DEFAULT_EMAIL_EVENT_TOGGLES,
+      ...(raw.emailEventToggles && typeof raw.emailEventToggles === 'object'
+        ? (raw.emailEventToggles as Record<string, boolean>)
+        : {}),
+    },
+    resultUnlockEmailSettings: {
+      enabled: resultUnlockObj?.enabled !== false,
+      delayHours: Math.max(1, Number(resultUnlockObj?.delayHours ?? 3) || 3),
+    },
+    adminImageExportFormats: {
+      ...DEFAULT_ADMIN_IMAGE_EXPORT_FORMATS,
+      ...(raw.adminImageExportFormats && typeof raw.adminImageExportFormats === 'object'
+        ? (raw.adminImageExportFormats as AdminImageExportFormats)
+        : {}),
+    },
+  };
+}
+
+function globalSettingsPatchPayload(settings: AppSettings) {
+  return {
+    maintenanceMode: settings.maintenanceMode,
+    maintenanceMessage: settings.maintenanceMessage,
+    registrationOpen: settings.registrationOpen,
+    jobExamArticleAnnouncementEmail: settings.jobExamArticleAnnouncementEmail,
+    emailEventToggles: settings.emailEventToggles,
+    resultUnlockEmailSettings: settings.resultUnlockEmailSettings,
+    adminImageExportFormats: settings.adminImageExportFormats,
+  };
+}
+
+const DEFAULT_HOME_CONTENT_SECTIONS: HomeContentSection[] = [
+  { id: 'category', title: 'Category', items: ['Math', 'Reasoning', 'English', 'GK'] },
+];
+const DEFAULT_HOME_QUICK_ACTION_SECTIONS: HomeQuickActionSection[] = [
+  {
+    id: 'quick-actions-default',
+    title: 'Quick actions',
+    items: [
+      { title: 'Start test', actionKey: 'startTest', iconKey: 'play' },
+      { title: 'Leaderboard', actionKey: 'leaderboard', iconKey: 'trophy' },
+      { title: 'Results', actionKey: 'results', iconKey: 'report' },
+      { title: 'Tool', actionKey: 'bookmarks', iconKey: 'bookmark' },
+    ],
+  },
+];
+
+function homeContentPatchWithDefaults(home: Record<string, unknown>) {
+  const sections = Array.isArray(home.sections)
+    ? (home.sections as HomeContentSection[]).filter(
+        (s) => String(s?.title || '').trim() && Array.isArray(s?.items) && s.items.length > 0,
+      )
+    : [];
+  const quickActionSections = Array.isArray(home.quickActionSections)
+    ? (home.quickActionSections as HomeQuickActionSection[]).filter(
+        (s) =>
+          String(s?.title || '').trim() &&
+          Array.isArray(s?.items) &&
+          s.items.some((x) => String(x?.title || '').trim() && String(x?.actionKey || '').trim()),
+      )
+    : [];
+  return {
+    ...home,
+    sections: sections.length > 0 ? sections : DEFAULT_HOME_CONTENT_SECTIONS,
+    quickActionSections:
+      quickActionSections.length > 0 ? quickActionSections : DEFAULT_HOME_QUICK_ACTION_SECTIONS,
+  };
+}
+
 type HomeBannerItem = {
   id: string;
   imageUrl: string;
@@ -3867,10 +3948,10 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
         },
       ];
       await apiClient.patch('/admin/settings', {
-        homeContent: {
+        homeContent: homeContentPatchWithDefaults({
           ...safeHome,
           newsSlides: nextSlides,
-        },
+        }),
       });
     } catch (_err) {
       pushToast('warning', 'Article created, but auto add to Home slider failed. Add it manually from Home Content.');
@@ -5368,6 +5449,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   const [saving, setSaving] = useState(false);
   const [uploadingBanner, setUploadingBanner] = useState(false);
   const autoSaveReadyRef = useRef(false);
+  const homeContentLoadedRef = useRef(false);
 
   function validateHomeContentDraft(currentSettings: HomeContentSettings): string | null {
     const invalidSection = currentSettings.sections.find(
@@ -5672,6 +5754,8 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
       }
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to load home content');
+    } finally {
+      homeContentLoadedRef.current = true;
     }
   }
 
@@ -5680,11 +5764,14 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   useEffect(() => {
+    homeContentLoadedRef.current = false;
+    autoSaveReadyRef.current = false;
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
+    if (!homeContentLoadedRef.current) return;
     if (!autoSaveReadyRef.current) {
       autoSaveReadyRef.current = true;
       return;
@@ -6834,24 +6921,7 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
       setLoading(true);
       const res = await apiClient.get('/admin/settings');
       const incoming = res.data?.settings || {};
-      setSettings((prev) => ({
-        ...prev,
-        ...incoming,
-        jobExamArticleAnnouncementEmail:
-          incoming.jobExamArticleAnnouncementEmail !== undefined
-            ? incoming.jobExamArticleAnnouncementEmail === true
-            : prev.jobExamArticleAnnouncementEmail !== false,
-        emailEventToggles: {
-          ...DEFAULT_EMAIL_EVENT_TOGGLES,
-          ...(incoming.emailEventToggles || {}),
-        },
-        adminImageExportFormats: {
-          ...DEFAULT_ADMIN_IMAGE_EXPORT_FORMATS,
-          ...(incoming.adminImageExportFormats && typeof incoming.adminImageExportFormats === 'object'
-            ? incoming.adminImageExportFormats
-            : {}),
-        },
-      }));
+      setSettings(pickGlobalSettingsFields(incoming));
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to load settings');
     } finally {
@@ -6863,8 +6933,8 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
     if (!isSuperAdmin) return;
     try {
       setLoading(true);
-      const res = await apiClient.patch('/admin/settings', settings);
-      setSettings(res.data?.settings || settings);
+      const res = await apiClient.patch('/admin/settings', globalSettingsPatchPayload(settings));
+      setSettings(pickGlobalSettingsFields(res.data?.settings || settings));
       pushToast('success', 'Settings saved.');
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to save settings');

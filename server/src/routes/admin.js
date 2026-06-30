@@ -154,6 +154,56 @@ function normalizeProfileMenuItems(value) {
   return { value: items };
 }
 
+const DEFAULT_HOME_CONTENT_SECTIONS = [
+  { id: 'category', title: 'Category', items: ['Math', 'Reasoning', 'English', 'GK'] },
+];
+const DEFAULT_HOME_QUICK_ACTION_SECTIONS = [
+  {
+    id: 'quick-actions-default',
+    title: 'Quick actions',
+    items: [
+      { title: 'Start test', actionKey: 'startTest', iconKey: 'play' },
+      { title: 'Leaderboard', actionKey: 'leaderboard', iconKey: 'trophy' },
+      { title: 'Results', actionKey: 'results', iconKey: 'report' },
+      { title: 'Tool', actionKey: 'bookmarks', iconKey: 'bookmark' },
+    ],
+  },
+];
+
+/** Global Settings save used to include `homeContent: {}` from GET — ignore empty accidental patches. */
+function isMeaningfulHomeContentPatch(value) {
+  if (value === undefined || value === null) return false;
+  if (typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.keys(value).length > 0;
+}
+
+function applyHomeContentDefaults(home) {
+  const safe = home && typeof home === 'object' ? { ...home } : {};
+  const rawSections = Array.isArray(safe.sections) ? safe.sections : [];
+  const validSections = rawSections.filter((section) => {
+    const s = section || {};
+    const title = String(s.title || '').trim();
+    const items = Array.isArray(s.items) ? s.items.map((x) => String(x || '').trim()).filter(Boolean) : [];
+    return title && items.length > 0;
+  });
+  if (validSections.length === 0) {
+    safe.sections = DEFAULT_HOME_CONTENT_SECTIONS;
+  }
+  const rawQuick = Array.isArray(safe.quickActionSections) ? safe.quickActionSections : [];
+  const validQuick = rawQuick.filter((section) => {
+    const s = section || {};
+    const title = String(s.title || '').trim();
+    const items = Array.isArray(s.items)
+      ? s.items.filter((item) => String(item?.title || '').trim() && String(item?.actionKey || '').trim())
+      : [];
+    return title && items.length > 0;
+  });
+  if (validQuick.length === 0) {
+    safe.quickActionSections = DEFAULT_HOME_QUICK_ACTION_SECTIONS;
+  }
+  return safe;
+}
+
 function normalizeHomeContent(value) {
   const safe = value || {};
   // Keep header personalization stable across all devices.
@@ -2077,8 +2127,15 @@ router.patch('/settings', async (req, res) => {
   if (normalizedProfileItems && normalizedProfileItems.error) {
     return res.status(400).json({ error: normalizedProfileItems.error });
   }
-  const normalizedHomeContent =
-    body.homeContent === undefined ? null : normalizeHomeContent(body.homeContent);
+  let normalizedHomeContent = null;
+  if (isMeaningfulHomeContentPatch(body.homeContent)) {
+    const existingHome = await getJsonSetting('homeContent', {});
+    const mergedHome =
+      existingHome && typeof existingHome === 'object'
+        ? { ...existingHome, ...body.homeContent }
+        : body.homeContent;
+    normalizedHomeContent = normalizeHomeContent(applyHomeContentDefaults(mergedHome));
+  }
   if (normalizedHomeContent && normalizedHomeContent.error) {
     return res.status(400).json({ error: normalizedHomeContent.error });
   }

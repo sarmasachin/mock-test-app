@@ -27,7 +27,7 @@ android {
         // Do NOT use mocktest.apiBaseUrl here — that key is for local dev and would ship bad URLs in APKs.
         val apiBase = (
             localProperties.getProperty("mocktest.releaseApiBaseUrl")
-                ?: "https://indiaapk.com/v1/"
+                ?: "https://admin-admin.govmocktest.com/v1/"
             ).let { b -> if (b.endsWith("/")) b else "$b/" }
         val escaped = apiBase.replace("\\", "\\\\").replace("\"", "\\\"")
         buildConfigField("String", "API_BASE_URL", "\"$escaped\"")
