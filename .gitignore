@@ -26,6 +26,8 @@ server/uploads/
 
 # Secrets
 server/.env
+server/fcm-key.json
+server/fcm-key*.json
 admin-web/.env
 *.jks
 *.keystore
