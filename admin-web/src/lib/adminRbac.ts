@@ -1,4 +1,5 @@
 import type { Tab } from '../tabTypes';
+import { isProtectedSuperAdminEmail } from '../protectedSuperAdmin';
 
 /** Maps admin sidebar tab id → RBAC permission key (server Phase 1 catalog). */
 export const TAB_PERMISSION_BY_TAB: Record<Tab, string | null> = {
@@ -58,8 +59,10 @@ export function hasAdminPermission(
   implicitFullAccess: boolean,
   isSuperAdmin: boolean,
   permission: string,
+  adminEmail?: string | null,
 ): boolean {
   if (isSuperAdmin || implicitFullAccess) return true;
+  if (isProtectedSuperAdminEmail(adminEmail)) return true;
   return permissionKeys.includes(permission);
 }
 
@@ -68,10 +71,11 @@ export function canAccessAdminTab(
   permissionKeys: string[],
   implicitFullAccess: boolean,
   isSuperAdmin: boolean,
+  adminEmail?: string | null,
 ): boolean {
   const required = TAB_PERMISSION_BY_TAB[tab];
   if (!required) return true;
-  return hasAdminPermission(permissionKeys, implicitFullAccess, isSuperAdmin, required);
+  return hasAdminPermission(permissionKeys, implicitFullAccess, isSuperAdmin, required, adminEmail);
 }
 
 export const ALL_NAV_TABS: Tab[] = [
@@ -113,6 +117,9 @@ export function filterNavTabsForPermissions(
   permissionKeys: string[],
   implicitFullAccess: boolean,
   isSuperAdmin: boolean,
+  adminEmail?: string | null,
 ): Tab[] {
-  return tabs.filter((name) => canAccessAdminTab(name, permissionKeys, implicitFullAccess, isSuperAdmin));
+  return tabs.filter((name) =>
+    canAccessAdminTab(name, permissionKeys, implicitFullAccess, isSuperAdmin, adminEmail),
+  );
 }

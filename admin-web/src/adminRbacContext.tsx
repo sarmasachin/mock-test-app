@@ -32,6 +32,7 @@ type ProviderProps = {
   permissionKeys: string[];
   implicitFullAccess: boolean;
   isSuperAdmin: boolean;
+  adminEmail?: string | null;
 };
 
 export function AdminRbacProvider({
@@ -39,24 +40,28 @@ export function AdminRbacProvider({
   permissionKeys,
   implicitFullAccess,
   isSuperAdmin,
+  adminEmail = null,
 }: ProviderProps) {
   const has = useCallback(
-    (permission: string) => hasAdminPermission(permissionKeys, implicitFullAccess, isSuperAdmin, permission),
-    [permissionKeys, implicitFullAccess, isSuperAdmin],
+    (permission: string) =>
+      hasAdminPermission(permissionKeys, implicitFullAccess, isSuperAdmin, permission, adminEmail),
+    [adminEmail, permissionKeys, implicitFullAccess, isSuperAdmin],
   );
 
   const canEditTab = useCallback(
-    (tab: Tab) => canAccessAdminTab(tab, permissionKeys, implicitFullAccess, isSuperAdmin),
-    [permissionKeys, implicitFullAccess, isSuperAdmin],
+    (tab: Tab) => canAccessAdminTab(tab, permissionKeys, implicitFullAccess, isSuperAdmin, adminEmail),
+    [adminEmail, permissionKeys, implicitFullAccess, isSuperAdmin],
   );
 
   const canEditSettingsKey = useCallback(
     (settingsKey: string) => {
       const perm = SETTINGS_KEY_TO_PERMISSION[settingsKey];
-      if (!perm) return hasAdminPermission(permissionKeys, implicitFullAccess, isSuperAdmin, 'settings_global');
-      return hasAdminPermission(permissionKeys, implicitFullAccess, isSuperAdmin, perm);
+      if (!perm) {
+        return hasAdminPermission(permissionKeys, implicitFullAccess, isSuperAdmin, 'settings_global', adminEmail);
+      }
+      return hasAdminPermission(permissionKeys, implicitFullAccess, isSuperAdmin, perm, adminEmail);
     },
-    [permissionKeys, implicitFullAccess, isSuperAdmin],
+    [adminEmail, permissionKeys, implicitFullAccess, isSuperAdmin],
   );
 
   const value = useMemo<AdminRbacContextValue>(

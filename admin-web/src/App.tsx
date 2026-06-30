@@ -738,6 +738,7 @@ function App() {
   const [token, setToken] = useState<string>(initialAdminAuth.token);
   const [isAdmin, setIsAdmin] = useState(initialAdminAuth.isAdmin);
   const [isSuperAdmin, setIsSuperAdmin] = useState(initialAdminAuth.isSuperAdmin);
+  const [adminEmail, setAdminEmail] = useState('');
   const [adminPermissionKeys, setAdminPermissionKeys] = useState<string[]>([]);
   const [adminPermissionsImplicitFull, setAdminPermissionsImplicitFull] = useState(false);
   const [rolesTabUserId, setRolesTabUserId] = useState<string | null>(null);
@@ -760,6 +761,7 @@ function App() {
     setToken('');
     setIsAdmin(false);
     setIsSuperAdmin(false);
+    setAdminEmail('');
     setAdminPermissionKeys([]);
     setAdminPermissionsImplicitFull(false);
     setRolesTabUserId(null);
@@ -811,13 +813,36 @@ function App() {
     );
   }
 
+  function applyAdminAccessFromApi(payload: {
+    permissionKeys?: string[];
+    implicitFullAccess?: boolean;
+    isSuperAdmin?: boolean;
+    email?: string | null;
+  }) {
+    if (Array.isArray(payload.permissionKeys)) {
+      setAdminPermissionKeys(payload.permissionKeys);
+    }
+    if (payload.implicitFullAccess !== undefined) {
+      setAdminPermissionsImplicitFull(Boolean(payload.implicitFullAccess));
+    }
+    if (payload.isSuperAdmin !== undefined) {
+      setIsSuperAdmin(Boolean(payload.isSuperAdmin));
+    }
+    if (payload.email) {
+      setAdminEmail(String(payload.email).trim());
+    }
+  }
+
   async function loadAdminPermissions(accessToken: string) {
     try {
       const res = await api.get('/admin/permissions/me', {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
-      setAdminPermissionKeys(Array.isArray(res.data?.permissionKeys) ? res.data.permissionKeys : []);
-      setAdminPermissionsImplicitFull(Boolean(res.data?.implicitFullAccess));
+      applyAdminAccessFromApi({
+        permissionKeys: Array.isArray(res.data?.permissionKeys) ? res.data.permissionKeys : [],
+        implicitFullAccess: Boolean(res.data?.implicitFullAccess),
+        isSuperAdmin: res.data?.isSuperAdmin,
+      });
     } catch {
       setAdminPermissionKeys([]);
       setAdminPermissionsImplicitFull(false);
@@ -825,13 +850,24 @@ function App() {
   }
 
   const visibleNavTabs = useMemo(
-    () => filterNavTabsForPermissions(ALL_NAV_TABS, adminPermissionKeys, adminPermissionsImplicitFull, isSuperAdmin),
-    [adminPermissionKeys, adminPermissionsImplicitFull, isSuperAdmin],
+    () =>
+      filterNavTabsForPermissions(
+        ALL_NAV_TABS,
+        adminPermissionKeys,
+        adminPermissionsImplicitFull,
+        isSuperAdmin,
+        adminEmail || identifier,
+      ),
+    [adminEmail, adminPermissionKeys, adminPermissionsImplicitFull, identifier, isSuperAdmin],
   );
 
   useEffect(() => {
     if (!isAdmin) return;
-    if (canAccessAdminTab(tab, adminPermissionKeys, adminPermissionsImplicitFull, isSuperAdmin)) return;
+    if (
+      canAccessAdminTab(tab, adminPermissionKeys, adminPermissionsImplicitFull, isSuperAdmin, adminEmail || identifier)
+    ) {
+      return;
+    }
     const fallback = visibleNavTabs[0] || 'dashboard';
     if (tab !== fallback) setTab(fallback);
   }, [tab, isAdmin, adminPermissionKeys, adminPermissionsImplicitFull, isSuperAdmin, visibleNavTabs]);
@@ -880,8 +916,18 @@ function App() {
         }
         setToken(persistedToken);
         setIsAdmin(true);
-        setIsSuperAdmin(Boolean(meRes.data?.user?.isSuperAdmin));
+        const meUser = meRes.data?.user;
+        const resolvedSuper = Boolean(meUser?.isSuperAdmin);
+        setIsSuperAdmin(resolvedSuper);
+        if (meUser?.email) setAdminEmail(String(meUser.email).trim());
         if (parsed?.identifier) setIdentifier(String(parsed.identifier));
+        applyAdminAccessFromApi({
+          permissionKeys: Array.isArray(meUser?.adminPermissions) ? meUser.adminPermissions : undefined,
+          implicitFullAccess: meUser?.adminPermissionsImplicitFull,
+          isSuperAdmin: resolvedSuper,
+          email: meUser?.email,
+        });
+        saveStoredAuth(persistedToken, resolvedSuper, String(parsed?.identifier || meUser?.email || ''));
         await loadAdminPermissions(persistedToken);
       } catch (err: any) {
         const status = Number(err?.response?.status || 0);
@@ -951,6 +997,9 @@ function App() {
       });
       resolvedIsAdmin = Boolean(meRes.data?.user?.isAdmin);
       resolvedIsSuperAdmin = Boolean(meRes.data?.user?.isSuperAdmin);
+      if (meRes.data?.user?.email) setAdminEmail(String(meRes.data.user.email).trim());
+    } else if (loginUser.email) {
+      setAdminEmail(String(loginUser.email).trim());
     }
     if (!resolvedIsAdmin) {
       return {
@@ -961,6 +1010,7 @@ function App() {
     saveStoredAuth(accessToken, resolvedIsSuperAdmin, identifierLabel, resolvedIsAdmin);
     setIsAdmin(true);
     setIsSuperAdmin(resolvedIsSuperAdmin);
+    if (loginUser?.email) setAdminEmail(String(loginUser.email).trim());
     setToken(accessToken);
     await loadAdminPermissions(accessToken);
     return { ok: true };
@@ -1211,6 +1261,7 @@ function App() {
         permissionKeys={adminPermissionKeys}
         implicitFullAccess={adminPermissionsImplicitFull}
         isSuperAdmin={isSuperAdmin}
+        adminEmail={adminEmail || identifier}
       >
       <div className="page">
         <div className="admin-shell">
@@ -1220,6 +1271,13 @@ function App() {
             <h2 className="brand-title">Admin Panel</h2>
           </div>
           <nav ref={sideNavRef} className="side-nav">
+            {visibleNavTabs.length === 0 ? (
+              <p className="rbac-sidebar-empty">
+                No menu access yet. If you are a new admin, ask super admin to open{' '}
+                <strong>Roles &amp; Permissions</strong> and tick your tabs, then save. Super admin: logout and login
+                again if menu is missing.
+              </p>
+            ) : null}
             {visibleNavTabs.map((name) => (
               <button key={name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>
                 <span>{TAB_ICONS[name]}</span>
@@ -1242,6 +1300,7 @@ function App() {
                 clearStoredAuth();
                 setIsAdmin(false);
                 setIsSuperAdmin(false);
+                setAdminEmail('');
                 setAdminPermissionKeys([]);
                 setAdminPermissionsImplicitFull(false);
                 setRolesTabUserId(null);

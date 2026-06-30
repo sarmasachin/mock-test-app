@@ -296,6 +296,21 @@
   box-shadow: 0 8px 20px rgba(219, 124, 47, 0.35);
 }
 
+.rbac-sidebar-empty {
+  margin: 0;
+  padding: 10px 8px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #f8d7a8;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+}
+
+.rbac-sidebar-empty strong {
+  color: #fff;
+}
+
 .side-nav button:not(.active):hover {
   background: rgba(45, 71, 110, 0.68);
 }
