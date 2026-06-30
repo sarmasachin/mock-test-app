@@ -1294,7 +1294,7 @@ function App() {
             <button
               type="button"
               aria-label="Logout"
-              className="ghost"
+              className="ghost topbar-logout-btn"
               title="Logout"
               onClick={() => {
                 clearStoredAuth();
@@ -1309,7 +1309,9 @@ function App() {
                 setIdentifier('');
                 setPassword('');
               }}
-            />
+            >
+              Logout
+            </button>
           </header>
           {tab === 'dashboard' && <DashboardTab apiClient={authedApi} />}
           {tab === 'analyticsInsights' && <AnalyticsInsightsTab apiClient={authedApi} />}

@@ -621,6 +621,20 @@
   font-size: clamp(1.3rem, 2vw, 1.6rem);
 }
 
+.topbar-logout-btn {
+  flex-shrink: 0;
+  min-width: 88px;
+  font-weight: 700;
+  color: #1e293b;
+  background: #ecf2f8;
+  border: 1px solid #c9d4e3;
+}
+
+.topbar-logout-btn:hover {
+  background: #dbe7f5;
+  border-color: #94a3b8;
+}
+
 .topbar p {
   margin: 3px 0 0;
   color: var(--text-muted);
