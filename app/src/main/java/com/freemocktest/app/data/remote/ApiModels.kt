@@ -562,6 +562,7 @@ data class MyTestApplicationDto(
     @SerializedName("capacityTotal") val capacityTotal: Int = 0,
     @SerializedName("remainingSeats") val remainingSeats: Int = 0,
     @SerializedName("slotLabel") val slotLabel: String? = null,
+    @SerializedName("examDate") val examDate: String? = null,
 )
 
 data class MyTestApplicationsResponse(

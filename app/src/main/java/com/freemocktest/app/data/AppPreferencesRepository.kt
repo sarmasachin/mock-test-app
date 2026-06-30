@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import com.freemocktest.app.newui.auth.isValidEmail
 import com.freemocktest.app.newui.auth.isValidMobile
+import com.freemocktest.app.util.TestScheduleUtils
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -190,7 +191,14 @@ object AppPreferencesRepository {
         val testName: String,
         val unlockAtMillis: Long,
         val expiresAtMillis: Long,
-    )
+        /** Future exam start from admin exam date + slot; 0 when not scheduled. */
+        val scheduledStartAtMillis: Long = 0L,
+    ) {
+        fun startUnlockAtMillis(nowMs: Long = System.currentTimeMillis()): Long {
+            if (scheduledStartAtMillis > nowMs) return scheduledStartAtMillis
+            return unlockAtMillis
+        }
+    }
 
     /**
      * In-memory shape for a resumable quiz session (persisted as JSON under [keyInProgressQuizJson]).
@@ -653,6 +661,8 @@ object AppPreferencesRepository {
         testName: String,
         lockMs: Long = DefaultStartSeriesLockMs,
         activeWindowMs: Long = DefaultStartSeriesActiveWindowMs,
+        examDate: String? = null,
+        slotLabel: String? = null,
     ): Boolean {
         if (!::appContext.isInitialized) return false
         val safeName = testName.trim()
@@ -664,17 +674,46 @@ object AppPreferencesRepository {
             store().edit { prefs ->
                 val existing = parseAppliedTestSeries(prefs[keyAppliedTestSeries])
                     .filter { it.expiresAtMillis > now }
-                if (existing.any { it.testName.equals(safeName, ignoreCase = true) }) {
-                    return@edit
+                val nextUnlockBase = existing
+                    .filterNot { it.testName.equals(safeName, ignoreCase = true) }
+                    .maxOfOrNull { it.expiresAtMillis } ?: now
+                val applyLockAt = maxOf(now + safeLockMs, nextUnlockBase)
+                val prior = existing.firstOrNull { it.testName.equals(safeName, ignoreCase = true) }
+                val scheduledFromInput = TestScheduleUtils.parseExamStartMillis(examDate, slotLabel)
+                val (unlockAt, scheduledStored) = when {
+                    scheduledFromInput != null -> {
+                        TestScheduleUtils.resolveUnlockAtMillis(
+                            nowMs = now,
+                            applyLockAtMillis = applyLockAt,
+                            examDate = examDate,
+                            slotLabel = slotLabel,
+                        )
+                    }
+                    prior != null && prior.scheduledStartAtMillis > now -> {
+                        prior.unlockAtMillis to prior.scheduledStartAtMillis
+                    }
+                    else -> {
+                        TestScheduleUtils.resolveUnlockAtMillis(
+                            nowMs = now,
+                            applyLockAtMillis = applyLockAt,
+                            examDate = null,
+                            slotLabel = null,
+                        )
+                    }
                 }
-                val nextUnlockBase = existing.maxOfOrNull { it.expiresAtMillis } ?: now
-                val unlockAt = maxOf(now + safeLockMs, nextUnlockBase)
-                val expiresAt = unlockAt + safeActiveWindowMs
-                val updated = existing + AppliedTestSeriesEntry(
+                val expiresAt = TestScheduleUtils.resolveExpiresAtMillis(
+                    unlockAtMillis = unlockAt,
+                    activeWindowMs = safeActiveWindowMs,
+                    scheduledStartAtMillis = scheduledStored,
+                )
+                val nextEntry = AppliedTestSeriesEntry(
                     testName = safeName,
                     unlockAtMillis = unlockAt,
                     expiresAtMillis = expiresAt,
+                    scheduledStartAtMillis = scheduledStored,
                 )
+                val updated = existing
+                    .filterNot { it.testName.equals(safeName, ignoreCase = true) } + nextEntry
                 prefs[keyAppliedTestSeries] = encodeAppliedTestSeries(updated)
             }
             true
@@ -1138,6 +1177,7 @@ object AppPreferencesRepository {
                                 testName = name,
                                 unlockAtMillis = unlockAt,
                                 expiresAtMillis = expiresAt,
+                                scheduledStartAtMillis = obj.optLong("scheduledStartAtMillis", 0L),
                             ),
                         )
                     }
@@ -1170,6 +1210,9 @@ object AppPreferencesRepository {
                     put("testName", item.testName)
                     put("unlockAtMillis", item.unlockAtMillis)
                     put("expiresAtMillis", item.expiresAtMillis)
+                    if (item.scheduledStartAtMillis > 0L) {
+                        put("scheduledStartAtMillis", item.scheduledStartAtMillis)
+                    }
                 },
             )
         }

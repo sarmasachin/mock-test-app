@@ -288,7 +288,7 @@ fun HomeScreenNew(
     val startSeriesState = remember(appliedSeries, nowMs, pendingResult) {
         val eligible = appliedSeries
             .filter { nowMs < it.expiresAtMillis }
-            .sortedBy { it.unlockAtMillis }
+            .sortedBy { it.startUnlockAtMillis(nowMs) }
             .firstOrNull { entry ->
                 !AppPreferencesRepository.isTestBlockedByPendingResult(entry.testName, pendingResult)
             }
@@ -299,7 +299,7 @@ fun HomeScreenNew(
                 activeTestName = null,
             )
         } else {
-            val remainingMs = (eligible.unlockAtMillis - nowMs).coerceAtLeast(0L)
+            val remainingMs = (eligible.startUnlockAtMillis(nowMs) - nowMs).coerceAtLeast(0L)
             val hours = (remainingMs / 3_600_000L).toInt()
             val mins = ((remainingMs % 3_600_000L) / 60_000L).toInt()
             val secs = ((remainingMs % 60_000L) / 1_000L).toInt()

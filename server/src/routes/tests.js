@@ -5,6 +5,7 @@ const { pool } = require('../db');
 const { requireAuth } = require('../middleware/requireAuth');
 const { clampMcqCorrectIndex } = require('../mcqShuffle');
 const { normalizeSubjectSectionsInput } = require('../util/subjectSections');
+const { isBeforeExamStart } = require('../lib/examSchedule');
 
 const router = express.Router();
 
@@ -359,6 +360,7 @@ router.get('/my-applications', requireAuth, async (req, res) => {
           capacityTotal,
           remainingSeats: Math.max(0, capacityTotal - enrolledCount),
           slotLabel: String(row.slot_label || ''),
+          examDate: resolveExamDate(row),
         };
       });
     return res.json({ items });
@@ -421,7 +423,7 @@ router.get('/:id/questions-attempt', requireAuth, async (req, res) => {
   try {
     const [testRes, advancedMapRaw] = await Promise.all([
       pool.query(
-        `SELECT id, is_published, last_cycle_started_at
+        `SELECT id, is_published, exam_date, slot_label, dynamic_date_enabled, date_cycle_days, last_cycle_started_at
          FROM tests
          WHERE id = $1::uuid
          LIMIT 1`,
@@ -432,6 +434,14 @@ router.get('/:id/questions-attempt', requireAuth, async (req, res) => {
     const test = testRes.rows[0];
     if (!test || test.is_published !== true) {
       return res.status(404).json({ error: 'Test not found' });
+    }
+    const resolvedExamDate = resolveExamDate(test);
+    if (isBeforeExamStart(resolvedExamDate, test.slot_label)) {
+      return res.status(403).json({
+        error: 'Test has not started yet',
+        examDate: resolvedExamDate,
+        slotLabel: String(test.slot_label || ''),
+      });
     }
     let advancedMap = {};
     try {

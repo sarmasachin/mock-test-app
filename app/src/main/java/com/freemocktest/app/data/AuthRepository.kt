@@ -680,6 +680,8 @@ object AuthRepository {
                     testName = title,
                     lockMs = lockMs,
                     activeWindowMs = activeWindowMs,
+                    examDate = item.examDate,
+                    slotLabel = item.slotLabel,
                 )
             }
             Result.success(Unit)

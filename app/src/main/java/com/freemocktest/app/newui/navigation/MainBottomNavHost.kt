@@ -50,6 +50,7 @@ import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.data.TestHistoryRepository
+import com.freemocktest.app.util.TestScheduleUtils
 import com.freemocktest.app.newui.alerts.ExamAlertFeedImageSeedPrefix
 import com.freemocktest.app.newui.alerts.ExamAlertScreenNew
 import com.freemocktest.app.newui.alerts.JobAlertFeedImageSeedPrefix
@@ -193,6 +194,29 @@ fun MainBottomNavHost(
                 "You have successfully submitted ${pending.testName}. Your result will be available on $whenText.",
                 Toast.LENGTH_LONG,
             ).show()
+        }
+    }
+
+    fun navigateToQuizWhenAllowed(testName: String) {
+        val safeName = testName.trim()
+        if (safeName.isBlank()) return
+        scope.launch {
+            if (!AppPreferencesRepository.canStartTest(safeName, pendingResult)) {
+                showTestPendingBlockMessage(safeName)
+                return@launch
+            }
+            val card = runCatching {
+                ContentRepository.loadTestByTitle(safeName, allowDefaultFallback = false)
+            }.getOrNull()
+            if (card != null && !TestScheduleUtils.isExamStartAllowed(card.examDate, card.slotLabel)) {
+                Toast.makeText(
+                    context,
+                    "Test starts on ${TestScheduleUtils.formatExamStartLabel(card.examDate, card.slotLabel)}",
+                    Toast.LENGTH_LONG,
+                ).show()
+                return@launch
+            }
+            mainNavController.navigate("${RoutesNew.QUIZ}/$safeName")
         }
     }
 
@@ -505,7 +529,20 @@ fun MainBottomNavHost(
                             showTestPendingBlockMessage(test)
                             return@TestsScreenNew
                         }
-                        mainNavController.navigate("${RoutesNew.INSTRUCTIONS}/$test")
+                        scope.launch {
+                            val card = runCatching {
+                                ContentRepository.loadTestByTitle(test.trim(), allowDefaultFallback = false)
+                            }.getOrNull()
+                            if (card != null && !TestScheduleUtils.isExamStartAllowed(card.examDate, card.slotLabel)) {
+                                Toast.makeText(
+                                    context,
+                                    "Test starts on ${TestScheduleUtils.formatExamStartLabel(card.examDate, card.slotLabel)}",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                                return@launch
+                            }
+                            mainNavController.navigate("${RoutesNew.INSTRUCTIONS}/$test")
+                        }
                     },
                 )
             }
@@ -520,11 +557,7 @@ fun MainBottomNavHost(
                     onBack = { mainNavController.popBackOrHome() },
                     onStartTest = { selectedTestName ->
                         val safeSelectedName = selectedTestName.ifBlank { name.ifBlank { "applied" } }
-                        if (!AppPreferencesRepository.canStartTest(safeSelectedName, pendingResult)) {
-                            showTestPendingBlockMessage(safeSelectedName)
-                            return@StartTestPreviewScreenNew
-                        }
-                        mainNavController.navigate("${RoutesNew.QUIZ}/$safeSelectedName")
+                        navigateToQuizWhenAllowed(safeSelectedName)
                     },
                     onApplyForTest = { selectedTestName ->
                         val safeSelectedName = selectedTestName.ifBlank { name.ifBlank { "applied" } }
@@ -544,11 +577,7 @@ fun MainBottomNavHost(
                     onBack = { mainNavController.popBackOrHome() },
                     onStartTest = {
                         val safeName = name.ifBlank { "Test" }
-                        if (!AppPreferencesRepository.canStartTest(safeName, pendingResult)) {
-                            showTestPendingBlockMessage(safeName)
-                            return@InstructionsScreenNew
-                        }
-                        mainNavController.navigate("${RoutesNew.QUIZ}/$safeName")
+                        navigateToQuizWhenAllowed(safeName)
                     },
                 )
             }
@@ -565,6 +594,19 @@ fun MainBottomNavHost(
                         mainNavController.goToHomeTab()
                     }
                     return@composable
+                }
+                LaunchedEffect(decodedQuizName) {
+                    val card = runCatching {
+                        ContentRepository.loadTestByTitle(decodedQuizName, allowDefaultFallback = false)
+                    }.getOrNull()
+                    if (card != null && !TestScheduleUtils.isExamStartAllowed(card.examDate, card.slotLabel)) {
+                        Toast.makeText(
+                            context,
+                            "Test starts on ${TestScheduleUtils.formatExamStartLabel(card.examDate, card.slotLabel)}",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                        mainNavController.goToHomeTab()
+                    }
                 }
                 QuizScreenNew(
                     testName = decodedQuizName,

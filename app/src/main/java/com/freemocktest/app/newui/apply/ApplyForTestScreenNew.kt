@@ -93,6 +93,8 @@ fun ApplyForTestScreenNew(
     var revealSubmitSection by remember { mutableStateOf(false) }
     var testId by remember { mutableStateOf("") }
     var resolvedTestName by remember { mutableStateOf(title) }
+    var resolvedExamDate by remember { mutableStateOf<String?>(null) }
+    var resolvedSlotLabel by remember { mutableStateOf<String?>(null) }
     var slotInfo by remember { mutableStateOf("Morning Slot") }
     var appliedInfo by remember { mutableStateOf("0") }
     var remainingSeatsInfo by remember { mutableStateOf("0 seats left") }
@@ -211,6 +213,8 @@ fun ApplyForTestScreenNew(
 
             testId = resolvedTest?.id?.trim().orEmpty()
             resolvedTestName = resolvedTest?.title?.trim()?.ifBlank { routeTitle } ?: routeTitle
+            resolvedExamDate = publishedTest?.examDate ?: resolvedTest?.examDate
+            resolvedSlotLabel = publishedTest?.slotLabel ?: resolvedTest?.slotLabel ?: matchedApplication?.slotLabel
             slotInfo = resolvedTest?.slotLabel?.ifBlank { "Morning Slot" } ?: "Morning Slot"
 
             hasAlreadyApplied = matchedApplication != null
@@ -555,6 +559,8 @@ fun ApplyForTestScreenNew(
                                                         testName = titleToSave,
                                                         lockMs = startSeriesLockMs,
                                                         activeWindowMs = startSeriesActiveWindowMs,
+                                                        examDate = resolvedExamDate,
+                                                        slotLabel = resolvedSlotLabel,
                                                     )
                                                 }.getOrDefault(false) || localApplySeriesSaved
                                             }
@@ -660,6 +666,8 @@ fun ApplyForTestScreenNew(
                                             testName = titleToSave,
                                             lockMs = startSeriesLockMs,
                                             activeWindowMs = startSeriesActiveWindowMs,
+                                            examDate = resolvedExamDate,
+                                            slotLabel = resolvedSlotLabel,
                                         )
                                     }
                                 }

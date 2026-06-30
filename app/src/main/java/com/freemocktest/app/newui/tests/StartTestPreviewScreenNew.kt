@@ -64,10 +64,7 @@ import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
-import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import com.freemocktest.app.util.TestScheduleUtils
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -219,13 +216,15 @@ fun StartTestPreviewScreenNew(
     val activeAppliedEntries = remember(appliedSeries, nowMs) {
         appliedSeries
             .filter { it.expiresAtMillis > nowMs }
-            .sortedBy { (it.unlockAtMillis - nowMs).coerceAtLeast(0L) }
+            .sortedBy { (it.startUnlockAtMillis(nowMs) - nowMs).coerceAtLeast(0L) }
     }
     val hiddenExpiredCount = remember(appliedSeries, activeAppliedEntries) {
         (appliedSeries.size - activeAppliedEntries.size).coerceAtLeast(0)
     }
     val specificTest = testSnapshot
-    val unlockAt = remember(specificTest?.examDate) { parseUnlockAtMillis(specificTest?.examDate) }
+    val unlockAt = remember(specificTest?.examDate, specificTest?.slotLabel) {
+        TestScheduleUtils.parseExamStartMillis(specificTest?.examDate, specificTest?.slotLabel)
+    }
     val fallbackRemainingMs = unlockAt?.let { (it - nowMs).coerceAtLeast(0L) } ?: 0L
     val fallbackLocked = fallbackRemainingMs > 0L
     val showAppliedList = activeAppliedEntries.isNotEmpty()
@@ -321,8 +320,14 @@ fun StartTestPreviewScreenNew(
                         return@forEach
                     }
                     val card = snapshot
-                    val remainingMs = (entry.unlockAtMillis - nowMs).coerceAtLeast(0L)
-                    val totalLockMs = (entry.expiresAtMillis - entry.unlockAtMillis).coerceAtLeast(1L)
+                    val cardScheduledMs = TestScheduleUtils.parseExamStartMillis(card.examDate, card.slotLabel)
+                    val effectiveUnlockMs = when {
+                        cardScheduledMs != null && cardScheduledMs > nowMs -> cardScheduledMs
+                        entry.scheduledStartAtMillis > nowMs -> entry.scheduledStartAtMillis
+                        else -> entry.startUnlockAtMillis(nowMs)
+                    }
+                    val remainingMs = (effectiveUnlockMs - nowMs).coerceAtLeast(0L)
+                    val totalLockMs = (entry.expiresAtMillis - effectiveUnlockMs).coerceAtLeast(1L)
                     val hours = (remainingMs / 3_600_000L).toInt()
                     val mins = ((remainingMs % 3_600_000L) / 60_000L).toInt()
                     val secs = ((remainingMs % 60_000L) / 1_000L).toInt()
@@ -355,6 +360,8 @@ fun StartTestPreviewScreenNew(
                     Text(
                         text = when {
                             isPendingResult -> "Result will be available soon"
+                            isLocked && cardScheduledMs != null && cardScheduledMs > nowMs ->
+                                "Locked until ${TestScheduleUtils.formatExamStartLabel(card.examDate, card.slotLabel)}"
                             isLocked -> "Starts in $countdown"
                             else -> "Ready to start"
                         },
@@ -365,7 +372,8 @@ fun StartTestPreviewScreenNew(
                     Spacer(Modifier.height(8.dp))
                     Button(
                         onClick = {
-                            if (card.title.isBlank() || isPendingResult) return@Button
+                            if (card.title.isBlank() || isPendingResult || isLocked) return@Button
+                            if (!TestScheduleUtils.isExamStartAllowed(card.examDate, card.slotLabel, nowMs)) return@Button
                             val now = System.currentTimeMillis()
                             if (now - lastPrimaryNavAt < 600L) return@Button
                             lastPrimaryNavAt = now
@@ -753,23 +761,4 @@ private fun CountdownProgressRing(
             fontWeight = FontWeight.SemiBold,
         )
     }
-}
-
-private fun parseUnlockAtMillis(examDate: String?): Long? {
-    val raw = examDate?.trim()?.takeIf { it.isNotBlank() } ?: return null
-    val zone = ZoneId.systemDefault()
-    val patterns = listOf("yyyy-MM-dd HH:mm", "yyyy-MM-dd'T'HH:mm", "d MMM yyyy HH:mm", "d MMM yyyy")
-    for (pattern in patterns) {
-        val formatter = DateTimeFormatter.ofPattern(pattern, Locale.US)
-        try {
-            return if (pattern.contains("HH:mm")) {
-                LocalDateTime.parse(raw, formatter).atZone(zone).toInstant().toEpochMilli()
-            } else {
-                LocalDate.parse(raw, formatter).atStartOfDay(zone).toInstant().toEpochMilli()
-            }
-        } catch (_: Exception) {
-            // Any parse/format/zone issue: try the next pattern, finally return null.
-        }
-    }
-    return null
 }
