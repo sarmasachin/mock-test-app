@@ -1094,6 +1094,9 @@ button:active {
   background: #fff;
   appearance: auto;
   -webkit-appearance: checkbox;
+  cursor: pointer;
+  flex-shrink: 0;
+  pointer-events: auto;
 }
 
 .ghost {
@@ -3377,6 +3380,180 @@ button:active {
     width: 100%;
     justify-content: center;
   }
+}
+
+/* RBAC — Roles & Permissions */
+.rbac-page {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.rbac-admin-picker,
+.rbac-permissions-panel {
+  min-width: 0;
+}
+
+.rbac-hint {
+  margin: 0 0 10px;
+  font-size: 0.82rem;
+  color: #64748b;
+}
+
+.rbac-admin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 420px;
+  overflow: auto;
+  margin-top: 10px;
+}
+
+.rbac-admin-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid #dbe4ef;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.rbac-admin-row.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.rbac-admin-name {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.rbac-admin-email {
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.rbac-perm-head {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.rbac-perm-actions {
+  flex-wrap: wrap;
+}
+
+.rbac-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rbac-group-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.rbac-group-head {
+  margin-bottom: 10px;
+}
+
+.rbac-group-select {
+  font-size: 0.9rem;
+}
+
+.rbac-count {
+  margin-left: 6px;
+  font-size: 0.75rem;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.rbac-check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px 12px;
+}
+
+.rbac-check-item {
+  cursor: pointer;
+}
+
+.rbac-check-item input[type='checkbox']:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+
+.rbac-sensitive-tag {
+  margin-left: 6px;
+  font-size: 0.68rem;
+  color: #b45309;
+  font-style: normal;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.rbac-modal-overlay {
+  z-index: 1200;
+}
+
+.rbac-modal-card {
+  width: min(920px, calc(100vw - 24px));
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+}
+
+.rbac-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 900px) {
+  .rbac-page {
+    grid-template-columns: 1fr;
+  }
+
+  .rbac-admin-list {
+    max-height: 220px;
+  }
+}
+
+.rbac-readonly-notice {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+fieldset.rbac-fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+fieldset.rbac-fieldset:disabled {
+  opacity: 0.72;
+}
+
+fieldset.rbac-fieldset:disabled .rbac-readonly-notice {
+  opacity: 1;
 }
 
 /* Exam snap card admin tab */

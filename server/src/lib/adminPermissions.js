@@ -45,8 +45,35 @@ async function ensureAdminPermissionsSchema() {
  * Idempotent: grant full tab+action permissions to every non-super admin who has none yet.
  * Keeps existing deployments working until Phase 4 enforces menu hiding.
  */
+const LEGACY_BACKFILL_SETTING_KEY = 'rbac_legacy_admin_backfill_done';
+
+async function isLegacyAdminBackfillComplete() {
+  const { rows } = await pool.query(
+    `SELECT setting_value FROM app_settings WHERE setting_key = $1 LIMIT 1`,
+    [LEGACY_BACKFILL_SETTING_KEY],
+  );
+  return String(rows[0]?.setting_value || '').trim() === '1';
+}
+
+async function markLegacyAdminBackfillComplete() {
+  await pool.query(
+    `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+     VALUES ($1, '1', NULL)
+     ON CONFLICT (setting_key) DO UPDATE
+       SET setting_value = '1', updated_at = now()`,
+    [LEGACY_BACKFILL_SETTING_KEY],
+  );
+}
+
+/**
+ * One-time: grant full permissions to admins who existed before RBAC.
+ * Newly promoted admins stay empty until super admin saves checkboxes in Roles tab.
+ */
 async function backfillLegacyAdminPermissions() {
   await ensureAdminPermissionsSchema();
+  if (await isLegacyAdminBackfillComplete()) {
+    return { backfilledUsers: 0, grantedRows: 0, skipped: true };
+  }
   const keys = fullPermissionsForLegacyAdmin();
   const admins = await pool.query(
     `SELECT u.id::text AS id
@@ -57,7 +84,10 @@ async function backfillLegacyAdminPermissions() {
          SELECT 1 FROM admin_user_permissions p WHERE p.user_id = u.id
        )`,
   );
-  if (!admins.rows.length) return { backfilledUsers: 0, grantedRows: 0 };
+  if (!admins.rows.length) {
+    await markLegacyAdminBackfillComplete();
+    return { backfilledUsers: 0, grantedRows: 0 };
+  }
   let grantedRows = 0;
   for (const row of admins.rows) {
     for (const permissionKey of keys) {
@@ -70,6 +100,7 @@ async function backfillLegacyAdminPermissions() {
       grantedRows += Number(ins.rowCount || 0);
     }
   }
+  await markLegacyAdminBackfillComplete();
   return { backfilledUsers: admins.rows.length, grantedRows };
 }
 
@@ -98,8 +129,7 @@ async function getEffectiveAdminPermissions({ userId, isAdmin, isSuperAdmin, ema
   }
   const stored = await loadStoredPermissionKeys(userId);
   if (!stored.length) {
-    // Safety net if backfill has not run yet.
-    return { keys: fullPermissionsForLegacyAdmin(), isImplicitFullAccess: true };
+    return { keys: [], isImplicitFullAccess: false };
   }
   return { keys: stored, isImplicitFullAccess: false };
 }
@@ -119,10 +149,10 @@ async function replaceAdminUserPermissions({
   targetUserId,
   permissionKeys,
   grantedByUserId,
-  actorIsSuperAdmin,
+  actorCanManageRbac,
 }) {
-  if (!actorIsSuperAdmin) {
-    const err = new Error('Super admin access required');
+  if (!actorCanManageRbac) {
+    const err = new Error('Permission denied: rbac_manage');
     err.status = 403;
     throw err;
   }

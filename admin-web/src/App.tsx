@@ -27,6 +27,19 @@ import {
   type DashboardRange,
 } from './components/DashboardAnalytics';
 import { DailyQuizAdminStats } from './components/DailyQuizAdminStats';
+import { AdminPermissionsModal } from './components/AdminPermissionsModal';
+import { TabReadOnlyNotice } from './components/TabReadOnlyNotice';
+import { AdminRbacProvider, useAdminRbac } from './adminRbacContext';
+import { INBOX_SETTINGS_KEY_TO_PERMISSION } from './lib/adminRbacMaps';
+import { usePermissionGuard } from './hooks/usePermissionGuard';
+import {
+  ALL_NAV_TABS,
+  canAccessAdminTab,
+  filterNavTabsForPermissions,
+} from './lib/adminRbac';
+import { RolesPermissionsTab } from './tabs/RolesPermissionsTab';
+import type { Tab } from './tabTypes';
+import { TAB_ICONS, TAB_LABELS } from './tabTypes';
 
 const ADMIN_IMAGE_UPLOAD_MIME_TYPES = [
   'image/jpeg',
@@ -43,37 +56,6 @@ function isAdminUploadImageMime(mime: string): boolean {
   return (ADMIN_IMAGE_UPLOAD_MIME_TYPES as readonly string[]).includes(mime);
 }
 
-type Tab =
-  | 'dashboard'
-  | 'leaderboard'
-  | 'allTests'
-  | 'questionBuilder'
-  | 'profile'
-  | 'feedback'
-  | 'helpSupport'
-  | 'reportIssue'
-  | 'achievement'
-  | 'shareContent'
-  | 'signupRegions'
-  | 'privacyPolicy'
-  | 'termsOfUse'
-  | 'dailyDigest'
-  | 'dailyQuiz'
-  | 'articles'
-  | 'homeContent'
-  | 'examSnapCard'
-  | 'pollSettings'
-  | 'pushNotificationSettings'
-  | 'notificationScheduling'
-  | 'publishScheduling'
-  | 'submitApplicationContent'
-  | 'instructionContent'
-  | 'examCategories'
-  | 'analyticsInsights'
-  | 'userManagementAdvanced'
-  | 'settings'
-  | 'auditLogs'
-  | 'users';
 type TestKind = 'mock' | 'quiz';
 type RangeKind = 'weekly' | 'monthly' | 'all';
 type SubjectSectionRow = { key: string; label: string };
@@ -498,71 +480,6 @@ type UserItem = {
   ban_reason: string;
   banned_at: string | null;
 };
-const TAB_LABELS: Record<Tab, string> = {
-  dashboard: 'Dashboard',
-  leaderboard: 'Leaderboard',
-  allTests: 'All Tests',
-  questionBuilder: 'Question Builder',
-  profile: 'Profile',
-  feedback: 'Feedback',
-  helpSupport: 'Help and Support',
-  reportIssue: 'Report Issue',
-  achievement: 'Achievement',
-  shareContent: 'Share Text',
-  signupRegions: 'State & Distt',
-  privacyPolicy: 'Privacy Policy',
-  termsOfUse: 'Terms of Use',
-  dailyDigest: 'Daily Digest',
-  dailyQuiz: 'Daily Quiz',
-  articles: 'Articles',
-  homeContent: 'Home Content',
-  examSnapCard: 'Card',
-  pollSettings: 'Poll Settings',
-  pushNotificationSettings: 'Push Notification',
-  notificationScheduling: 'Notification Scheduling',
-  publishScheduling: 'Publish Scheduling',
-  submitApplicationContent: 'Submit Application',
-  instructionContent: 'Instruction Content',
-  examCategories: 'Exam Categories',
-  analyticsInsights: 'Analytics & Insights',
-  userManagementAdvanced: 'User Management Advanced',
-  settings: 'Settings',
-  auditLogs: 'Audit Logs',
-  users: 'Users',
-};
-const TAB_ICONS: Record<Tab, string> = {
-  dashboard: 'DB',
-  leaderboard: 'LB',
-  allTests: 'TS',
-  questionBuilder: 'QB',
-  profile: 'PR',
-  feedback: 'FB',
-  helpSupport: 'HS',
-  reportIssue: 'RI',
-  achievement: 'AC',
-  shareContent: 'SH',
-  signupRegions: 'SD',
-  privacyPolicy: 'PP',
-  termsOfUse: 'TU',
-  dailyDigest: 'DD',
-  dailyQuiz: 'DQ',
-  articles: 'AR',
-  homeContent: 'HC',
-  examSnapCard: 'CD',
-  pollSettings: 'PL',
-  pushNotificationSettings: 'PN',
-  notificationScheduling: 'NS',
-  publishScheduling: 'PS',
-  submitApplicationContent: 'SA',
-  instructionContent: 'IN',
-  examCategories: 'EX',
-  analyticsInsights: 'AN',
-  userManagementAdvanced: 'UM',
-  settings: 'ST',
-  auditLogs: 'LG',
-  users: 'US',
-};
-
 /** Strip trailing slashes so axios joins paths like `/auth/login` correctly. */
 function normalizeApiBaseUrl(raw: string): string {
   return raw.trim().replace(/\/+$/, '');
@@ -821,6 +738,9 @@ function App() {
   const [token, setToken] = useState<string>(initialAdminAuth.token);
   const [isAdmin, setIsAdmin] = useState(initialAdminAuth.isAdmin);
   const [isSuperAdmin, setIsSuperAdmin] = useState(initialAdminAuth.isSuperAdmin);
+  const [adminPermissionKeys, setAdminPermissionKeys] = useState<string[]>([]);
+  const [adminPermissionsImplicitFull, setAdminPermissionsImplicitFull] = useState(false);
+  const [rolesTabUserId, setRolesTabUserId] = useState<string | null>(null);
   const [, setAuthBooting] = useState(true);
   const [identifier, setIdentifier] = useState(initialAdminAuth.identifier);
   const [password, setPassword] = useState('');
@@ -840,6 +760,9 @@ function App() {
     setToken('');
     setIsAdmin(false);
     setIsSuperAdmin(false);
+    setAdminPermissionKeys([]);
+    setAdminPermissionsImplicitFull(false);
+    setRolesTabUserId(null);
     setAdminOtpStep('password');
     setOtpCode('');
     setPassword('');
@@ -888,6 +811,31 @@ function App() {
     );
   }
 
+  async function loadAdminPermissions(accessToken: string) {
+    try {
+      const res = await api.get('/admin/permissions/me', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      setAdminPermissionKeys(Array.isArray(res.data?.permissionKeys) ? res.data.permissionKeys : []);
+      setAdminPermissionsImplicitFull(Boolean(res.data?.implicitFullAccess));
+    } catch {
+      setAdminPermissionKeys([]);
+      setAdminPermissionsImplicitFull(false);
+    }
+  }
+
+  const visibleNavTabs = useMemo(
+    () => filterNavTabsForPermissions(ALL_NAV_TABS, adminPermissionKeys, adminPermissionsImplicitFull, isSuperAdmin),
+    [adminPermissionKeys, adminPermissionsImplicitFull, isSuperAdmin],
+  );
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (canAccessAdminTab(tab, adminPermissionKeys, adminPermissionsImplicitFull, isSuperAdmin)) return;
+    const fallback = visibleNavTabs[0] || 'dashboard';
+    if (tab !== fallback) setTab(fallback);
+  }, [tab, isAdmin, adminPermissionKeys, adminPermissionsImplicitFull, isSuperAdmin, visibleNavTabs]);
+
   useEffect(() => {
     let isActive = true;
     async function restoreSession() {
@@ -934,6 +882,7 @@ function App() {
         setIsAdmin(true);
         setIsSuperAdmin(Boolean(meRes.data?.user?.isSuperAdmin));
         if (parsed?.identifier) setIdentifier(String(parsed.identifier));
+        await loadAdminPermissions(persistedToken);
       } catch (err: any) {
         const status = Number(err?.response?.status || 0);
         if (status === 401 || status === 403) {
@@ -1013,6 +962,7 @@ function App() {
     setIsAdmin(true);
     setIsSuperAdmin(resolvedIsSuperAdmin);
     setToken(accessToken);
+    await loadAdminPermissions(accessToken);
     return { ok: true };
   }
 
@@ -1257,6 +1207,11 @@ function App() {
   return (
     <AdminToastProvider>
       <AdminDialogProvider>
+      <AdminRbacProvider
+        permissionKeys={adminPermissionKeys}
+        implicitFullAccess={adminPermissionsImplicitFull}
+        isSuperAdmin={isSuperAdmin}
+      >
       <div className="page">
         <div className="admin-shell">
         <aside className="sidebar">
@@ -1265,45 +1220,12 @@ function App() {
             <h2 className="brand-title">Admin Panel</h2>
           </div>
           <nav ref={sideNavRef} className="side-nav">
-            {([
-              'dashboard',
-              'users',
-              'userManagementAdvanced',
-              'analyticsInsights',
-              'allTests',
-              'questionBuilder',
-              'pollSettings',
-              'pushNotificationSettings',
-              'leaderboard',
-              'profile',
-              'feedback',
-              'helpSupport',
-              'reportIssue',
-              'achievement',
-              'shareContent',
-              'signupRegions',
-              'privacyPolicy',
-              'termsOfUse',
-              'dailyDigest',
-              'dailyQuiz',
-              'articles',
-              'homeContent',
-              'examSnapCard',
-              'notificationScheduling',
-              'publishScheduling',
-              'submitApplicationContent',
-              'instructionContent',
-              'examCategories',
-              'settings',
-              'auditLogs',
-            ] as Tab[]).map(
-              (name) => (
+            {visibleNavTabs.map((name) => (
               <button key={name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>
                 <span>{TAB_ICONS[name]}</span>
                 {TAB_LABELS[name]}
               </button>
-              ),
-            )}
+            ))}
           </nav>
         </aside>
         <main className="main">
@@ -1320,6 +1242,9 @@ function App() {
                 clearStoredAuth();
                 setIsAdmin(false);
                 setIsSuperAdmin(false);
+                setAdminPermissionKeys([]);
+                setAdminPermissionsImplicitFull(false);
+                setRolesTabUserId(null);
                 setToken('');
                 setMessage('');
                 setIdentifier('');
@@ -1373,7 +1298,7 @@ function App() {
           {tab === 'dailyQuiz' && <DailyQuizTab apiClient={authedApi} />}
           {tab === 'articles' && <ArticlesTab apiClient={authedApi} />}
           {tab === 'homeContent' && <HomeContentTab apiClient={authedApi} />}
-          {tab === 'examSnapCard' && <ExamSnapCardTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
+          {tab === 'examSnapCard' && <ExamSnapCardTab apiClient={authedApi} />}
           {tab === 'pollSettings' && <PollSettingsTab apiClient={authedApi} />}
           {tab === 'pushNotificationSettings' && <PushNotificationSettingsTab apiClient={authedApi} />}
           {tab === 'notificationScheduling' && <NotificationSchedulingTab apiClient={authedApi} />}
@@ -1381,13 +1306,25 @@ function App() {
           {tab === 'submitApplicationContent' && <SubmitApplicationContentTab apiClient={authedApi} />}
           {tab === 'instructionContent' && <InstructionContentTab apiClient={authedApi} />}
           {tab === 'examCategories' && <ExamCategoriesTab apiClient={authedApi} />}
-          {tab === 'settings' && <SettingsTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
-          {tab === 'auditLogs' && <AuditLogsTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
-          {tab === 'users' && <UsersTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
-          {tab === 'userManagementAdvanced' && <UserManagementAdvancedTab apiClient={authedApi} isSuperAdmin={isSuperAdmin} />}
+          {tab === 'settings' && <SettingsTab apiClient={authedApi} />}
+          {tab === 'auditLogs' && <AuditLogsTab apiClient={authedApi} />}
+          {tab === 'users' && (
+            <UsersTab
+              apiClient={authedApi}
+              onOpenRolesTab={(userId) => {
+                setRolesTabUserId(userId);
+                setTab('rolesPermissions');
+              }}
+            />
+          )}
+          {tab === 'rolesPermissions' && (
+            <RolesPermissionsTab apiClient={authedApi} initialUserId={rolesTabUserId} />
+          )}
+          {tab === 'userManagementAdvanced' && <UserManagementAdvancedTab apiClient={authedApi} />}
         </main>
       </div>
       </div>
+      </AdminRbacProvider>
       </AdminDialogProvider>
     </AdminToastProvider>
   );
@@ -1513,6 +1450,10 @@ function TestsTab({
 }) {
   const { pushToast } = useAdminToast();
   const { confirm: adminConfirm, prompt: adminPrompt } = useAdminDialog();
+  const rbac = useAdminRbac();
+  const guard = usePermissionGuard();
+  const canEditTests = rbac.canEditTests;
+  const canEditQuestions = rbac.canEditQuestions;
   const TESTS_PER_PAGE = 20;
   const QUESTIONS_PER_PAGE = 20;
   const [items, setItems] = useState<TestItem[]>([]);
@@ -1992,6 +1933,7 @@ function TestsTab({
 
   async function handleTestFormSubmit(e: FormEvent) {
     e.preventDefault();
+    if (!guard('tab_all_tests')) return;
     const parsed = normalizeAndValidateTestPayload({
       title,
       slug,
@@ -2058,6 +2000,7 @@ function TestsTab({
   }
 
   async function deleteTest(id: string) {
+    if (!guard('tab_all_tests')) return;
     const ok = await adminConfirm({
       title: 'Delete test?',
       message: 'This test and its configuration will be removed. You can cancel if you are unsure.',
@@ -2078,6 +2021,7 @@ function TestsTab({
   }
 
   async function applyLiveBadgeToPublishedTests() {
+    if (!guard('tab_all_tests')) return;
     const text = await adminPrompt({
       title: 'Badge text for published tests',
       description: 'Shown on published tests when live badge is enabled.',
@@ -2132,6 +2076,10 @@ function TestsTab({
 
   async function submitQuestion(e: FormEvent) {
     e.preventDefault();
+    if (!rbac.canEditQuestions) {
+      pushToast('error', 'You do not have permission to edit questions.');
+      return;
+    }
     if (!selectedTest) {
       pushToast('error', 'Select a test first');
       return;
@@ -2225,6 +2173,10 @@ function TestsTab({
   }
 
   async function importQuestionsBulk() {
+    if (!rbac.canEditQuestions) {
+      pushToast('error', 'You do not have permission to import questions.');
+      return;
+    }
     if (!selectedTest) {
       pushToast('error', 'Please select a test first.');
       return;
@@ -2260,6 +2212,10 @@ function TestsTab({
 
   async function deleteQuestion(questionId: number) {
     if (questionId < 0) return;
+    if (!rbac.canEditQuestions) {
+      pushToast('error', 'You do not have permission to delete questions.');
+      return;
+    }
     if (!selectedTest) return;
     const ok = await adminConfirm({
       title: 'Delete this question?',
@@ -2341,12 +2297,15 @@ function TestsTab({
           </button>
         )}
       </div>
+      {mode === 'allTests' && !canEditTests ? <TabReadOnlyNotice tabLabel="All Tests" /> : null}
+      {mode === 'questionBuilder' && !canEditQuestions ? <TabReadOnlyNotice tabLabel="Question Builder" /> : null}
       {mode === 'allTests' && (
         <>
           <p className="muted" style={{ marginTop: 0 }}>
             Home category mapping tip: keep the same <b>Subcategory</b> for related exams (e.g. Patwari), and keep each
             <b> Test title</b> unique (e.g. Patwari - HP, Patwari - Punjab) so users can choose the correct exam.
           </p>
+          <fieldset disabled={!canEditTests} className="rbac-fieldset">
           <form
             ref={testFormRef}
             onSubmit={handleTestFormSubmit}
@@ -2588,6 +2547,7 @@ function TestsTab({
               </div>
             )}
           </form>
+          </fieldset>
           <div className="inline-form all-tests-tools">
             <button type="button" className="all-tests-refresh" onClick={load}>
               {isRefreshingTests ? (
@@ -2599,7 +2559,7 @@ function TestsTab({
                 'Refresh Tests'
               )}
             </button>
-            <button type="button" className="ghost" onClick={applyLiveBadgeToPublishedTests}>
+            <button type="button" className="ghost" onClick={applyLiveBadgeToPublishedTests} disabled={!canEditTests}>
               Apply Live Badge (Published)
             </button>
             <input
@@ -2742,7 +2702,7 @@ function TestsTab({
                   <button type="button" onClick={() => loadQuestions(item)}>
                     Open Builder
                   </button>
-                  <button type="button" className="danger" onClick={() => deleteTest(item.id)}>
+                  <button type="button" className="danger" onClick={() => deleteTest(item.id)} disabled={!canEditTests}>
                     Delete
                   </button>
                 </div>
@@ -2797,6 +2757,7 @@ function TestsTab({
             </button>
 
             {showQuestionForm && (
+              <fieldset disabled={!canEditQuestions} className="rbac-fieldset">
               <form onSubmit={submitQuestion} className="question-form">
                 <label>
                   Target Category / Test
@@ -2947,6 +2908,7 @@ function TestsTab({
                   </div>
                 </div>
               </form>
+              </fieldset>
             )}
           </div>
 
@@ -2989,7 +2951,7 @@ Example (subject-wise):
                   className="qb-import-textarea"
                 />
                 <div className="inline-form">
-                  <button type="button" disabled={!selectedTest || isImportingQuestions} onClick={importQuestionsBulk}>
+                  <button type="button" disabled={!selectedTest || isImportingQuestions || !canEditQuestions} onClick={importQuestionsBulk}>
                     {isImportingQuestions ? 'Importing...' : 'Import Questions'}
                   </button>
                 </div>
@@ -3022,10 +2984,10 @@ Example (subject-wise):
               <span>{q.choice_c}</span>
               <span>{q.choice_d}</span>
               <div className="inline-form qb-action-buttons">
-                <button type="button" title={q.id < 0 ? 'Demo entry' : 'Edit'} aria-label={q.id < 0 ? 'Demo entry' : 'Edit'} onClick={() => startEditQuestion(q)} disabled={q.id < 0}>
+                <button type="button" title={q.id < 0 ? 'Demo entry' : 'Edit'} aria-label={q.id < 0 ? 'Demo entry' : 'Edit'} onClick={() => startEditQuestion(q)} disabled={q.id < 0 || !canEditQuestions}>
                   <span aria-hidden="true">✎</span>
                 </button>
-                <button type="button" className="danger" title={q.id < 0 ? 'Demo entry' : 'Delete'} aria-label={q.id < 0 ? 'Demo entry' : 'Delete'} onClick={() => deleteQuestion(q.id)} disabled={q.id < 0}>
+                <button type="button" className="danger" title={q.id < 0 ? 'Demo entry' : 'Delete'} aria-label={q.id < 0 ? 'Demo entry' : 'Delete'} onClick={() => deleteQuestion(q.id)} disabled={q.id < 0 || !canEditQuestions}>
                   <span aria-hidden="true">🗑</span>
                 </button>
               </div>
@@ -3078,6 +3040,10 @@ Example (subject-wise):
 function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
   const { pushToast } = useAdminToast();
   const { confirm: adminConfirm } = useAdminDialog();
+  const rbac = useAdminRbac();
+  const guard = usePermissionGuard();
+  const canEdit = rbac.canEditTab('dailyDigest');
+  const canEditQuizSchedule = rbac.canEditTab('dailyQuiz');
   const [items, setItems] = useState<DailyDigestItem[]>([]);
   const [questionPrompt, setQuestionPrompt] = useState('');
   const [optionA, setOptionA] = useState('');
@@ -3120,6 +3086,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   async function saveDailySchedule() {
+    if (!guard('tab_daily_quiz')) return;
     try {
       await apiClient.patch('/admin/settings', {
         dailyQuizSettings: {
@@ -3136,6 +3103,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
   }
   async function createDigestItem(e: FormEvent) {
     e.preventDefault();
+    if (!guard('tab_daily_digest')) return;
     try {
       await apiClient.post('/admin/digest', {
         questionPrompt,
@@ -3164,6 +3132,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
     }
   }
   async function saveDigestItem(item: DailyDigestItem) {
+    if (!guard('tab_daily_digest')) return;
     try {
       await apiClient.patch(`/admin/digest/${item.id}`, {
         questionPrompt: item.question_prompt,
@@ -3185,6 +3154,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   async function deleteDigestItem(id: string) {
+    if (!guard('tab_daily_digest')) return;
     const ok = await adminConfirm({
       title: 'Delete daily digest item?',
       message: 'This question + fact entry will be removed from the digest list.',
@@ -3221,6 +3191,8 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
       <div className="panel-head">
         <h3>Daily Digest (Question of the Day + Fact of the Day)</h3>
       </div>
+      {!canEdit ? <TabReadOnlyNotice tabLabel="Daily Digest" /> : null}
+      <fieldset disabled={!canEdit} className="rbac-fieldset">
       <form onSubmit={createDigestItem} className="question-form">
         <input value={questionPrompt} onChange={(e) => setQuestionPrompt(e.target.value)} placeholder="Question prompt" required />
         <input value={optionA} onChange={(e) => setOptionA(e.target.value)} placeholder="Option A" required />
@@ -3246,6 +3218,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
           <button type="submit">Add Digest Item</button>
         </div>
       </form>
+      </fieldset>
       <div className="inline-form" style={{ marginBottom: 8 }}>
         <input
           type="number"
@@ -3271,7 +3244,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
           onChange={(e) => setDailyTimezoneOffset(e.target.value)}
           placeholder="Timezone offset minutes (IST=330)"
         />
-        <button type="button" onClick={saveDailySchedule}>Save Daily Quiz Time</button>
+        <button type="button" onClick={saveDailySchedule} disabled={!canEditQuizSchedule}>Save Daily Quiz Time</button>
       </div>
       <button onClick={load}>Refresh Digest Items</button>
       <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search digest items" />
@@ -3429,6 +3402,9 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
 function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
   const { pushToast } = useAdminToast();
   const { confirm: adminConfirm } = useAdminDialog();
+  const rbac = useAdminRbac();
+  const guard = usePermissionGuard();
+  const canEdit = rbac.canEditTab('dailyQuiz');
   const [items, setItems] = useState<DailyQuizItem[]>([]);
   const [questionPrompt, setQuestionPrompt] = useState('');
   const [optionA, setOptionA] = useState('');
@@ -3458,6 +3434,7 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
 
   async function createDailyQuizItem(e: FormEvent) {
     e.preventDefault();
+    if (!guard('tab_daily_quiz')) return;
     try {
       await apiClient.post('/admin/daily-quiz', {
         questionPrompt,
@@ -3487,6 +3464,7 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   async function saveDailyQuizItem(item: DailyQuizItem) {
+    if (!guard('tab_daily_quiz')) return;
     try {
       await apiClient.patch(`/admin/daily-quiz/${item.id}`, {
         questionPrompt: item.questionPrompt,
@@ -3508,6 +3486,7 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   async function deleteDailyQuizItem(id: string) {
+    if (!guard('tab_daily_quiz')) return;
     const ok = await adminConfirm({
       title: 'Delete daily quiz item?',
       message: 'This daily quiz entry will be removed.',
@@ -3541,6 +3520,8 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
       <div className="panel-head">
         <h3>Daily Quiz (separate from Daily Digest)</h3>
       </div>
+      {!canEdit ? <TabReadOnlyNotice tabLabel="Daily Quiz" /> : null}
+      <fieldset disabled={!canEdit} className="rbac-fieldset">
       <form onSubmit={createDailyQuizItem} className="question-form">
         <input value={questionPrompt} onChange={(e) => setQuestionPrompt(e.target.value)} placeholder="Quiz question prompt" required />
         <input value={optionA} onChange={(e) => setOptionA(e.target.value)} placeholder="Option A" required />
@@ -3566,6 +3547,7 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
           <button type="submit">Add Daily Quiz Item</button>
         </div>
       </form>
+      </fieldset>
       <div className="inline-form">
         <button onClick={load}>Refresh Daily Quiz Items</button>
       </div>
@@ -3696,6 +3678,9 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
 function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   const { pushToast, clearToasts } = useAdminToast();
   const { confirm: adminConfirm } = useAdminDialog();
+  const rbac = useAdminRbac();
+  const guard = usePermissionGuard();
+  const canEdit = rbac.canEditTab('articles');
   const featureImageInputIdBase = useId().replace(/:/g, '');
   const ARTICLES_PER_PAGE = 20;
   const [items, setItems] = useState<ArticleItem[]>([]);
@@ -3774,6 +3759,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   }, []);
 
   async function addFeedKind() {
+    if (!guard('tab_articles')) return;
     const slug = normalizeClientFeedKindInput(newFeedKind);
     if (!slug) {
       pushToast('error','Invalid type: use lowercase letters, start with a letter, optional numbers/hyphen/underscore.');
@@ -3799,6 +3785,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   async function removeFeedKind(k: string) {
+    if (!guard('tab_articles')) return;
     if (feedKindOptions.length <= 1) {
       pushToast('error','Keep at least one content type.');
       return;
@@ -3832,6 +3819,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   async function addArticleCategory() {
+    if (!guard('tab_articles')) return;
     const label = normalizeClientCategoryLabel(newCategoryInput);
     if (!label) {
       pushToast('error', 'Enter a category name (letters/words, max 120 characters).');
@@ -3858,6 +3846,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   async function removeArticleCategory(cat: string) {
+    if (!guard('tab_articles')) return;
     if (categoryOptions.length <= 1) {
       pushToast('error', 'Keep at least one category.');
       return;
@@ -3903,6 +3892,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   async function uploadArticleFeatureImage(file: File, onDone: (url: string) => void) {
+    if (!guard('tab_articles')) return;
     try {
       clearToasts();
       setArticleImageUploading(true);
@@ -3917,6 +3907,9 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   async function uploadArticleBodyImageForEditor(file: File): Promise<string> {
+    if (!guard('tab_articles')) {
+      throw new Error('Permission denied');
+    }
     try {
       clearToasts();
       const url = await postArticleImageFile(file);
@@ -3960,6 +3953,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
 
   async function createArticle(e: FormEvent) {
     e.preventDefault();
+    if (!guard('tab_articles')) return;
     if (articleCreating) return;
     try {
       clearToasts();
@@ -3997,6 +3991,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   async function saveArticle(item: ArticleItem) {
+    if (!guard('tab_articles')) return;
     try {
       clearToasts();
       await apiClient.patch(`/admin/articles/${item.id}`, {
@@ -4018,6 +4013,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   async function deleteArticle(id: string) {
+    if (!guard('tab_articles')) return;
     const ok = await adminConfirm({
       title: 'Delete article?',
       message: 'This article will be permanently removed from the feed.',
@@ -4066,6 +4062,8 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
       <div className="panel-head">
         <h3>Articles</h3>
       </div>
+      {!canEdit ? <TabReadOnlyNotice tabLabel="Articles" /> : null}
+      <fieldset disabled={!canEdit} className="rbac-fieldset">
       <div className="article-create-card">
         <button type="button" className="article-create-toggle" onClick={() => setShowArticleForm((p) => !p)}>
           <span className="article-create-label">Articles Control</span>
@@ -4478,6 +4476,7 @@ function ArticlesTab({ apiClient }: { apiClient: typeof api }) {
           </button>
         </div>
       </div>
+      </fieldset>
     </section>
   );
 }
@@ -4512,6 +4511,9 @@ function todayIsoDateLocal(): string {
 function ProfileTab({ apiClient }: { apiClient: typeof api }) {
   const { pushToast } = useAdminToast();
   const { confirm: adminConfirm } = useAdminDialog();
+  const rbac = useAdminRbac();
+  const guard = usePermissionGuard();
+  const canEditMenu = rbac.canEditTab('profile');
   const PROFILE_ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<ProfileMenuItem[]>(DEFAULT_PROFILE_MENU_ITEMS);
   const [selectedMenuItemId, setSelectedMenuItemId] = useState<string>(DEFAULT_PROFILE_MENU_ITEMS[0].id);
@@ -4607,6 +4609,7 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   async function saveAll(nextItems: ProfileMenuItem[]): Promise<boolean> {
+    if (!guard('tab_profile')) return false;
     try {
       const res = await apiClient.patch('/admin/settings', { profileMenuItems: nextItems });
       const savedItems = res.data?.settings?.profileMenuItems || nextItems;
@@ -4761,6 +4764,8 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
           {selectedItem && <code>{selectedItem.path}</code>}
         </div>
       </div>
+      {!canEditMenu ? <TabReadOnlyNotice tabLabel="Profile menu" /> : null}
+      <fieldset disabled={!canEditMenu} className="rbac-fieldset">
       <form onSubmit={addItem} className="inline-form">
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Menu title (e.g. Feedback)" required />
         <input value={subtitle} onChange={(e) => setSubtitle(e.target.value)} placeholder="Subtitle (optional)" />
@@ -4868,6 +4873,7 @@ function ProfileTab({ apiClient }: { apiClient: typeof api }) {
           </button>
         </div>
       </div>
+      </fieldset>
     </section>
   );
 }
@@ -4885,6 +4891,8 @@ function SimpleContentSettingsTab({
   showTitleField?: boolean;
 }) {
   const { pushToast } = useAdminToast();
+  const rbac = useAdminRbac();
+  const canEdit = rbac.canEditSettingsKey(settingsKey);
   const [body, setBody] = useState('');
   const [contentTitle, setContentTitle] = useState('');
   const [loading, setLoading] = useState(true);
@@ -4913,6 +4921,10 @@ function SimpleContentSettingsTab({
   }
 
   async function save() {
+    if (!canEdit) {
+      pushToast('error', 'You do not have permission to save this content.');
+      return;
+    }
     try {
       setSaving(true);
       const resolvedTitle = showTitleField ? String(contentTitle || '').trim() || title : title;
@@ -4940,6 +4952,8 @@ function SimpleContentSettingsTab({
         <p className="sub">Loading...</p>
       ) : (
         <>
+          {!canEdit ? <TabReadOnlyNotice tabLabel={title} /> : null}
+          <fieldset disabled={!canEdit} className="rbac-fieldset">
           {showTitleField && (
             <>
               <p className="muted" style={{ marginTop: 0 }}>
@@ -4986,6 +5000,7 @@ function SimpleContentSettingsTab({
               Reload
             </button>
           </div>
+          </fieldset>
         </>
       )}
     </section>
@@ -4994,6 +5009,9 @@ function SimpleContentSettingsTab({
 
 function SignupRegionsSettingsTab({ apiClient }: { apiClient: typeof api }) {
   const { pushToast } = useAdminToast();
+  const rbac = useAdminRbac();
+  const guard = usePermissionGuard();
+  const canEdit = rbac.canEditTab('signupRegions');
   const [items, setItems] = useState<SignupRegionItem[]>([]);
   const [stateInput, setStateInput] = useState('');
   const [districtInput, setDistrictInput] = useState('');
@@ -5030,6 +5048,7 @@ function SignupRegionsSettingsTab({ apiClient }: { apiClient: typeof api }) {
   }, []);
 
   async function save(nextItems: SignupRegionItem[], successMessage: string) {
+    if (!guard('tab_signup_regions')) return false;
     try {
       setSaving(true);
       const payload = nextItems
@@ -5107,6 +5126,8 @@ function SignupRegionsSettingsTab({ apiClient }: { apiClient: typeof api }) {
       <div className="panel-head">
         <h3>State & Distt (Signup Form)</h3>
       </div>
+      {!canEdit ? <TabReadOnlyNotice tabLabel="State & Distt" /> : null}
+      <fieldset disabled={!canEdit} className="rbac-fieldset">
       <p className="muted">Yahan se signup ke State aur District list manage karein. App form me ye list use hogi.</p>
       <div className="inline-form">
         <input
@@ -5173,6 +5194,7 @@ function SignupRegionsSettingsTab({ apiClient }: { apiClient: typeof api }) {
           </div>
         ))}
       </div>
+      </fieldset>
     </section>
   );
 }
@@ -5188,6 +5210,9 @@ function SupportInboxSettingsTab({
 }) {
   const { pushToast } = useAdminToast();
   const { confirm: adminConfirm } = useAdminDialog();
+  const rbac = useAdminRbac();
+  const guard = usePermissionGuard();
+  const canEdit = rbac.has(INBOX_SETTINGS_KEY_TO_PERMISSION[settingsKey] || 'tab_feedback');
   const ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<SupportInboxItem[]>([]);
   const [user, setUser] = useState('');
@@ -5240,6 +5265,8 @@ function SupportInboxSettingsTab({
   }
 
   async function saveAll(nextItems: SupportInboxItem[], successText: string): Promise<boolean> {
+    const perm = INBOX_SETTINGS_KEY_TO_PERMISSION[settingsKey];
+    if (perm && !guard(perm)) return false;
     try {
       setSaving(true);
       await apiClient.patch('/admin/settings', {
@@ -5320,6 +5347,8 @@ function SupportInboxSettingsTab({
       <div className="panel-head">
         <h3>{title}</h3>
       </div>
+      {!canEdit ? <TabReadOnlyNotice tabLabel={title} /> : null}
+      <fieldset disabled={!canEdit} className="rbac-fieldset">
       <form onSubmit={addItem} className="inline-form">
         <input value={user} onChange={(e) => setUser(e.target.value)} placeholder="User" required />
         <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" required />
@@ -5380,12 +5409,17 @@ function SupportInboxSettingsTab({
           </button>
         </div>
       </div>
+      </fieldset>
     </section>
   );
 }
 
 function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   const { pushToast } = useAdminToast();
+  const rbac = useAdminRbac();
+  const guard = usePermissionGuard();
+  const canEdit = rbac.canEditTab('homeContent');
+  const canUploadBanner = rbac.canUploadBanner;
   const [settings, setSettings] = useState<HomeContentSettings>({
     welcomeText: 'Welcome {name}',
     quickActionsTitle: 'Quick actions',
@@ -5475,6 +5509,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
 
   async function persistHomeContent(currentSettings: HomeContentSettings, opts?: { silent?: boolean }) {
     const silent = opts?.silent === true;
+    if (!guard('tab_home_content')) return;
     try {
       const draftValidationError = validateHomeContentDraft(currentSettings);
       if (draftValidationError) {
@@ -5855,6 +5890,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
   }
 
   async function uploadAndAddBanner() {
+    if (!guard('uploads_banner')) return;
     if (!bannerFile) return;
     if (!isAdminUploadImageMime(bannerFile.type)) {
       pushToast('error', 'Unsupported image type (use JPEG, PNG, WebP, GIF, AVIF, or SVG).');
@@ -6041,6 +6077,8 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
       <div className="panel-head">
         <h3>Home Content</h3>
       </div>
+      {!canEdit ? <TabReadOnlyNotice tabLabel="Home Content" /> : null}
+      <fieldset disabled={!canEdit} className="rbac-fieldset">
       <div className="settings-form">
         <input
           value={'Welcome {name}'}
@@ -6211,8 +6249,9 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
           type="file"
           accept={ADMIN_IMAGE_UPLOAD_MIME_TYPES.join(',')}
           onChange={(e) => setBannerFile(e.target.files?.[0] || null)}
+          disabled={!canUploadBanner}
         />
-        <button type="button" onClick={uploadAndAddBanner} disabled={uploadingBanner || !bannerFile}>
+        <button type="button" onClick={uploadAndAddBanner} disabled={uploadingBanner || !bannerFile || !canUploadBanner}>
           {uploadingBanner ? 'Uploading...' : 'Upload Banner'}
         </button>
       </div>
@@ -6863,10 +6902,11 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
         <button type="button" className="ghost" onClick={load}>
           Load
         </button>
-        <button type="button" onClick={save} disabled={saving}>
+        <button type="button" onClick={save} disabled={saving || !canEdit}>
           {saving ? 'Saving...' : 'Save All'}
         </button>
       </div>
+      </fieldset>
     </section>
   );
 }
@@ -6903,8 +6943,10 @@ function ExamCategoriesTab({ apiClient }: { apiClient: typeof api }) {
   return <ExamCategoriesTabImpl apiClient={apiClient} />;
 }
 
-function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperAdmin: boolean }) {
+function SettingsTab({ apiClient }: { apiClient: typeof api }) {
   const { pushToast } = useAdminToast();
+  const rbac = useAdminRbac();
+  const canEdit = rbac.canEditSettingsGlobal;
   const [settings, setSettings] = useState<AppSettings>({
     maintenanceMode: false,
     maintenanceMessage: '',
@@ -6930,7 +6972,10 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
   }
 
   async function save() {
-    if (!isSuperAdmin) return;
+    if (!canEdit) {
+      pushToast('error', 'You do not have permission to edit global settings.');
+      return;
+    }
     try {
       setLoading(true);
       const res = await apiClient.patch('/admin/settings', globalSettingsPatchPayload(settings));
@@ -6962,7 +7007,7 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
             type="checkbox"
             checked={settings.maintenanceMode}
             onChange={(e) => setSettings((p) => ({ ...p, maintenanceMode: e.target.checked }))}
-            disabled={!isSuperAdmin}
+            disabled={!canEdit}
           />
           Maintenance mode
         </label>
@@ -6971,7 +7016,7 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
             type="checkbox"
             checked={settings.registrationOpen}
             onChange={(e) => setSettings((p) => ({ ...p, registrationOpen: e.target.checked }))}
-            disabled={!isSuperAdmin}
+            disabled={!canEdit}
           />
           Registration open
         </label>
@@ -6988,7 +7033,7 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
                 },
               }))
             }
-            disabled={!isSuperAdmin}
+            disabled={!canEdit}
           />
           Result unlock emails enabled
         </label>
@@ -7002,7 +7047,7 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
                 jobExamArticleAnnouncementEmail: e.target.checked,
               }))
             }
-            disabled={!isSuperAdmin}
+            disabled={!canEdit}
           />
           Job / Exam article announcement emails
         </label>
@@ -7021,7 +7066,7 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
                   },
                 }))
               }
-              disabled={!isSuperAdmin}
+              disabled={!canEdit}
             />
             {item.label}
           </label>
@@ -7044,7 +7089,7 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
                   },
                 }))
               }
-              disabled={!isSuperAdmin}
+              disabled={!canEdit}
             />
             {item.label}
           </label>
@@ -7064,27 +7109,31 @@ function SettingsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSup
             }))
           }
           placeholder="Result unlock delay (hours)"
-          disabled={!isSuperAdmin || settings.resultUnlockEmailSettings?.enabled === false}
+          disabled={!canEdit || settings.resultUnlockEmailSettings?.enabled === false}
         />
         <input
           value={settings.maintenanceMessage}
           onChange={(e) => setSettings((p) => ({ ...p, maintenanceMessage: e.target.value }))}
           placeholder="Maintenance message"
-          disabled={!isSuperAdmin}
+          disabled={!canEdit}
         />
       </div>
-      {isSuperAdmin ? (
+      {!canEdit ? <TabReadOnlyNotice tabLabel="Global Settings" /> : null}
+      {canEdit ? (
         <button onClick={save} disabled={loading}>Save Settings</button>
       ) : (
-        <button disabled title="Only super admin can update settings">Restricted</button>
+        <button disabled title="Requires settings_global permission">Restricted</button>
       )}
     </section>
   );
 }
 
-function AuditLogsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperAdmin: boolean }) {
+function AuditLogsTab({ apiClient }: { apiClient: typeof api }) {
   const { pushToast } = useAdminToast();
   const { confirm: adminConfirm } = useAdminDialog();
+  const rbac = useAdminRbac();
+  const guard = usePermissionGuard();
+  const canClear = rbac.canClearAuditLogs;
   const [items, setItems] = useState<AuditLogItem[]>([]);
   const [auditPage, setAuditPage] = useState(1);
   const [auditPageSize, setAuditPageSize] = useState(50);
@@ -7126,6 +7175,7 @@ function AuditLogsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSu
   }, [auditPageSize]);
 
   async function clearAllLogs() {
+    if (!guard('audit_clear')) return;
     const ok = await adminConfirm({
       title: 'Clear all audit logs?',
       message: 'This permanently deletes every audit log row in the database. This cannot be undone. Only proceed if you are sure.',
@@ -7176,12 +7226,12 @@ function AuditLogsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSu
         <button type="button" onClick={() => void fetchLogs(safeAuditPage)}>
           Refresh
         </button>
-        {isSuperAdmin ? (
+        {canClear ? (
           <button type="button" className="danger" onClick={() => void clearAllLogs()} disabled={clearing || auditTotal === 0}>
             {clearing ? 'Clearing…' : 'Clear all logs'}
           </button>
         ) : (
-          <button type="button" className="ghost" disabled title="Only super admin can clear audit logs">
+          <button type="button" className="ghost" disabled title="Requires audit_clear permission">
             Clear all logs
           </button>
         )}
@@ -7235,14 +7285,29 @@ function AuditLogsTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSu
 }
 const USERS_PAGE_SIZE = 50;
 
-function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperAdmin: boolean }) {
+function UsersTab({
+  apiClient,
+  onOpenRolesTab,
+}: {
+  apiClient: typeof api;
+  onOpenRolesTab: (userId: string) => void;
+}) {
   const { pushToast } = useAdminToast();
   const { confirm: adminConfirm, prompt: adminPrompt } = useAdminDialog();
+  const rbac = useAdminRbac();
+  const guard = usePermissionGuard();
+  const canManageRoles = rbac.canManageRoles;
+  const canBanUsers = rbac.canBanUsers;
+  const canAdvancedUserMgmt = rbac.canAdvancedUserMgmt;
+  const canManageRbac = rbac.canManageRbac;
   const [items, setItems] = useState<UserItem[]>([]);
   const [query, setQuery] = useState('');
   const [usersPage, setUsersPage] = useState(1);
   const [usersTotal, setUsersTotal] = useState(0);
   const [usersLoading, setUsersLoading] = useState(true);
+  const [permModalUser, setPermModalUser] = useState<UserItem | null>(null);
+
+  const canChangeAccess = canManageRoles || canBanUsers || canAdvancedUserMgmt || canManageRbac;
 
   useEffect(() => {
     void fetchUsers(1);
@@ -7282,6 +7347,7 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
   }
 
   async function toggleAdmin(user: UserItem) {
+    if (!guard('users_manage_roles')) return;
     try {
       const nextIsAdmin = !user.is_admin;
       await apiClient.patch(`/admin/users/${user.id}/admin`, {
@@ -7290,13 +7356,19 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
         isSuperAdmin: nextIsAdmin ? user.is_super_admin : false,
       });
       await fetchUsers(usersPage);
-      pushToast('success', 'Admin role updated.');
+      pushToast(
+        'success',
+        nextIsAdmin
+          ? 'User is now admin. Open Roles & Permissions (or Set Permissions) to assign checkboxes.'
+          : 'Admin role removed.',
+      );
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to update admin role');
     }
   }
 
   async function toggleSuperAdmin(user: UserItem) {
+    if (!guard('users_manage_roles')) return;
     try {
       await apiClient.patch(`/admin/users/${user.id}/admin`, {
         isAdmin: true,
@@ -7310,6 +7382,7 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
   }
 
   async function toggleBan(user: UserItem) {
+    if (!guard('users_ban')) return;
     const shouldBan = !user.is_banned;
     let reason = '';
     if (shouldBan) {
@@ -7340,6 +7413,7 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
   }
 
   async function revokeSessions(user: UserItem) {
+    if (!guard('tab_user_management_advanced')) return;
     const ok = await adminConfirm({
       title: 'Revoke all sessions?',
       message: `All active logins for ${user.email} will be signed out.`,
@@ -7358,6 +7432,7 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
   }
 
   async function deleteUser(user: UserItem) {
+    if (!guard('tab_user_management_advanced')) return;
     const ok = await adminConfirm({
       title: 'Delete user permanently?',
       message: `Account ${user.email} will be removed. This cannot be undone.`,
@@ -7382,6 +7457,13 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
 
   return (
     <section className="panel-card">
+      <AdminPermissionsModal
+        apiClient={apiClient}
+        userId={permModalUser?.id || ''}
+        userLabel={permModalUser?.display_name || permModalUser?.email || ''}
+        open={Boolean(permModalUser)}
+        onClose={() => setPermModalUser(null)}
+      />
       <div className="panel-head">
         <h3>User Access Control</h3>
       </div>
@@ -7415,7 +7497,7 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
             <span>{item.email}</span>
             <span>{item.is_super_admin ? 'Super Admin' : item.is_admin ? 'Admin' : 'User'}</span>
             <span>{item.is_banned ? `Banned: ${item.ban_reason || 'No reason'}` : 'Active'}</span>
-            {isSuperAdmin ? (
+            {canChangeAccess ? (
               <div className="inline-form users-table-actions">
                 {isProtectedSuperAdminEmail(item.email) ? (
                   <span
@@ -7426,26 +7508,46 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
                   </span>
                 ) : (
                   <>
-                    <button type="button" onClick={() => toggleAdmin(item)}>
-                      {item.is_admin ? 'Remove Admin' : 'Make Admin'}
-                    </button>
-                    <button type="button" onClick={() => toggleSuperAdmin(item)}>
-                      {item.is_super_admin ? 'Remove Super Admin' : 'Make Super Admin'}
-                    </button>
-                    <button type="button" className="ghost" onClick={() => toggleBan(item)}>
-                      {item.is_banned ? 'Unban User' : 'Ban User'}
-                    </button>
-                    <button type="button" className="ghost" onClick={() => revokeSessions(item)}>
-                      Revoke sessions
-                    </button>
-                    <button type="button" className="danger" onClick={() => deleteUser(item)}>
-                      Delete user
-                    </button>
+                    {canManageRoles ? (
+                      <>
+                        <button type="button" onClick={() => toggleAdmin(item)}>
+                          {item.is_admin ? 'Remove Admin' : 'Make Admin'}
+                        </button>
+                        <button type="button" onClick={() => toggleSuperAdmin(item)}>
+                          {item.is_super_admin ? 'Remove Super Admin' : 'Make Super Admin'}
+                        </button>
+                      </>
+                    ) : null}
+                    {canManageRbac && item.is_admin && !item.is_super_admin ? (
+                      <>
+                        <button type="button" className="ghost" onClick={() => setPermModalUser(item)}>
+                          Set Permissions
+                        </button>
+                        <button type="button" className="ghost" onClick={() => onOpenRolesTab(item.id)}>
+                          Open in Roles tab
+                        </button>
+                      </>
+                    ) : null}
+                    {canBanUsers ? (
+                      <button type="button" className="ghost" onClick={() => toggleBan(item)}>
+                        {item.is_banned ? 'Unban User' : 'Ban User'}
+                      </button>
+                    ) : null}
+                    {canAdvancedUserMgmt ? (
+                      <>
+                        <button type="button" className="ghost" onClick={() => revokeSessions(item)}>
+                          Revoke sessions
+                        </button>
+                        <button type="button" className="danger" onClick={() => deleteUser(item)}>
+                          Delete user
+                        </button>
+                      </>
+                    ) : null}
                   </>
                 )}
               </div>
             ) : (
-              <button disabled title="Only super admin can change roles and user access">
+              <button disabled title="You do not have permission to change user access">
                 Restricted
               </button>
             )}
@@ -7484,8 +7586,8 @@ function UsersTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperA
   );
 }
 
-function UserManagementAdvancedTab({ apiClient, isSuperAdmin }: { apiClient: typeof api; isSuperAdmin: boolean }) {
-  return <UserManagementAdvancedTabImpl apiClient={apiClient} isSuperAdmin={isSuperAdmin} />;
+function UserManagementAdvancedTab({ apiClient }: { apiClient: typeof api }) {
+  return <UserManagementAdvancedTabImpl apiClient={apiClient} />;
 }
 
 export default App;

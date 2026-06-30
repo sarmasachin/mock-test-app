@@ -2,6 +2,8 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { AdminAnalyticsDashboard } from '../components/AdminAnalyticsDashboard';
 import { useAdminDialog } from '../adminDialog';
 import { useAdminToast } from '../adminToast';
+import { useAdminRbac } from '../adminRbacContext';
+import { usePermissionGuard } from '../hooks/usePermissionGuard';
 import { isProtectedSuperAdminEmail } from '../protectedSuperAdmin';
 
 /** Display stored ISO (or parseable) times in India timezone for admin lists. */
@@ -164,6 +166,7 @@ export function AnalyticsInsightsTabImpl({ apiClient }: { apiClient: ApiClient }
 
 export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
+  const guard = usePermissionGuard();
   const ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<NotificationScheduleItem[]>([]);
   const [title, setTitle] = useState('');
@@ -210,6 +213,7 @@ export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiCli
   }, []);
 
   async function saveAll(nextItems: NotificationScheduleItem[]) {
+    if (!guard('tab_notification_scheduling')) return false;
     try {
       setSaving(true);
       const res = await apiClient.patch('/admin/settings', { notificationScheduling: { items: nextItems } });
@@ -267,6 +271,7 @@ export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiCli
   }
 
   async function sendNow(item: NotificationScheduleItem) {
+    if (!guard('tab_notification_scheduling')) return;
     try {
       setSendingId(item.id);
       const res = await apiClient.post('/admin/notifications/send', {
@@ -378,6 +383,7 @@ export function NotificationSchedulingTabImpl({ apiClient }: { apiClient: ApiCli
 
 export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
+  const guard = usePermissionGuard();
   const ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<PublishScheduleItem[]>([]);
   const [tests, setTests] = useState<TestItemLite[]>([]);
@@ -404,6 +410,7 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
   }, []);
   async function addSchedule(e: FormEvent) {
     e.preventDefault();
+    if (!guard('tab_publish_scheduling')) return;
     const scheduleIso = datetimeLocalToIsoUtc(scheduleAt);
     if (!entityId || !scheduleIso) {
       pushToast('error', 'Select item and a valid schedule date/time');
@@ -421,6 +428,7 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
     }
   }
   async function changeStatus(id: string, status: 'scheduled' | 'cancelled') {
+    if (!guard('tab_publish_scheduling')) return;
     try {
       await apiClient.patch(`/admin/publish-scheduling/${id}`, { status });
       await load();
@@ -495,6 +503,10 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
 
 export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
+  const rbac = useAdminRbac();
+  const guard = usePermissionGuard();
+  const canUploadImages =
+    rbac.has('tab_exam_categories') || rbac.has('tab_articles') || rbac.has('tab_home_content');
   const ITEMS_PER_PAGE = 20;
   const ACCEPTED_IMAGE_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif', 'image/avif', 'image/svg+xml'] as const;
   const [items, setItems] = useState<ExamCategoryItem[]>([]);
@@ -540,6 +552,9 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
   }
 
   async function uploadIconFile(file: File): Promise<string> {
+    if (!canUploadImages) {
+      throw new Error('Permission denied');
+    }
     if (!isUploadMimeSupported(file.type)) {
       throw new Error('Unsupported image type (use JPEG, PNG, WebP, GIF, AVIF, or SVG).');
     }
@@ -618,6 +633,7 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   async function saveAll(nextItems: ExamCategoryItem[]) {
+    if (!guard('tab_exam_categories')) return false;
     try {
       setSaving(true);
       const payload = {
@@ -634,6 +650,7 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
   }
 
   async function saveIconOptions(nextOptions: ExamCategoryIconOption[]) {
+    if (!guard('tab_exam_categories')) return false;
     try {
       setSaving(true);
       const res = await apiClient.patch('/admin/settings', { examCategoryIconOptions: { items: nextOptions } });
@@ -843,9 +860,12 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
   );
 }
 
-export function UserManagementAdvancedTabImpl({ apiClient, isSuperAdmin }: { apiClient: ApiClient; isSuperAdmin: boolean }) {
+export function UserManagementAdvancedTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
   const { prompt: adminPrompt } = useAdminDialog();
+  const rbac = useAdminRbac();
+  const guard = usePermissionGuard();
+  const canBanUsers = rbac.canBanUsers;
   const ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<UserReportItem[]>([]);
   const [query, setQuery] = useState('');
@@ -865,6 +885,7 @@ export function UserManagementAdvancedTabImpl({ apiClient, isSuperAdmin }: { api
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   async function toggleBan(item: UserReportItem) {
+    if (!guard('users_ban')) return;
     if (isProtectedSuperAdminEmail(item.email)) {
       pushToast('error', 'This account is a protected super admin and cannot be blocked from here.');
       return;
@@ -897,10 +918,9 @@ export function UserManagementAdvancedTabImpl({ apiClient, isSuperAdmin }: { api
   return (
     <section className="panel-card">
       <div className="panel-head"><h3>User Management Advanced</h3></div>
-      {!isSuperAdmin ? (
+      {!canBanUsers ? (
         <p style={{ margin: '0 0 10px', fontSize: '0.86rem', color: 'var(--text-muted, #5f6b7a)' }}>
-          Block / unblock from this report list requires a <strong>super admin</strong> login. Grant admin roles on the
-          Users tab (also super admin only).
+          Block / unblock from this report list requires the <strong>Ban / unban users</strong> permission (Roles &amp; Permissions).
         </p>
       ) : null}
       <div className="inline-form">
@@ -947,7 +967,7 @@ export function UserManagementAdvancedTabImpl({ apiClient, isSuperAdmin }: { api
             <span>{item.attempts_count}</span>
             <span>{item.is_banned ? 'Blocked' : 'Active'}</span>
             <span>{item.last_attempt_at ? new Date(item.last_attempt_at).toLocaleString() : '-'}</span>
-            {isSuperAdmin ? (
+            {canBanUsers ? (
               isProtectedSuperAdminEmail(item.email) ? (
                 <span title="Permanent super admin" style={{ fontSize: '0.78rem', color: '#64748b', fontWeight: 700 }}>
                   Protected
@@ -958,7 +978,7 @@ export function UserManagementAdvancedTabImpl({ apiClient, isSuperAdmin }: { api
                 </button>
               )
             ) : (
-              <button disabled title="Only super admin can block/unblock users">
+              <button disabled title="Requires users_ban permission">
                 Restricted
               </button>
             )}

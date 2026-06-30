@@ -43,11 +43,12 @@ const {
   loadStoredPermissionKeys,
   getEffectiveAdminPermissions,
   replaceAdminUserPermissions,
-  seedFullPermissionsForAdmin,
   clearAdminPermissions,
 } = require('../lib/adminPermissions');
+const { adminPermissionGuard } = require('../middleware/adminPermissionGuard');
 
 const router = express.Router();
+router.use(adminPermissionGuard);
 
 /** Rolling cap for DB audit trail (Admin → Audit Logs). Oldest rows deleted once count exceeds this. */
 function getAdminAuditLogMaxRows() {
@@ -1961,9 +1962,6 @@ router.get('/summary', async (req, res) => {
 
 /** Shared: save exam_snap_card row only. POST preferred (some proxies strip PATCH bodies). */
 async function handleExamSnapCardSettingsSave(req, res) {
-  if (!req.isSuperAdmin) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
   try {
     const raw = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
     const payload =
@@ -2017,9 +2015,6 @@ router.post('/settings/exam-snap-card', handleExamSnapCardSettingsSave);
 router.patch('/settings/exam-snap-card', handleExamSnapCardSettingsSave);
 
 router.post('/uploads/banner', async (req, res) => {
-  if (!req.isSuperAdmin) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
   try {
     const body = req.body || {};
     const fileNameRaw = String(body.fileName || '').trim();
@@ -2120,9 +2115,6 @@ router.post('/uploads/article-image', async (req, res) => {
 });
 
 router.patch('/settings', async (req, res) => {
-  if (!req.isSuperAdmin) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
   const body = req.body || {};
   const maintenanceMode = body.maintenanceMode === undefined ? null : Boolean(body.maintenanceMode);
   const maintenanceMessage =
@@ -2661,9 +2653,6 @@ router.get('/audit-logs', async (req, res) => {
 
 /** Super admin only: remove every row from audit log table (cannot be undone). No DB row retained for “who cleared”—use server logs / backups for forensics. */
 router.delete('/audit-logs', async (req, res) => {
-  if (!req.isSuperAdmin) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
   try {
     const result = await pool.query(`DELETE FROM admin_audit_logs`);
     const deleted = Number(result.rowCount || 0);
@@ -3833,9 +3822,6 @@ router.get('/permissions/me', async (req, res) => {
 });
 
 router.get('/users/:id/permissions', async (req, res) => {
-  if (!req.isSuperAdmin) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid user id' });
   try {
@@ -3877,9 +3863,6 @@ router.get('/users/:id/permissions', async (req, res) => {
 });
 
 router.put('/users/:id/permissions', async (req, res) => {
-  if (!req.isSuperAdmin) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid user id' });
   const keys = (req.body && req.body.permissionKeys) || (req.body && req.body.permissions) || [];
@@ -3888,7 +3871,7 @@ router.put('/users/:id/permissions', async (req, res) => {
       targetUserId: id,
       permissionKeys: keys,
       grantedByUserId: req.userId,
-      actorIsSuperAdmin: true,
+      actorCanManageRbac: req.hasAdminPermission('rbac_manage'),
     });
     await logAdminAction(req, 'admin_permissions_updated', 'user', id, {
       permissionKeys: result.permissionKeys,
@@ -4170,9 +4153,6 @@ router.get('/analytics', async (req, res) => {
 });
 
 router.patch('/users/:id/admin', async (req, res) => {
-  if (!req.isSuperAdmin) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid user id' });
   let isAdmin = Boolean((req.body || {}).isAdmin);
@@ -4231,8 +4211,6 @@ router.patch('/users/:id/admin', async (req, res) => {
     const nowSuper = Boolean(rows[0].is_super_admin);
     if (!nowAdmin) {
       await clearAdminPermissions(id);
-    } else if (nowAdmin && !wasAdmin && !nowSuper) {
-      await seedFullPermissionsForAdmin(id, req.userId);
     }
     const grantEmail = String(rows[0].email || '').trim();
     if (grantEmail && isMailConfigured()) {
@@ -4263,9 +4241,6 @@ router.patch('/users/:id/admin', async (req, res) => {
 });
 
 router.patch('/users/:id/ban', async (req, res) => {
-  if (!req.isSuperAdmin) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid user id' });
   if (String(req.userId) === String(id)) {
@@ -4318,9 +4293,6 @@ router.patch('/users/:id/ban', async (req, res) => {
   }
 });
 router.post('/users/:id/revoke-sessions', async (req, res) => {
-  if (!req.isSuperAdmin) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid user id' });
   if (String(req.userId) === String(id)) {
@@ -4350,9 +4322,6 @@ router.post('/users/:id/revoke-sessions', async (req, res) => {
 });
 
 router.delete('/users/:id', async (req, res) => {
-  if (!req.isSuperAdmin) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid user id' });
   if (String(req.userId) === String(id)) {

@@ -7,8 +7,10 @@ import {
   mergeExamSnapCardFromServer,
 } from '../lib/examSnapCardHtml';
 import { useAdminToast } from '../adminToast';
+import { useAdminRbac } from '../adminRbacContext';
+import { TabReadOnlyNotice } from '../components/TabReadOnlyNotice';
 
-type Props = { apiClient: AxiosInstance; isSuperAdmin: boolean };
+type Props = { apiClient: AxiosInstance };
 
 const FIELD_ROWS: { key: keyof ExamSnapCardData; label: string }[] = [
   { key: 'registrationLeft', label: 'Top bar — left' },
@@ -37,8 +39,10 @@ const FIELD_ROWS: { key: keyof ExamSnapCardData; label: string }[] = [
   { key: 'qrImageUrl', label: 'QR image URL (https only)' },
 ];
 
-export function ExamSnapCardTab({ apiClient, isSuperAdmin }: Props) {
+export function ExamSnapCardTab({ apiClient }: Props) {
   const { pushToast } = useAdminToast();
+  const rbac = useAdminRbac();
+  const canEdit = rbac.canEditTab('examSnapCard');
   const [card, setCard] = useState<ExamSnapCardData>(() => defaultExamSnapCard());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -71,8 +75,8 @@ export function ExamSnapCardTab({ apiClient, isSuperAdmin }: Props) {
   }
 
   async function save() {
-    if (!isSuperAdmin) {
-      pushToast('error', 'Super admin required to save settings.');
+    if (!canEdit) {
+      pushToast('error', 'You do not have permission to save card settings.');
       return;
     }
     setSaving(true);
@@ -127,6 +131,8 @@ export function ExamSnapCardTab({ apiClient, isSuperAdmin }: Props) {
       {editorOpen ? (
         <div className="exam-snap-card-body exam-snap-card-body--open">
           <div className="exam-snap-editor-panel" id="exam-snap-editor-panel">
+            {!canEdit ? <TabReadOnlyNotice tabLabel="Exam Snap Card" /> : null}
+            <fieldset disabled={!canEdit} className="rbac-fieldset">
             <div className="exam-snap-card-layout exam-snap-card-layout--with-preview">
               <div className="exam-snap-card-form">
                 {loading ? (
@@ -164,6 +170,7 @@ export function ExamSnapCardTab({ apiClient, isSuperAdmin }: Props) {
                 </button>
               </div>
             </footer>
+            </fieldset>
           </div>
         </div>
       ) : null}

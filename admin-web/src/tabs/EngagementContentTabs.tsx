@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useAdminDialog } from '../adminDialog';
 import { useAdminToast } from '../adminToast';
+import { usePermissionGuard } from '../hooks/usePermissionGuard';
 
 type ApiClient = {
   get: (url: string, config?: any) => Promise<any>;
@@ -260,6 +261,7 @@ type DigestShareContentSettings = { title: string; body: string };
 
 export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
+  const guard = usePermissionGuard();
   const POLLS_PER_PAGE = 20;
   const [settings, setSettings] = useState<PollSettings>({ showHomePopup: true, items: [] });
   const [newItem, setNewItem] = useState({ question: '', options: ['', '', '', ''], allowMultiple: false, durationMinutes: '1440' });
@@ -290,6 +292,7 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
 
   /** Single path to DB + local state (avoids "Add Poll" only updating React state with no PATCH). */
   async function persistPollSettings(next: PollSettings, successText: string) {
+    if (!guard('tab_poll_settings')) return false;
     try {
       setSaving(true);
       await apiClient.patch('/admin/settings', { pollSettings: next });
@@ -509,6 +512,7 @@ export function PollSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
 
 export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
+  const guard = usePermissionGuard();
   const { confirm: adminConfirm } = useAdminDialog();
   const PUSH_PER_PAGE = 20;
   const [settings, setSettings] = useState<PushSettings>({ items: [] });
@@ -646,6 +650,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
   }
 
   async function save(nextSettings?: PushSettings, successText?: string) {
+    if (!guard('tab_push_notifications')) return false;
     try {
       setSaving(true);
       const payload = nextSettings || settings;
@@ -748,6 +753,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
     }
   }
   async function sendNow(item: PushItem) {
+    if (!guard('tab_push_notifications')) return;
     if (!item.title.trim() || !item.message.trim()) {
       pushToast('error', 'Title and message are required to send push');
       return;
@@ -1142,6 +1148,7 @@ export function PushNotificationSettingsTabImpl({ apiClient }: { apiClient: ApiC
 
 export function SubmitApplicationContentTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
+  const guard = usePermissionGuard();
   const ITEMS_PER_PAGE = 20;
   const [settings, setSettings] = useState<SubmitApplicationContent>({ title: 'Apply', benefitsTitle: "What you'll get", submitButtonLabel: 'Submit Application', successMessage: 'Your application was submitted successfully.', bulletItems: ['Instant access after approval', 'Mock test practice & review', 'Score history in your profile'] });
   const [newBullet, setNewBullet] = useState('');
@@ -1162,6 +1169,7 @@ export function SubmitApplicationContentTabImpl({ apiClient }: { apiClient: ApiC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   async function save() {
+    if (!guard('tab_submit_application')) return;
     try {
       setSaving(true);
       await apiClient.patch('/admin/settings', { submitApplicationContent: settings });
@@ -1198,6 +1206,7 @@ export function SubmitApplicationContentTabImpl({ apiClient }: { apiClient: ApiC
 
 export function InstructionContentTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
+  const guard = usePermissionGuard();
   const ITEMS_PER_PAGE = 20;
   const [openModule, setOpenModule] = useState<'instructions' | 'submitPopup' | 'postSubmitCard' | 'navigation' | 'instructionLines' | null>(null);
   const [settings, setSettings] = useState<InstructionContent>({
@@ -1252,6 +1261,7 @@ export function InstructionContentTabImpl({ apiClient }: { apiClient: ApiClient 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   async function save() {
+    if (!guard('tab_instruction_content')) return;
     try {
       setSaving(true);
       await apiClient.patch('/admin/settings', { instructionContent: settings });
@@ -1392,6 +1402,7 @@ export function InstructionContentTabImpl({ apiClient }: { apiClient: ApiClient 
 
 export function ShareContentTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
+  const guard = usePermissionGuard();
   const [settings, setSettings] = useState<ShareContentSettings>({
     title: 'Share',
     body: 'Check out MockTestApp for practice tests and alerts.\n{storeUrl}',
@@ -1442,6 +1453,7 @@ export function ShareContentTabImpl({ apiClient }: { apiClient: ApiClient }) {
   }, []);
 
   async function save() {
+    if (!guard('tab_share_content')) return;
     try {
       const body = String(settings.body || '').trim();
       if (!body) {
@@ -1464,6 +1476,7 @@ export function ShareContentTabImpl({ apiClient }: { apiClient: ApiClient }) {
   }
 
   async function saveDailyShare() {
+    if (!guard('tab_daily_digest') || !guard('tab_daily_quiz')) return;
     try {
       const digestBody = String(dailyDigestShare.body || '').trim();
       const quizBody = String(dailyQuizShare.body || '').trim();
