@@ -825,10 +825,13 @@ private fun SignupForm(
     }
 
     val stateMatched = remember(state) {
-        SignupRegionData.indianStates.any { it.equals(state, ignoreCase = true) }
+        SignupRegionData.indianStates.any { it.equals(state.trim(), ignoreCase = true) }
     }
-    val districtOptions = remember(stateMatched, state) {
-        if (stateMatched) SignupRegionData.districtsForState(state) else emptyList()
+    val canonicalState = remember(state) {
+        SignupRegionData.indianStates.firstOrNull { it.equals(state.trim(), ignoreCase = true) }.orEmpty()
+    }
+    val districtOptions = remember(stateMatched, canonicalState) {
+        if (stateMatched) SignupRegionData.districtsForState(canonicalState) else emptyList()
     }
 
     NeonTextField(
@@ -861,8 +864,10 @@ private fun SignupForm(
     NeonSearchableListField(
         value = state,
         onValueChange = { new ->
-            state = new
-            if (!SignupRegionData.districtsForState(new).any { it.equals(district, ignoreCase = true) }) {
+            val picked = SignupRegionData.indianStates
+                .firstOrNull { it.equals(new.trim(), ignoreCase = true) } ?: new
+            state = picked
+            if (!SignupRegionData.districtsForState(picked).any { it.equals(district, ignoreCase = true) }) {
                 district = ""
             }
         },
@@ -875,10 +880,13 @@ private fun SignupForm(
     Spacer(Modifier.height(10.dp))
     NeonSearchableListField(
         value = district,
-        onValueChange = { district = it },
+        onValueChange = { new ->
+            val picked = districtOptions.firstOrNull { it.equals(new.trim(), ignoreCase = true) } ?: new
+            district = picked
+        },
         label = if (stateMatched) "District" else "District (select state first)",
         options = districtOptions,
-        enabled = stateMatched && districtOptions.isNotEmpty(),
+        enabled = stateMatched,
         errorText = districtError,
         isError = districtError != null,
     )
@@ -970,7 +978,11 @@ private fun SignupForm(
                 return@NeonButton
             }
 
-            val isStateFromList = SignupRegionData.indianStates.any { it.equals(state, ignoreCase = true) }
+            val resolvedState = SignupRegionData.indianStates
+                .firstOrNull { it.equals(state.trim(), ignoreCase = true) }
+                .orEmpty()
+            val resolvedDistricts = SignupRegionData.districtsForState(resolvedState)
+            val isStateFromList = resolvedState.isNotBlank()
             if (state.isBlank()) {
                 stateError = "State required"
                 return@NeonButton
@@ -984,7 +996,9 @@ private fun SignupForm(
                 districtError = "District required"
                 return@NeonButton
             }
-            if (!SignupRegionData.districtsForState(state).any { it.equals(district, ignoreCase = true) }) {
+            if (resolvedDistricts.isNotEmpty() &&
+                !resolvedDistricts.any { it.equals(district.trim(), ignoreCase = true) }
+            ) {
                 districtError = "Select district from the list"
                 return@NeonButton
             }
@@ -1006,8 +1020,8 @@ private fun SignupForm(
                     email = email,
                     phone = mobile,
                     password = password,
-                    state = state,
-                    district = district,
+                    state = resolvedState,
+                    district = district.trim(),
                 )
                     .onSuccess {
                         busy = false

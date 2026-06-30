@@ -64,10 +64,13 @@ fun CompleteProfileScreenNew(
     val scope = rememberCoroutineScope()
 
     val stateMatched = remember(state) {
-        SignupRegionData.indianStates.any { it.equals(state, ignoreCase = true) }
+        SignupRegionData.indianStates.any { it.equals(state.trim(), ignoreCase = true) }
     }
-    val districtOptions = remember(stateMatched, state) {
-        if (stateMatched) SignupRegionData.districtsForState(state) else emptyList()
+    val canonicalState = remember(state) {
+        SignupRegionData.indianStates.firstOrNull { it.equals(state.trim(), ignoreCase = true) }.orEmpty()
+    }
+    val districtOptions = remember(stateMatched, canonicalState) {
+        if (stateMatched) SignupRegionData.districtsForState(canonicalState) else emptyList()
     }
 
     var mobileError by remember { mutableStateOf<String?>(null) }
@@ -154,10 +157,12 @@ fun CompleteProfileScreenNew(
                     NeonSearchableListField(
                         value = state,
                         onValueChange = { new ->
-                            state = new
+                            val picked = SignupRegionData.indianStates
+                                .firstOrNull { it.equals(new.trim(), ignoreCase = true) } ?: new
+                            state = picked
                             stateError = null
                             feedback = null
-                            if (!SignupRegionData.districtsForState(new).any { it.equals(district, ignoreCase = true) }) {
+                            if (!SignupRegionData.districtsForState(picked).any { it.equals(district, ignoreCase = true) }) {
                                 district = ""
                             }
                         },
@@ -170,14 +175,15 @@ fun CompleteProfileScreenNew(
                     Spacer(Modifier.height(10.dp))
                     NeonSearchableListField(
                         value = district,
-                        onValueChange = {
-                            district = it
+                        onValueChange = { new ->
+                            val picked = districtOptions.firstOrNull { it.equals(new.trim(), ignoreCase = true) } ?: new
+                            district = picked
                             districtError = null
                             feedback = null
                         },
                         label = if (stateMatched) "District" else "District (select state first)",
                         options = districtOptions,
-                        enabled = stateMatched && districtOptions.isNotEmpty() && !busy,
+                        enabled = stateMatched && !busy,
                         errorText = districtError,
                         isError = districtError != null,
                     )
@@ -196,14 +202,19 @@ fun CompleteProfileScreenNew(
                             }
                             val sErr = when {
                                 state.isBlank() -> "State is required"
-                                !SignupRegionData.indianStates.any { it.equals(state, ignoreCase = true) } ->
+                                !SignupRegionData.indianStates.any { it.equals(state.trim(), ignoreCase = true) } ->
                                     "Pick your state from the list"
                                 else -> null
                             }
+                            val resolvedState = SignupRegionData.indianStates
+                                .firstOrNull { it.equals(state.trim(), ignoreCase = true) }
+                                .orEmpty()
+                            val resolvedDistricts = SignupRegionData.districtsForState(resolvedState)
                             val dErr = when {
                                 !stateMatched -> null
                                 district.isBlank() -> "District is required"
-                                !SignupRegionData.districtsForState(state).any { it.equals(district, ignoreCase = true) } ->
+                                resolvedDistricts.isNotEmpty() &&
+                                    !resolvedDistricts.any { it.equals(district.trim(), ignoreCase = true) } ->
                                     "Pick your district from the list"
                                 else -> null
                             }
@@ -225,7 +236,7 @@ fun CompleteProfileScreenNew(
                                 busy = true
                                 val r = AuthRepository.patchProfileRemote(
                                     phone = mobile,
-                                    state = state.trim(),
+                                    state = resolvedState.ifBlank { state.trim() },
                                     district = district.trim(),
                                 )
                                 busy = false

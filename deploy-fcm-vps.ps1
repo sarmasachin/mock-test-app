@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
-$hostAddr = '187.127.158.228'
+$hostAddr = '187.127.154.196'
 $remoteDir = '/var/www/mocktestapp/server'
-$localKey = 'C:\Users\DELL\Downloads\mock-86f57-firebase-adminsdk-fbsvc-f2f7088719.json'
+$localKey = 'C:\Users\DELL\Downloads\mock-86f57-firebase-adminsdk-fbsvc-276b4c2f69.json'
 $localScript = 'C:\Users\DELL\Desktop\mocktestapp\server\scripts\applyFcmEnv.js'
 
 if (-not (Test-Path $localKey)) {
@@ -19,6 +19,6 @@ ssh "root@${hostAddr}" "cd ${remoteDir} && node scripts/applyFcmEnv.js fcm-key.j
 
 Write-Host 'Step 3/3: Verify .env + restart API...'
 scp "C:\Users\DELL\Desktop\mocktestapp\server\scripts\verifyFcmEnv.js" "root@${hostAddr}:${remoteDir}/scripts/verifyFcmEnv.js"
-ssh "root@${hostAddr}" "cd ${remoteDir} && node scripts/verifyFcmEnv.js && (pm2 delete mocktest-api 2>/dev/null || true) && pm2 start src/index.js --name mocktest-api --cwd ${remoteDir} && pm2 save && pm2 status mocktest-api"
+ssh "root@${hostAddr}" "cd ${remoteDir} && node scripts/verifyFcmEnv.js && pm2 restart mocktest-api --update-env && pm2 status mocktest-api"
 
 Write-Host 'Done. Now: phone login -> Admin -> Send push.'

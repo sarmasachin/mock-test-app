@@ -66,11 +66,10 @@ object SignupRegionData {
         val key = indianStates.firstOrNull { it.equals(state, ignoreCase = true) } ?: return emptyList()
         val adminEntry = adminRegionMap.entries.firstOrNull { it.key.equals(key, ignoreCase = true) }
         if (adminEntry != null) {
-            // Admin-managed state: show only admin-provided districts (no local fallback).
-            return adminEntry.value.distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+            val adminDistricts = adminEntry.value.distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+            if (adminDistricts.isNotEmpty()) return adminDistricts
+            // Admin added the state but no districts yet — fall back to built-in samples so signup is not blocked.
         }
-        // Non-admin state: use built-in samples only. Do not inject "Other / Not listed" implicitly
-        // because admins may remove it from their configuration and expect it to stay removed.
         val base = (districtSamples[key] ?: emptyList())
         return base.distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
     }

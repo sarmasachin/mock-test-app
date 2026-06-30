@@ -31,11 +31,15 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -59,8 +63,14 @@ fun NeonSearchableListField(
     isError: Boolean,
 ) {
     val p = mockTestPalette()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    var dropdownExpanded by remember { mutableStateOf(false) }
+    val trimmedValue = value.trim()
+    val exactMatch = trimmedValue.isNotBlank() &&
+        options.any { it.equals(trimmedValue, ignoreCase = true) }
     val filtered = remember(value, options) {
         when {
             options.isEmpty() -> emptyList()
@@ -68,12 +78,32 @@ fun NeonSearchableListField(
             else -> options.filter { it.contains(value, ignoreCase = true) }.take(12)
         }
     }
-    val showSuggestions = enabled && focused && filtered.isNotEmpty()
+
+    LaunchedEffect(exactMatch) {
+        if (exactMatch) dropdownExpanded = false
+    }
+
+    fun closeDropdown() {
+        dropdownExpanded = false
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
+
+    val showSuggestions = dropdownExpanded && enabled && filtered.isNotEmpty() && !exactMatch
 
     Column(modifier = modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = value,
-            onValueChange = onValueChange,
+            onValueChange = { new ->
+                onValueChange(new)
+                val pickedExact = new.trim().isNotBlank() &&
+                    options.any { it.equals(new.trim(), ignoreCase = true) }
+                if (pickedExact) {
+                    dropdownExpanded = false
+                } else if (focused) {
+                    dropdownExpanded = true
+                }
+            },
             enabled = enabled,
             label = { Text(label) },
             singleLine = true,
@@ -94,7 +124,15 @@ fun NeonSearchableListField(
                 disabledIndicatorColor = p.border.copy(alpha = 0.2f),
                 cursorColor = if (isError) p.error else p.border,
             ),
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged { focusState ->
+                    if (!focusState.isFocused) {
+                        dropdownExpanded = false
+                    } else if (!exactMatch && filtered.isNotEmpty()) {
+                        dropdownExpanded = true
+                    }
+                },
         )
 
         // Avoid expandVertically/shrinkVertically here: inside Scaffold they can hit unbounded
@@ -131,6 +169,7 @@ fun NeonSearchableListField(
                                 .fillMaxWidth()
                                 .clickable {
                                     onValueChange(item)
+                                    closeDropdown()
                                 }
                                 .padding(horizontal = 14.dp, vertical = 12.dp),
                         )
