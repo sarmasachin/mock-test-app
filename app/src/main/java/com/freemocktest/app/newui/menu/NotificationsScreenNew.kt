@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
@@ -246,13 +246,7 @@ fun NotificationsScreenNew(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 verticalAlignment = Alignment.Top,
                             ) {
-                                Image(
-                                    painter = painterResource(R.drawable.ic_notification_large),
-                                    contentDescription = null,
-                                    modifier = Modifier
-                                        .size(42.dp)
-                                        .clip(CircleShape),
-                                )
+                                NotificationInboxIcon()
                                 Column(modifier = Modifier.weight(1f)) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -286,6 +280,25 @@ fun NotificationsScreenNew(
                 }
             }
         }
+    }
+}
+
+/** Compose-safe inbox icon — [R.drawable.ic_notification_large] is a layer-list, not supported by [painterResource]. */
+@Composable
+private fun NotificationInboxIcon() {
+    Box(
+        modifier = Modifier
+            .size(42.dp)
+            .clip(CircleShape)
+            .background(Color(0xFF0B4CC9)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_stat_notification),
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(22.dp),
+        )
     }
 }
 

@@ -84,6 +84,8 @@ import androidx.compose.ui.unit.sp
 import com.freemocktest.app.BuildConfig
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.ContentRepository
+import com.freemocktest.app.util.McqScoring
+import com.freemocktest.app.util.ShuffleAttemptRules
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.delay
@@ -93,6 +95,13 @@ import kotlinx.coroutines.launch
 import java.time.Instant
 import java.util.Locale
 
+/**
+ * Live mock-test quiz UI.
+ *
+ * Scoring compares selected option **text** to admin correct text via [McqScoring]
+ * (see [ShuffleAttemptRules] / SHUFFLE_AND_ATTEMPT_RULES.txt §6).
+ * Resume restores a frozen [AppPreferencesRepository.QuizQuestionSnapshot] — no re-shuffle.
+ */
 @Composable
 fun QuizScreenNew(
     modifier: Modifier = Modifier,
@@ -113,30 +122,47 @@ fun QuizScreenNew(
     var questionsLoaded by remember(testName) { mutableStateOf(false) }
     var questionsLoadError by remember(testName) { mutableStateOf(false) }
     var questionsReloadKey by remember(testName) { mutableIntStateOf(0) }
-    val questions by produceState(
-        initialValue = emptyList<QuizQuestion>(),
+    val quizLoad by produceState(
+        initialValue = QuizQuestionsLoad(emptyList(), ""),
         key1 = testName,
-        key2 = questionsReloadKey,
+        key2 = attemptsUserKey,
+        key3 = questionsReloadKey,
     ) {
-        // Reset transient flags so a Retry shows the spinner again instead of the error UI.
         questionsLoaded = false
         questionsLoadError = false
+        val trimmedName = testName.trim().ifBlank { "Test" }
+        val owner = attemptsUserKey.trim().ifBlank { "guest" }
         try {
-            value = ContentRepository.loadQuizQuestionsForTest(testName).map {
-                QuizQuestion(
-                    title = it.title,
-                    options = it.options,
-                    correctIndex = it.correctIndex,
+            val saved = AppPreferencesRepository.getResumableQuizSession(owner, trimmedName)
+            if (saved != null && saved.questionsSnapshot.isNotEmpty()) {
+                value = QuizQuestionsLoad(
+                    questions = saved.questionsSnapshot.map { it.toQuizQuestion() },
+                    cycleKey = saved.cycleKey,
                 )
+                return@produceState
             }
+            if (saved != null && saved.questionsSnapshot.isEmpty()) {
+                // Pre-Phase-4 resume blob — cannot safely restore shuffled delivery; discard.
+                AppPreferencesRepository.clearInProgressQuizNow()
+            }
+            val bundle = ContentRepository.loadQuizQuestionsBundleForTest(
+                testName = testName,
+                forceRefresh = true,
+                cacheUserScope = attemptsUserKey,
+            )
+            value = QuizQuestionsLoad(
+                questions = bundle.items.map { it.toQuizQuestion() },
+                cycleKey = bundle.meta.cycleKey,
+            )
         } catch (_: Exception) {
-            // Network/parse failure: surface a Retry UI instead of an infinite spinner.
-            value = emptyList()
+            value = QuizQuestionsLoad(emptyList(), "")
             questionsLoadError = true
         } finally {
             questionsLoaded = true
         }
     }
+    val questions = quizLoad.questions
+    val deliveryCycleKey = quizLoad.cycleKey
     var current by remember { mutableIntStateOf(0) }
     val answers = remember { mutableStateMapOf<Int, Int>() }
     var questionNavigationMode by remember { mutableStateOf("sequential") }
@@ -213,6 +239,27 @@ fun QuizScreenNew(
     val displayQuestions = remember(questions) { questions }
     val totalQuestions = displayQuestions.size
 
+    fun buildPersistedQuizState(
+        owner: String,
+        trimmedName: String,
+        idx: Int,
+        ans: Map<Int, Int>,
+    ): AppPreferencesRepository.InProgressQuizState {
+        return AppPreferencesRepository.InProgressQuizState(
+            ownerUserKey = owner,
+            testName = trimmedName,
+            testCatalogId = testCatalogId.trim(),
+            deadlineAtMillis = deadlineAtMillis,
+            currentQuestionIndex = idx,
+            answers = ans,
+            questionNavigationMode = questionNavigationMode,
+            resultReleaseAtMillis = resultReleaseAtMs,
+            configuredDurationSeconds = configuredDurationSeconds.coerceAtLeast(60),
+            cycleKey = deliveryCycleKey,
+            questionsSnapshot = displayQuestions.map { it.toSnapshot() },
+        )
+    }
+
     LaunchedEffect(testName, attemptsUserKey, questionsLoaded, questions.size, configuredDurationSeconds) {
         if (!questionsLoaded || displayQuestions.isEmpty()) return@LaunchedEffect
         if (quizSessionInitialized) return@LaunchedEffect
@@ -265,17 +312,7 @@ fun QuizScreenNew(
         if (allowResume) {
             runCatching {
                 AppPreferencesRepository.saveInProgressQuizNow(
-                    AppPreferencesRepository.InProgressQuizState(
-                        ownerUserKey = owner,
-                        testName = trimmedName,
-                        testCatalogId = testCatalogId.trim(),
-                        deadlineAtMillis = deadlineAtMillis,
-                        currentQuestionIndex = current,
-                        answers = answers.toMap(),
-                        questionNavigationMode = questionNavigationMode,
-                        resultReleaseAtMillis = resultReleaseAtMs,
-                        configuredDurationSeconds = configuredDurationSeconds.coerceAtLeast(60),
-                    ),
+                    buildPersistedQuizState(owner, trimmedName, current, answers.toMap()),
                 )
             }
         }
@@ -297,11 +334,22 @@ fun QuizScreenNew(
         // throws, the user's score still has to reach `onSubmit(...)` — otherwise their
         // entire timed attempt would be lost.
         try {
+            val owner = attemptsUserKey.trim().ifBlank { "guest" }
+            val trimmedName = testName.trim().ifBlank { "Test" }
+            if (displayQuestions.isNotEmpty()) {
+                AppPreferencesRepository.saveSubmittedAttemptSnapshotNow(
+                    ownerUserKey = owner,
+                    testName = trimmedName,
+                    cycleKey = deliveryCycleKey,
+                    questions = displayQuestions.map { it.toSnapshot() },
+                    answers = answers.toMap(),
+                )
+            }
             AppPreferencesRepository.clearInProgressQuizNow()
         } catch (_: Exception) {
             // Stale snapshot will be cleared on the next quiz start; not user-actionable.
         }
-        val correct = answers.count { (q, ans) -> displayQuestions.getOrNull(q)?.correctIndex == ans }
+        val correct = countCorrectAnswers(displayQuestions, answers)
         val answered = answers.size
         val wrong = (answered - correct).coerceAtLeast(0)
         onSubmit(
@@ -338,17 +386,7 @@ fun QuizScreenNew(
                 // collector flow, otherwise subsequent answer changes would silently stop saving.
                 runCatching {
                     AppPreferencesRepository.saveInProgressQuizNow(
-                        AppPreferencesRepository.InProgressQuizState(
-                            ownerUserKey = owner,
-                            testName = trimmedName,
-                            testCatalogId = testCatalogId.trim(),
-                            deadlineAtMillis = deadlineAtMillis,
-                            currentQuestionIndex = idx,
-                            answers = ans,
-                            questionNavigationMode = questionNavigationMode,
-                            resultReleaseAtMillis = resultReleaseAtMs,
-                            configuredDurationSeconds = configuredDurationSeconds.coerceAtLeast(60),
-                        ),
+                        buildPersistedQuizState(owner, trimmedName, idx, ans),
                     )
                 }
             }
@@ -369,6 +407,8 @@ fun QuizScreenNew(
     val testCatalogIdRef = rememberUpdatedState(testCatalogId)
     val testNameRef = rememberUpdatedState(testName)
     val attemptsUserKeyRef = rememberUpdatedState(attemptsUserKey)
+    val deliveryCycleKeyRef = rememberUpdatedState(deliveryCycleKey)
+    val displayQuestionsRef = rememberUpdatedState(displayQuestions)
     val suppressOnPauseProgressFlushRef = rememberUpdatedState(suppressOnPauseProgressFlush)
     val resumeEnabledRef = rememberUpdatedState(resumeEnabled)
     DisposableEffect(lifecycleOwner, scope) {
@@ -399,6 +439,8 @@ fun QuizScreenNew(
                             questionNavigationMode = questionNavigationModeRef.value,
                             resultReleaseAtMillis = resultReleaseAtMsRef.value,
                             configuredDurationSeconds = configuredDurationSecondsRef.value.coerceAtLeast(60),
+                            cycleKey = deliveryCycleKeyRef.value,
+                            questionsSnapshot = displayQuestionsRef.value.map { it.toSnapshot() },
                         ),
                     )
                 }
@@ -726,11 +768,22 @@ fun QuizScreenNew(
                     // to `onSubmit(...)`. A DataStore exception below would otherwise discard
                     // the user's entire attempt.
                     try {
+                        val owner = attemptsUserKey.trim().ifBlank { "guest" }
+                        val trimmedName = testName.trim().ifBlank { "Test" }
+                        if (displayQuestions.isNotEmpty()) {
+                            AppPreferencesRepository.saveSubmittedAttemptSnapshotNow(
+                                ownerUserKey = owner,
+                                testName = trimmedName,
+                                cycleKey = deliveryCycleKey,
+                                questions = displayQuestions.map { it.toSnapshot() },
+                                answers = answers.toMap(),
+                            )
+                        }
                         AppPreferencesRepository.clearInProgressQuizNow()
                     } catch (_: Exception) {
                         // Ignored: stale snapshot will be overwritten on next quiz start.
                     }
-                    val correct = answers.count { (q, ans) -> displayQuestions.getOrNull(q)?.correctIndex == ans }
+                    val correct = countCorrectAnswers(displayQuestions, answers)
                     val answered = answers.size
                     val wrong = (answered - correct).coerceAtLeast(0)
                     onSubmit(
@@ -750,11 +803,63 @@ fun QuizScreenNew(
     }
 }
 
+private data class QuizQuestionsLoad(
+    val questions: List<QuizQuestion>,
+    val cycleKey: String,
+)
+
 private data class QuizQuestion(
     val title: String,
     val options: List<String>,
     val correctIndex: Int,
+    val correctOptionText: String = "",
+    val explanation: String = "",
 )
+
+private fun ContentRepository.QuizQuestionRemote.toQuizQuestion(): QuizQuestion {
+    val cot = correctOptionText.trim().ifBlank { options.getOrNull(correctIndex).orEmpty() }
+    return QuizQuestion(
+        title = title,
+        options = options,
+        correctIndex = correctIndex,
+        correctOptionText = cot,
+        explanation = explanation,
+    )
+}
+
+private fun AppPreferencesRepository.QuizQuestionSnapshot.toQuizQuestion(): QuizQuestion {
+    val cot = correctOptionText.trim().ifBlank { options.getOrNull(correctIndex).orEmpty() }
+    return QuizQuestion(
+        title = title,
+        options = options,
+        correctIndex = correctIndex,
+        correctOptionText = cot,
+        explanation = explanation,
+    )
+}
+
+private fun QuizQuestion.toSnapshot(): AppPreferencesRepository.QuizQuestionSnapshot {
+    val cot = correctOptionText.trim().ifBlank { options.getOrNull(correctIndex).orEmpty() }
+    return AppPreferencesRepository.QuizQuestionSnapshot(
+        title = title,
+        options = options,
+        correctIndex = correctIndex,
+        correctOptionText = cot,
+        explanation = explanation,
+    )
+}
+
+private fun countCorrectAnswers(questions: List<QuizQuestion>, answers: Map<Int, Int>): Int {
+    return answers.count { (q, ans) ->
+        val question = questions.getOrNull(q) ?: return@count false
+        McqScoring.isAnswerCorrect(
+            options = question.options,
+            correctIndex = question.correctIndex,
+            correctOptionText = question.correctOptionText,
+            selectedIndex = ans,
+        )
+    }
+}
 
 @Composable
 private fun SubmitTestDialog(

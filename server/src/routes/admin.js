@@ -25,14 +25,24 @@ const {
 } = require('../mail');
 const {
   syncTestPublishScheduleFromAdvancedConfig,
+  savePublishSchedulingItems,
 } = require('../lib/testVisibility');
+const {
+  buildTestPublishDedupeKey,
+  prependNotificationIfNotDuplicate,
+} = require('../lib/notificationScheduling');
+const {
+  trimNotificationSchedulingPayload,
+  trimPublishSchedulingItems,
+} = require('../lib/schedulingQueueLimits');
+const { runSchedulingQueueCleanup } = require('../lib/schedulingQueueCleanup');
 const { syncTestQuestionCount } = require('../lib/syncTestQuestionCount');
 const {
   INPUT_MIME_TO_EXT,
   normalizeAdminImageExportFormats,
   processAdminImageUpload,
 } = require('../lib/adminImageUpload');
-const { clampMcqCorrectIndex } = require('../mcqShuffle');
+const { clampMcqCorrectIndex, verifyDbRowMcqInvariant } = require('../mcqShuffle');
 const {
   normalizeSubjectSectionsInput,
   parseQuestionSubjectKey,
@@ -50,6 +60,10 @@ const {
   clearAdminPermissions,
 } = require('../lib/adminPermissions');
 const { adminPermissionGuard } = require('../middleware/adminPermissionGuard');
+const { buildAdminTestCycleFields } = require('../lib/adminTestCycleStatus');
+const { loadPublishScheduleItemsSafe } = require('../lib/testResolve');
+const { republishTestNow } = require('../lib/testRepublishNow');
+const { buildPublishSchedulingDiagnostics } = require('../lib/publishScheduleDiagnostics');
 
 const router = express.Router();
 router.use(adminPermissionGuard);
@@ -743,6 +757,8 @@ function normalizeNotificationScheduling(value) {
         status: allowedStatus.includes(status) ? status : 'scheduled',
         createdAt: String(x.createdAt || new Date().toISOString()).slice(0, 40),
         sentAt: String(x.sentAt || '').trim().slice(0, 40),
+        deepLink: String(x.deepLink || '').trim().slice(0, 300),
+        dedupeKey: String(x.dedupeKey || '').trim().slice(0, 200),
       };
     })
     .filter((x) => x.title && x.message);
@@ -868,12 +884,22 @@ async function getJsonSetting(settingKey, fallback) {
 }
 
 async function setJsonSetting(settingKey, value, userId) {
+  let payload = value;
+  if (settingKey === 'notificationScheduling') {
+    payload = trimNotificationSchedulingPayload(value);
+  } else if (settingKey === 'publishScheduling') {
+    const items = Array.isArray(value?.items) ? value.items : [];
+    payload = {
+      ...(value && typeof value === 'object' ? value : {}),
+      items: trimPublishSchedulingItems(items),
+    };
+  }
   await pool.query(
     `INSERT INTO app_settings (setting_key, setting_value, updated_by)
      VALUES ($1, $2, $3::uuid)
      ON CONFLICT (setting_key)
      DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [settingKey, JSON.stringify(value), userId],
+    [settingKey, JSON.stringify(payload), userId],
   );
 }
 
@@ -929,29 +955,11 @@ function normalizeDailyQuizItem(raw, fallbackId) {
 
 async function enqueueNotification(userId, payload) {
   const current = await getJsonSetting('notificationScheduling', { items: [] });
-  const items = Array.isArray(current.items) ? current.items : [];
-  const next = {
-    ...current,
-    items: [
-      {
-        id: `schedule-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
-        title: String(payload.title || '').slice(0, 100),
-        message: String(payload.message || '').slice(0, 300),
-        target: String(payload.target || 'all'),
-        segmentKey: String(payload.segmentKey || ''),
-        scheduleAt: String(payload.scheduleAt || new Date().toISOString()),
-        repeatType: 'none',
-        dayOfWeek: 1,
-        dayOfMonth: 1,
-        repeatUntil: '',
-        status: 'scheduled',
-        createdAt: new Date().toISOString(),
-        sentAt: '',
-      },
-      ...items,
-    ],
-  };
-  await setJsonSetting('notificationScheduling', next, userId);
+  const result = prependNotificationIfNotDuplicate(current, payload);
+  if (result.enqueued) {
+    await setJsonSetting('notificationScheduling', result.current, userId);
+  }
+  return result;
 }
 
 async function appendPushNotificationItem(userId, payload) {
@@ -1039,6 +1047,12 @@ function shuffleArray(arr) {
   return list;
 }
 
+/**
+ * Publish-time / pool-regenerate option shuffle — WRITES to DB.
+ * Permutes all four choice columns and remaps correct_index to the same option text.
+ * Not the same as per-user delivery shuffle in tests.js (read-only JSON).
+ * See /SHUFFLE_AND_ATTEMPT_RULES.txt §3A.
+ */
 function shuffleQuestionOptions(row) {
   const sourceOld = clampMcqCorrectIndex(row.correct_index);
   const options = [
@@ -1050,7 +1064,7 @@ function shuffleQuestionOptions(row) {
   const shuffled = shuffleArray(options);
   const newCorrectIndex = shuffled.findIndex((x) => x.oldIndex === sourceOld);
   if (newCorrectIndex < 0) {
-    return {
+    const fallback = {
       stem: row.stem,
       choice_a: row.choice_a,
       choice_b: row.choice_b,
@@ -1059,8 +1073,13 @@ function shuffleQuestionOptions(row) {
       correct_index: sourceOld,
       explanation: row.explanation || '',
     };
+    const invariant = verifyDbRowMcqInvariant(fallback);
+    if (!invariant.ok) {
+      console.error('shuffleQuestionOptions_invariant_failed', invariant);
+    }
+    return fallback;
   }
-  return {
+  const out = {
     stem: row.stem,
     choice_a: shuffled[0]?.text || '',
     choice_b: shuffled[1]?.text || '',
@@ -1069,8 +1088,18 @@ function shuffleQuestionOptions(row) {
     correct_index: newCorrectIndex,
     explanation: row.explanation || '',
   };
+  const invariant = verifyDbRowMcqInvariant(out);
+  if (!invariant.ok) {
+    console.error('shuffleQuestionOptions_invariant_failed', invariant);
+  }
+  return out;
 }
 
+/**
+ * Rebuilds a published test's question rows from the subcategory pool.
+ * Deletes existing rows for this test_id, then inserts pool picks with shuffleQuestionOptions.
+ * Runs on first publish (justPublished). See SHUFFLE_AND_ATTEMPT_RULES.txt §3A.
+ */
 async function regenerateTestFromSubcategoryPool(testId) {
   const baseRes = await pool.query(
     `SELECT id, subcategory, question_count, dynamic_fluctuation_on_publish
@@ -1556,6 +1585,19 @@ function normalizeTestAdvancedConfig(rawValue) {
     return { error: 'advancedConfig.notifyBeforeMinutes must be an integer between 0 and 10080' };
   }
 
+  let cycleRepublishGapMinutes = null;
+  if (
+    raw.cycleRepublishGapMinutes !== undefined &&
+    raw.cycleRepublishGapMinutes !== null &&
+    String(raw.cycleRepublishGapMinutes).trim() !== ''
+  ) {
+    const gapValue = Number(raw.cycleRepublishGapMinutes);
+    if (!Number.isFinite(gapValue) || !Number.isInteger(gapValue) || gapValue < 0 || gapValue > 10080) {
+      return { error: 'advancedConfig.cycleRepublishGapMinutes must be an integer between 0 and 10080' };
+    }
+    cycleRepublishGapMinutes = gapValue;
+  }
+
   let subjectSections = [];
   if (raw.subjectSections !== undefined && raw.subjectSections !== null) {
     if (!Array.isArray(raw.subjectSections)) {
@@ -1597,7 +1639,10 @@ function normalizeTestAdvancedConfig(rawValue) {
       fullscreenRequired: raw.fullscreenRequired === true,
       copyPasteBlocked: raw.copyPasteBlocked === true,
       notifyOnPublish: raw.notifyOnPublish !== false,
+      notifyOnCycleRepublish: raw.notifyOnCycleRepublish === true,
       sendEmailOnPublish: raw.sendEmailOnPublish === true,
+      /** Minutes after cycle end before auto-republish; null = server env default (30). */
+      cycleRepublishGapMinutes,
       subjectSections,
     },
   };
@@ -2430,7 +2475,7 @@ router.patch('/settings', async (req, res) => {
            VALUES ('notificationScheduling', $1, $2::uuid)
            ON CONFLICT (setting_key)
            DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-          [JSON.stringify(normalizedNotificationScheduling.value), req.userId],
+          [JSON.stringify(trimNotificationSchedulingPayload(normalizedNotificationScheduling.value)), req.userId],
         );
       }
       if (normalizedResultUnlockEmailSettings !== null) {
@@ -2691,24 +2736,104 @@ router.delete('/audit-logs', async (req, res) => {
 router.get('/tests', async (_req, res) => {
   try {
     const advancedMap = await getJsonSetting('testAdvancedConfigs', {});
+    const publishScheduleItems = await loadPublishScheduleItemsSafe(pool);
+    const nowMs = Date.now();
     const { rows } = await pool.query(
       `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
               exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
               language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until,
               answer_key_release_at, result_release_at,
-              dynamic_date_enabled, date_cycle_days,
+              dynamic_date_enabled, date_cycle_days, last_cycle_started_at,
               COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
        FROM tests
        ORDER BY created_at DESC`,
     );
-    const mapped = rows.map((row) => ({
-      ...row,
-      advanced_config: resolveAdvancedConfigForTest(advancedMap, row.id),
-    }));
+    const mapped = rows.map((row) => {
+      const advanced_config = resolveAdvancedConfigForTest(advancedMap, row.id);
+      const cycleFields = buildAdminTestCycleFields(row, advanced_config, publishScheduleItems, nowMs);
+      return {
+        ...row,
+        advanced_config,
+        ...cycleFields,
+      };
+    });
     return res.json({ items: mapped });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to list tests' });
+  }
+});
+
+router.post('/tests/:id/republish-now', async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(id)) return res.status(400).json({ error: 'Invalid test id' });
+  try {
+    const advancedMap = await getJsonSetting('testAdvancedConfigs', {});
+    const publishScheduleItems = await loadPublishScheduleItemsSafe(pool);
+    const nowMs = Date.now();
+    const existing = await pool.query(
+      `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
+              exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
+              language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until,
+              answer_key_release_at, result_release_at,
+              dynamic_date_enabled, date_cycle_days, last_cycle_started_at,
+              COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
+       FROM tests
+       WHERE id = $1::uuid
+       LIMIT 1`,
+      [id],
+    );
+    const row = existing.rows[0];
+    if (!row) return res.status(404).json({ error: 'Test not found' });
+
+    const advanced_config = resolveAdvancedConfigForTest(advancedMap, id);
+    const cycleFields = buildAdminTestCycleFields(row, advanced_config, publishScheduleItems, nowMs);
+    if (!cycleFields.can_republish_now) {
+      return res.status(409).json({
+        error: 'Test is not eligible for republish now',
+        cycle_status: cycleFields.cycle_status,
+        cycle_phase: cycleFields.cycle_phase,
+      });
+    }
+
+    const republishResult = await republishTestNow({
+      pool,
+      testId: id,
+      regenerateTestFromSubcategoryPool,
+    });
+
+    const refreshed = await pool.query(
+      `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
+              exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
+              language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until,
+              answer_key_release_at, result_release_at,
+              dynamic_date_enabled, date_cycle_days, last_cycle_started_at,
+              COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
+       FROM tests
+       WHERE id = $1::uuid
+       LIMIT 1`,
+      [id],
+    );
+    const savedRow = refreshed.rows[0] || row;
+    const nextCycleFields = buildAdminTestCycleFields(
+      savedRow,
+      advanced_config,
+      await loadPublishScheduleItemsSafe(pool),
+      Date.now(),
+    );
+
+    return res.json({
+      ok: true,
+      item: {
+        ...savedRow,
+        advanced_config,
+        ...nextCycleFields,
+      },
+      republish: republishResult,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to republish test' });
   }
 });
 
@@ -2797,12 +2922,21 @@ router.post('/tests', async (req, res) => {
       );
       await regenerateTestFromSubcategoryPool(rows[0].id);
       if (advancedConfig.notifyOnPublish !== false) {
+        const cycleRes = await pool.query(
+          `SELECT last_cycle_started_at FROM tests WHERE id = $1::uuid LIMIT 1`,
+          [rows[0].id],
+        );
+        const dedupeKey = buildTestPublishDedupeKey(
+          rows[0].id,
+          cycleRes.rows[0]?.last_cycle_started_at,
+        );
         await enqueueNotification(req.userId, {
           title: 'New Test Published',
           message: `${data.title} is now available.`,
           target: 'all',
           deepLink: 'main/tests',
           scheduleAt: new Date().toISOString(),
+          dedupeKey,
         });
       }
       if (advancedConfig.sendEmailOnPublish === true) {
@@ -2916,12 +3050,18 @@ router.patch('/tests/:id', async (req, res) => {
     if (justPublished) {
       await regenerateTestFromSubcategoryPool(rows[0].id);
       if (advancedConfig.notifyOnPublish !== false) {
+        const cycleRes = await pool.query(
+          `SELECT last_cycle_started_at FROM tests WHERE id = $1::uuid LIMIT 1`,
+          [id],
+        );
+        const dedupeKey = buildTestPublishDedupeKey(id, cycleRes.rows[0]?.last_cycle_started_at);
         await enqueueNotification(req.userId, {
           title: 'Test Published',
           message: `${rows[0].title} is now live.`,
           target: 'all',
           deepLink: 'main/tests',
           scheduleAt: new Date().toISOString(),
+          dedupeKey,
         });
       }
       if (advancedConfig.sendEmailOnPublish === true) {
@@ -4420,7 +4560,51 @@ router.delete('/users/:id', async (req, res) => {
 router.get('/publish-scheduling', async (_req, res) => {
   try {
     const data = await getJsonSetting('publishScheduling', { items: [] });
-    return res.json({ items: Array.isArray(data.items) ? data.items : [] });
+    const items = Array.isArray(data.items) ? data.items : [];
+    const nowMs = Date.now();
+    const testIds = [
+      ...new Set(
+        items
+          .filter((x) => String(x?.entityType || '').toLowerCase() === 'test')
+          .map((x) => String(x?.entityId || '').trim())
+          .filter(Boolean),
+      ),
+    ];
+    const entityLabels = {};
+    if (testIds.length) {
+      const titlesRes = await pool.query(
+        `SELECT id::text AS id, title FROM tests WHERE id = ANY($1::uuid[])`,
+        [testIds],
+      );
+      for (const row of titlesRes.rows || []) {
+        entityLabels[String(row.id)] = String(row.title || '');
+      }
+    }
+    const articleIds = [
+      ...new Set(
+        items
+          .filter((x) => String(x?.entityType || '').toLowerCase() === 'article')
+          .map((x) => String(x?.entityId || '').trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (articleIds.length) {
+      try {
+        const headlinesRes = await pool.query(
+          `SELECT id::text AS id, headline FROM news_articles WHERE id = ANY($1::uuid[])`,
+          [articleIds],
+        );
+        for (const row of headlinesRes.rows || []) {
+          entityLabels[String(row.id)] = String(row.headline || '');
+        }
+      } catch (articleErr) {
+        if (!articleErr || articleErr.code !== '42P01') {
+          console.warn('publish_scheduling_article_labels', articleErr);
+        }
+      }
+    }
+    const { enrichedItems, diagnostics } = buildPublishSchedulingDiagnostics(items, nowMs, entityLabels);
+    return res.json({ items: enrichedItems, diagnostics });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to load publish scheduling' });
@@ -4453,7 +4637,7 @@ router.post('/publish-scheduling', async (req, res) => {
       createdAt: new Date().toISOString(),
       processedAt: '',
     };
-    await setJsonSetting('publishScheduling', { items: [item, ...items] }, req.userId);
+    await savePublishSchedulingItems([item, ...items], req.userId);
     return res.status(201).json({ item });
   } catch (e) {
     console.error(e);
@@ -4471,11 +4655,31 @@ router.patch('/publish-scheduling/:id', async (req, res) => {
     const data = await getJsonSetting('publishScheduling', { items: [] });
     const items = Array.isArray(data.items) ? data.items : [];
     const next = items.map((x) => (String(x.id) === String(id) ? { ...x, status } : x));
-    await setJsonSetting('publishScheduling', { items: next }, req.userId);
+    await savePublishSchedulingItems(next, req.userId);
     return res.json({ items: next });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to update publish schedule' });
+  }
+});
+
+router.post('/scheduling-queues/cleanup', async (req, res) => {
+  const apply = (req.body || {}).apply === true;
+  try {
+    const result = await runSchedulingQueueCleanup({ apply, userId: req.userId });
+    if (apply) {
+      await logAdminAction(req, 'scheduling_queues_cleanup', 'app_settings', null, {
+        summary: result.summary,
+      });
+    }
+    return res.json({
+      ok: true,
+      applied: result.applied,
+      summary: result.summary,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to clean scheduling queues' });
   }
 });
 

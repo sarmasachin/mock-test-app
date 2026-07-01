@@ -4,6 +4,7 @@ import android.util.Log
 import com.freemocktest.app.data.remote.ExamCategoriesDto
 import com.freemocktest.app.data.remote.NewsArticleDto
 import com.freemocktest.app.data.remote.RetrofitProvider
+import com.freemocktest.app.data.remote.TestQuestionDto
 import org.json.JSONArray
 import org.json.JSONObject
 import com.freemocktest.app.newui.alerts.ManualExamAlertContent
@@ -38,7 +39,43 @@ object ContentRepository {
     private val newsFeedListMemory = ConcurrentHashMap<String, List<ManualNewsItem>>()
     private val testCardMemory = ConcurrentHashMap<String, TestCardNew>()
     private val testListBySubcategoryMemory = ConcurrentHashMap<String, List<TestCardNew>>()
-    private val quizQuestionsMemory = ConcurrentHashMap<String, List<QuizQuestionRemote>>()
+    private val quizQuestionsMemory = ConcurrentHashMap<String, QuizQuestionsCacheBundle>()
+
+    /** Phase 3: delivery metadata stored with cached question rows (cycle + shuffle flags). */
+    data class QuizQuestionsCacheMeta(
+        val cycleKey: String,
+        val shuffleQuestions: Boolean,
+        val shuffleOptions: Boolean,
+    )
+
+    data class QuizQuestionsCacheBundle(
+        val items: List<QuizQuestionRemote>,
+        val meta: QuizQuestionsCacheMeta,
+    )
+
+    /** Phase 3: authenticated /tests/resolve snapshot for apply UI. */
+    data class TestApplyResolveSnapshot(
+        val card: TestCardNew,
+        val found: Boolean,
+        val cyclePhase: String,
+        val catalogVisible: Boolean,
+        val canApply: Boolean,
+        val alreadyAppliedInCurrentCycle: Boolean,
+        val mayReapplyForNewCycle: Boolean,
+        val blockReason: String?,
+        val republishAt: String?,
+    )
+
+    /** Catalog test (if live) + optional resolve metadata when catalog misses. */
+    data class TestApplyLoadResult(
+        val catalogTest: TestCardNew?,
+        val resolveSnapshot: TestApplyResolveSnapshot?,
+    ) {
+        val effectiveCard: TestCardNew?
+            get() = catalogTest?.takeIf { it.id.isNotBlank() }
+                ?: resolveSnapshot?.card?.takeIf { it.id.isNotBlank() }
+    }
+
     @Volatile
     private var profileMenuItemsMemory: List<ProfileMenuItemRemote>? = null
     @Volatile
@@ -71,6 +108,8 @@ object ContentRepository {
         val options: List<String>,
         val correctIndex: Int,
         val explanation: String,
+        /** Admin's correct option text (stable across shuffle). Phase 2 server field. */
+        val correctOptionText: String = "",
     )
     data class TestAdvancedConfigRemote(
         val publishAt: String?,
@@ -653,6 +692,87 @@ object ContentRepository {
     }
 
     /**
+     * Phase 3: GET /tests/resolve (auth). Safe no-op when logged out or API unavailable.
+     */
+    suspend fun resolveTestForApply(
+        title: String,
+        testId: String? = null,
+    ): TestApplyResolveSnapshot? = withContext(Dispatchers.IO) {
+        if (AuthRepository.peekAccessToken().isNullOrBlank()) return@withContext null
+        val titleQ = title.trim()
+        val idQ = testId?.trim().orEmpty()
+        if (titleQ.isBlank() && idQ.isBlank()) return@withContext null
+        try {
+            val resp = RetrofitProvider.appApi.resolveTest(
+                title = titleQ.takeIf { idQ.isBlank() },
+                slug = null,
+                testId = idQ.takeIf { it.isNotBlank() },
+            )
+            if (!resp.found || resp.id.isNullOrBlank()) return@withContext null
+            val phase = resp.cyclePhase?.trim().orEmpty().ifBlank { "unpublished" }
+            val displayTitle = resp.title?.trim().orEmpty().ifBlank { titleQ }
+            val meta = when (phase) {
+                "between_cycles" -> "Between cycles — opens again when republished"
+                "live" -> "Live test"
+                "scheduled" -> "Scheduled — not open yet"
+                "closed" -> "Registration closed"
+                else -> resp.blockReason?.trim().orEmpty().ifBlank { "Test status" }
+            }
+            val card = TestCardNew(
+                id = resp.id.trim(),
+                slug = resp.slug?.trim().orEmpty(),
+                title = displayTitle,
+                meta = meta,
+            )
+            val key = displayTitle.lowercase(Locale.US)
+            if (key.isNotBlank()) {
+                testCardMemory[key] = card
+                runCatching { persistTestCardDiskCache(key, card) }
+                    .onFailure { Log.w(TAG, "persistTestCardDiskCache resolve $key", it) }
+            }
+            TestApplyResolveSnapshot(
+                card = card,
+                found = true,
+                cyclePhase = phase,
+                catalogVisible = resp.catalogVisible,
+                canApply = resp.canApply,
+                alreadyAppliedInCurrentCycle = resp.alreadyAppliedInCurrentCycle,
+                mayReapplyForNewCycle = resp.mayReapplyForNewCycle,
+                blockReason = resp.blockReason?.trim()?.takeIf { it.isNotBlank() },
+                republishAt = resp.republishAt?.trim()?.takeIf { it.isNotBlank() },
+            )
+        } catch (e: HttpException) {
+            Log.w(TAG, "resolveTestForApply http ${e.code()} $titleQ", e)
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "resolveTestForApply $titleQ", e)
+            null
+        }
+    }
+
+    /**
+     * Apply / Start Test screens: catalog first, then authenticated resolve fallback.
+     * Does not use [defaultTests] placeholder.
+     */
+    suspend fun loadTestForApplyScreen(
+        title: String,
+        forceRefresh: Boolean = true,
+    ): TestApplyLoadResult = withContext(Dispatchers.IO) {
+        val target = title.trim()
+        if (target.isBlank()) {
+            return@withContext TestApplyLoadResult(null, null)
+        }
+        val catalog = runCatching {
+            loadTestByTitle(target, forceRefresh = forceRefresh, allowDefaultFallback = false)
+        }.getOrNull()?.takeIf { it.id.isNotBlank() }
+        if (catalog != null) {
+            return@withContext TestApplyLoadResult(catalog, null)
+        }
+        val resolve = resolveTestForApply(target)
+        TestApplyLoadResult(null, resolve)
+    }
+
+    /**
      * Keep in-memory and disk test caches aligned with the apply API response so enrollment
      * counts update immediately on every screen without waiting for a cold start.
      */
@@ -754,6 +874,9 @@ object ContentRepository {
         o.put("o", arr)
         o.put("c", q.correctIndex)
         o.put("e", q.explanation)
+        if (q.correctOptionText.isNotBlank()) {
+            o.put("x", q.correctOptionText)
+        }
         return o
     }
 
@@ -767,17 +890,226 @@ object ContentRepository {
             }
         }
         if (options.size < 2) return null
-        val correctIndex = o.optInt("c", -1)
+        var correctIndex = o.optInt("c", -1)
+        val correctOptionText = o.optString("x", "").trim()
+        if (correctOptionText.isNotBlank()) {
+            val byText = options.indexOf(correctOptionText)
+            if (byText >= 0) {
+                correctIndex = byText
+            }
+        }
         if (correctIndex !in options.indices) return null
         return QuizQuestionRemote(
             title = title,
             options = options,
             correctIndex = correctIndex,
             explanation = o.optString("e", "").trim(),
+            correctOptionText = correctOptionText.ifBlank { options[correctIndex] },
         )
     }
 
-    private suspend fun readQuizQuestionsFromDisk(titleKey: String): List<QuizQuestionRemote> {
+    private fun quizQuestionsCacheKey(titleKey: String, userScope: String, cycleKey: String): String {
+        val title = titleKey.trim().lowercase(Locale.US)
+        val user = userScope.trim().lowercase(Locale.US).ifBlank { "guest" }
+        val cycle = cycleKey.trim().ifBlank { "no_cycle" }
+        return "$title|$user|$cycle"
+    }
+
+    private suspend fun findQuizQuestionsOnDisk(titleKey: String, userScope: String): QuizQuestionsCacheBundle? {
+        val prefix = "${titleKey.trim().lowercase(Locale.US)}|${userScope.trim().lowercase(Locale.US).ifBlank { "guest" }}|"
+        val raw = AppPreferencesRepository.peekCachedQuizQuestionsBlob() ?: return null
+        val map = linkedKeyedQuizQuestionsBlobFromJson(raw)
+        val matches = map.filterKeys { it.startsWith(prefix) }
+        if (matches.size != 1) return null
+        return decodeQuizQuestionsCachePayload(matches.values.first())
+    }
+
+    private suspend fun resolveQuizCacheUserScope(explicit: String?): String {
+        val direct = explicit?.trim().orEmpty()
+        if (direct.isNotBlank()) return direct.lowercase(Locale.US)
+        val email = AppPreferencesRepository.peekEditableProfileNow().email.trim()
+        if (email.isNotBlank()) return email.lowercase(Locale.US)
+        return "guest"
+    }
+
+    private fun isShuffleDeliveryEnabled(test: TestCardNew?): Boolean {
+        if (test == null) return false
+        return test.shuffleQuestions || test.shuffleOptions
+    }
+
+    private fun findUniqueQuizQuestionsCache(titleKey: String, userScope: String): QuizQuestionsCacheBundle? {
+        val prefix = "${titleKey.trim().lowercase(Locale.US)}|${userScope.trim().lowercase(Locale.US).ifBlank { "guest" }}|"
+        val matches = quizQuestionsMemory.filterKeys { it.startsWith(prefix) }
+        if (matches.size == 1) return matches.values.first()
+        return null
+    }
+
+    private suspend fun evictQuizQuestionsCacheForTitleUser(titleKey: String, userScope: String) {
+        val title = titleKey.trim().lowercase(Locale.US)
+        val user = userScope.trim().lowercase(Locale.US).ifBlank { "guest" }
+        val prefix = "$title|$user|"
+        quizQuestionsMemory.keys.toList().forEach { key ->
+            if (key == title || key.startsWith(prefix)) {
+                quizQuestionsMemory.remove(key)
+            }
+        }
+        val raw = AppPreferencesRepository.peekCachedQuizQuestionsBlob().orEmpty()
+        val map = linkedKeyedQuizQuestionsBlobFromJson(if (raw.isBlank()) "{\"v\":1,\"entries\":[]}" else raw)
+        map.keys.toList().forEach { key ->
+            if (key == title || key.startsWith(prefix)) {
+                map.remove(key)
+            }
+        }
+        AppPreferencesRepository.saveCachedQuizQuestionsBlobNow(
+            linkedKeyedQuizQuestionsBlobToJson(map, MAX_CACHED_QUIZ_QUESTION_KEYS),
+        )
+    }
+
+    private fun mapTestQuestionDtoToRemote(row: TestQuestionDto): QuizQuestionRemote? {
+        val prompt = row.questionPrompt.trim()
+        val options = row.options.map { it.trim() }.filter { it.isNotBlank() }
+        if (prompt.isBlank() || options.size < 2) return null
+        val correctOptionText = row.correctOptionText?.trim().orEmpty()
+        var correctIndex = row.correctIndex
+        if (correctOptionText.isNotBlank()) {
+            val byText = options.indexOf(correctOptionText)
+            if (byText >= 0) {
+                correctIndex = byText
+            }
+        }
+        if (correctIndex !in options.indices) return null
+        return QuizQuestionRemote(
+            title = prompt,
+            options = options,
+            correctIndex = correctIndex,
+            explanation = row.explanation?.trim().orEmpty(),
+            correctOptionText = correctOptionText.ifBlank { options[correctIndex] },
+        )
+    }
+
+    private suspend fun fetchQuizQuestionsDelivery(
+        testId: String,
+        shuffleDelivery: Boolean,
+    ): QuizQuestionsCacheBundle {
+        val hasToken = !AuthRepository.peekAccessToken().isNullOrBlank()
+        if (shuffleDelivery && !hasToken) {
+            throw IllegalStateException("Login required to load shuffled test questions")
+        }
+        if (hasToken) {
+            try {
+                val res = RetrofitProvider.appApi.getAttemptQuestions(testId)
+                val items = res.items.mapNotNull { mapTestQuestionDtoToRemote(it) }
+                val cycleKey = res.cycleKey?.trim().orEmpty().ifBlank { "no_cycle" }
+                return QuizQuestionsCacheBundle(
+                    items = items,
+                    meta = QuizQuestionsCacheMeta(
+                        cycleKey = cycleKey,
+                        shuffleQuestions = res.shuffleQuestions == true,
+                        shuffleOptions = res.shuffleOptions == true,
+                    ),
+                )
+            } catch (e: Exception) {
+                if (shuffleDelivery) throw e
+                Log.w(TAG, "getAttemptQuestions failed; falling back to public catalog", e)
+            }
+        }
+        val res = RetrofitProvider.publicApi.getTestQuestions(testId)
+        val items = res.items.mapNotNull { mapTestQuestionDtoToRemote(it) }
+        return QuizQuestionsCacheBundle(
+            items = items,
+            meta = QuizQuestionsCacheMeta(
+                cycleKey = "catalog",
+                shuffleQuestions = false,
+                shuffleOptions = false,
+            ),
+        )
+    }
+
+    private fun linkedKeyedQuizQuestionsBlobFromJson(raw: String): LinkedHashMap<String, JSONObject> {
+        val out = LinkedHashMap<String, JSONObject>()
+        val root = runCatching { JSONObject(raw.trim()) }.getOrNull() ?: return out
+        val arr = root.optJSONArray("entries") ?: return out
+        for (i in 0 until arr.length()) {
+            val row = arr.optJSONObject(i) ?: continue
+            val k = row.optString("k").trim().lowercase(Locale.US)
+            if (k.isEmpty()) continue
+            val payload = row.optJSONObject("payload")
+            if (payload != null) {
+                out.remove(k)
+                out[k] = payload
+                continue
+            }
+            val legacyItems = row.optJSONArray("items") ?: continue
+            out.remove(k)
+            out[k] = JSONObject().put("items", legacyItems)
+        }
+        return out
+    }
+
+    private fun linkedKeyedQuizQuestionsBlobToJson(map: LinkedHashMap<String, JSONObject>, maxKeys: Int): String {
+        while (map.size > maxKeys) {
+            map.remove(map.keys.first())
+        }
+        val arr = JSONArray()
+        for ((k, payload) in map) {
+            val row = JSONObject()
+            row.put("k", k)
+            row.put("payload", payload)
+            arr.put(row)
+        }
+        return JSONObject().put("v", 1).put("entries", arr).toString()
+    }
+
+    private fun decodeQuizQuestionsCachePayload(payload: JSONObject): QuizQuestionsCacheBundle? {
+        val itemsArr = payload.optJSONArray("items") ?: return null
+        val items = buildList {
+            for (i in 0 until itemsArr.length()) {
+                val jo = itemsArr.optJSONObject(i) ?: continue
+                decodeQuizQuestionRemote(jo)?.let { add(it) }
+            }
+        }
+        if (items.isEmpty()) return null
+        val meta = QuizQuestionsCacheMeta(
+            cycleKey = payload.optString("cycleKey", "").trim().ifBlank { "no_cycle" },
+            shuffleQuestions = payload.optBoolean("shuffleQuestions", false),
+            shuffleOptions = payload.optBoolean("shuffleOptions", false),
+        )
+        return QuizQuestionsCacheBundle(items = items, meta = meta)
+    }
+
+    private fun encodeQuizQuestionsCachePayload(bundle: QuizQuestionsCacheBundle): JSONObject {
+        val itemsArr = JSONArray()
+        bundle.items.forEach { itemsArr.put(encodeQuizQuestionRemoteJson(it)) }
+        return JSONObject()
+            .put("cycleKey", bundle.meta.cycleKey)
+            .put("shuffleQuestions", bundle.meta.shuffleQuestions)
+            .put("shuffleOptions", bundle.meta.shuffleOptions)
+            .put("items", itemsArr)
+    }
+
+    private suspend fun readQuizQuestionsFromDisk(cacheKey: String): QuizQuestionsCacheBundle? {
+        val key = cacheKey.trim().lowercase(Locale.US)
+        if (key.isBlank()) return null
+        val raw = AppPreferencesRepository.peekCachedQuizQuestionsBlob() ?: return null
+        val map = linkedKeyedQuizQuestionsBlobFromJson(raw)
+        val payload = map[key] ?: return null
+        return decodeQuizQuestionsCachePayload(payload)
+    }
+
+    private suspend fun persistQuizQuestionsDiskCache(cacheKey: String, bundle: QuizQuestionsCacheBundle) {
+        val key = cacheKey.trim().lowercase(Locale.US)
+        if (key.isBlank() || bundle.items.isEmpty()) return
+        val raw = AppPreferencesRepository.peekCachedQuizQuestionsBlob().orEmpty()
+        val map = linkedKeyedQuizQuestionsBlobFromJson(if (raw.isBlank()) "{\"v\":1,\"entries\":[]}" else raw)
+        map.remove(key)
+        map[key] = encodeQuizQuestionsCachePayload(bundle)
+        AppPreferencesRepository.saveCachedQuizQuestionsBlobNow(
+            linkedKeyedQuizQuestionsBlobToJson(map, MAX_CACHED_QUIZ_QUESTION_KEYS),
+        )
+    }
+
+    /** Legacy title-only disk read (pre–Phase 3); not used when shuffle delivery is enabled. */
+    private suspend fun readLegacyQuizQuestionsFromDisk(titleKey: String): List<QuizQuestionRemote> {
         val key = titleKey.trim().lowercase(Locale.US)
         if (key.isBlank()) return emptyList()
         val raw = AppPreferencesRepository.peekCachedQuizQuestionsBlob() ?: return emptyList()
@@ -789,32 +1121,6 @@ object ContentRepository {
                 decodeQuizQuestionRemote(jo)?.let { add(it) }
             }
         }
-    }
-
-    private suspend fun persistQuizQuestionsDiskCache(titleKey: String, items: List<QuizQuestionRemote>) {
-        val key = titleKey.trim().lowercase(Locale.US)
-        if (key.isBlank()) return
-        val arr = JSONArray()
-        items.forEach { arr.put(encodeQuizQuestionRemoteJson(it)) }
-        val raw = AppPreferencesRepository.peekCachedQuizQuestionsBlob().orEmpty()
-        val map = linkedKeyedJsonArrayBlobFromJson(if (raw.isBlank()) "{\"v\":1,\"entries\":[]}" else raw)
-        map.remove(key)
-        map[key] = arr
-        AppPreferencesRepository.saveCachedQuizQuestionsBlobNow(
-            linkedKeyedJsonArrayBlobToJson(map, MAX_CACHED_QUIZ_QUESTION_KEYS),
-        )
-    }
-
-    private suspend fun evictQuizQuestionsDiskCache(titleKey: String) {
-        val key = titleKey.trim().lowercase(Locale.US)
-        if (key.isBlank()) return
-        val raw = AppPreferencesRepository.peekCachedQuizQuestionsBlob().orEmpty()
-        val map = linkedKeyedJsonArrayBlobFromJson(if (raw.isBlank()) "{\"v\":1,\"entries\":[]}" else raw)
-        if (!map.containsKey(key)) return
-        map.remove(key)
-        AppPreferencesRepository.saveCachedQuizQuestionsBlobNow(
-            linkedKeyedJsonArrayBlobToJson(map, MAX_CACHED_QUIZ_QUESTION_KEYS),
-        )
     }
 
     private suspend fun resolveTestForQuizQuestions(safeName: String, forceRefresh: Boolean): TestCardNew? {
@@ -829,75 +1135,150 @@ object ContentRepository {
 
     /**
      * Disk-backed quiz questions for [testName] (normalized). Hydrates [quizQuestionsMemory].
-     * Use [loadQuizQuestionsForTest] with `forceRefresh = true` after this for stale-while-revalidate.
+     * Prefer [loadQuizQuestionsForTest] with `forceRefresh = true` for scored quiz starts.
      */
-    suspend fun loadCachedQuizQuestionsForTest(testName: String): List<QuizQuestionRemote> = withContext(Dispatchers.IO) {
-        val key = testName.trim().lowercase(Locale.US)
-        if (key.isBlank()) return@withContext emptyList()
-        quizQuestionsMemory[key]?.let { return@withContext it }
-        val list = readQuizQuestionsFromDisk(key)
-        if (list.isNotEmpty()) quizQuestionsMemory[key] = list
-        list
+    suspend fun loadCachedQuizQuestionsForTest(
+        testName: String,
+        cacheUserScope: String? = null,
+    ): List<QuizQuestionRemote> = loadCachedQuizQuestionsBundleForTest(testName, cacheUserScope).items
+
+    suspend fun loadCachedQuizQuestionsBundleForTest(
+        testName: String,
+        cacheUserScope: String? = null,
+    ): QuizQuestionsCacheBundle = withContext(Dispatchers.IO) {
+        val titleKey = testName.trim().lowercase(Locale.US)
+        if (titleKey.isBlank()) {
+            return@withContext QuizQuestionsCacheBundle(
+                emptyList(),
+                QuizQuestionsCacheMeta("no_cycle", false, false),
+            )
+        }
+        val userScope = resolveQuizCacheUserScope(cacheUserScope)
+        findUniqueQuizQuestionsCache(titleKey, userScope)?.let { return@withContext it }
+        findQuizQuestionsOnDisk(titleKey, userScope)?.let { disk ->
+            val cacheKey = quizQuestionsCacheKey(titleKey, userScope, disk.meta.cycleKey)
+            quizQuestionsMemory[cacheKey] = disk
+            return@withContext disk
+        }
+        readLegacyQuizQuestionsFromDisk(titleKey).takeIf { it.isNotEmpty() }?.let { legacy ->
+            val bundle = QuizQuestionsCacheBundle(
+                items = legacy,
+                meta = QuizQuestionsCacheMeta(cycleKey = "legacy", shuffleQuestions = false, shuffleOptions = false),
+            )
+            quizQuestionsMemory[titleKey] = bundle
+            return@withContext bundle
+        }
+        QuizQuestionsCacheBundle(emptyList(), QuizQuestionsCacheMeta("no_cycle", false, false))
     }
 
-    suspend fun loadQuizQuestionsForTest(testName: String, forceRefresh: Boolean = false): List<QuizQuestionRemote> =
-        withContext(Dispatchers.IO) {
+    /**
+     * Loads quiz questions for a test title.
+     *
+     * Phase 3: cache key = title + user scope + [cycleKey] from questions-attempt. When shuffle is
+     * enabled, never falls back to the public catalog endpoint (DB order). Pass [forceRefresh] on
+     * quiz start; pass [cacheUserScope] aligned with [attemptsUserKey] when available.
+     */
+    suspend fun loadQuizQuestionsForTest(
+        testName: String,
+        forceRefresh: Boolean = false,
+        cacheUserScope: String? = null,
+    ): List<QuizQuestionRemote> = loadQuizQuestionsBundleForTest(
+        testName = testName,
+        forceRefresh = forceRefresh,
+        cacheUserScope = cacheUserScope,
+    ).items
+
+    /**
+     * Same as [loadQuizQuestionsForTest] but returns delivery metadata (cycleKey, shuffle flags).
+     * Used by quiz start/resume to persist [AppPreferencesRepository.InProgressQuizState.cycleKey].
+     */
+    suspend fun loadQuizQuestionsBundleForTest(
+        testName: String,
+        forceRefresh: Boolean = false,
+        cacheUserScope: String? = null,
+    ): QuizQuestionsCacheBundle = withContext(Dispatchers.IO) {
             val safeName = testName.trim()
-            if (safeName.isBlank()) return@withContext emptyList()
-            val key = safeName.lowercase(Locale.US)
-            if (!forceRefresh) {
-                quizQuestionsMemory[key]?.let { return@withContext it }
-            } else {
-                quizQuestionsMemory.remove(key)
+            if (safeName.isBlank()) {
+                return@withContext QuizQuestionsCacheBundle(emptyList(), QuizQuestionsCacheMeta("no_cycle", false, false))
             }
+            val titleKey = safeName.lowercase(Locale.US)
+            val userScope = resolveQuizCacheUserScope(cacheUserScope)
+            val test = resolveTestForQuizQuestions(safeName, forceRefresh)
+            val shuffleDelivery = isShuffleDeliveryEnabled(test)
+
+            if (forceRefresh) {
+                evictQuizQuestionsCacheForTitleUser(titleKey, userScope)
+            } else if (shuffleDelivery) {
+                findUniqueQuizQuestionsCache(titleKey, userScope)?.let { return@withContext it }
+                findQuizQuestionsOnDisk(titleKey, userScope)?.let { disk ->
+                    val cacheKey = quizQuestionsCacheKey(titleKey, userScope, disk.meta.cycleKey)
+                    quizQuestionsMemory[cacheKey] = disk
+                    return@withContext disk
+                }
+            } else {
+                findUniqueQuizQuestionsCache(titleKey, userScope)?.let { return@withContext it }
+                findQuizQuestionsOnDisk(titleKey, userScope)?.let { disk ->
+                    val cacheKey = quizQuestionsCacheKey(titleKey, userScope, disk.meta.cycleKey)
+                    quizQuestionsMemory[cacheKey] = disk
+                    return@withContext disk
+                }
+                quizQuestionsMemory[titleKey]?.let { return@withContext it }
+                readLegacyQuizQuestionsFromDisk(titleKey).takeIf { it.isNotEmpty() }?.let { legacy ->
+                    val bundle = QuizQuestionsCacheBundle(
+                        items = legacy,
+                        meta = QuizQuestionsCacheMeta("legacy", false, false),
+                    )
+                    quizQuestionsMemory[titleKey] = bundle
+                    return@withContext bundle
+                }
+            }
+
             try {
-                val test = resolveTestForQuizQuestions(safeName, forceRefresh)
                 val testId = test?.id?.trim().orEmpty()
                 if (testId.isBlank()) {
-                    val diskOnly = readQuizQuestionsFromDisk(key)
-                    if (diskOnly.isNotEmpty()) {
-                        quizQuestionsMemory[key] = diskOnly
-                        return@withContext diskOnly
+                    if (shuffleDelivery) {
+                        return@withContext QuizQuestionsCacheBundle(emptyList(), QuizQuestionsCacheMeta("no_cycle", shuffleDelivery, shuffleDelivery))
                     }
-                    return@withContext emptyList()
-                }
-                val rows = try {
-                    RetrofitProvider.appApi.getAttemptQuestions(testId).items
-                } catch (_: Exception) {
-                    RetrofitProvider.publicApi.getTestQuestions(testId).items
-                }
-                val mapped = rows.mapNotNull { row ->
-                    val prompt = row.questionPrompt.trim()
-                    val options = row.options.map { it.trim() }.filter { it.isNotBlank() }
-                    val correctIndex = row.correctIndex
-                    if (prompt.isBlank() || options.size < 2 || correctIndex !in options.indices) {
-                        null
-                    } else {
-                        QuizQuestionRemote(
-                            title = prompt,
-                            options = options,
-                            correctIndex = correctIndex,
-                            explanation = row.explanation?.trim().orEmpty(),
+                    val legacy = readLegacyQuizQuestionsFromDisk(titleKey)
+                    if (legacy.isNotEmpty()) {
+                        val bundle = QuizQuestionsCacheBundle(
+                            items = legacy,
+                            meta = QuizQuestionsCacheMeta("legacy", false, false),
                         )
+                        quizQuestionsMemory[titleKey] = bundle
+                        return@withContext bundle
                     }
+                    return@withContext QuizQuestionsCacheBundle(emptyList(), QuizQuestionsCacheMeta("no_cycle", false, false))
                 }
-                if (mapped.isNotEmpty()) {
-                    quizQuestionsMemory[key] = mapped
-                    runCatching { persistQuizQuestionsDiskCache(key, mapped) }
-                        .onFailure { Log.w(TAG, "persistQuizQuestionsDiskCache $key", it) }
-                    mapped
-                } else {
-                    runCatching { evictQuizQuestionsDiskCache(key) }
-                        .onFailure { Log.w(TAG, "evictQuizQuestionsDiskCache $key", it) }
-                    quizQuestionsMemory.remove(key)
-                    emptyList()
+
+                val bundle = fetchQuizQuestionsDelivery(testId, shuffleDelivery)
+                if (bundle.items.isEmpty()) {
+                    evictQuizQuestionsCacheForTitleUser(titleKey, userScope)
+                    return@withContext bundle
                 }
+
+                val cacheKey = quizQuestionsCacheKey(titleKey, userScope, bundle.meta.cycleKey)
+                quizQuestionsMemory[cacheKey] = bundle
+                runCatching { persistQuizQuestionsDiskCache(cacheKey, bundle) }
+                    .onFailure { Log.w(TAG, "persistQuizQuestionsDiskCache $cacheKey", it) }
+                bundle
             } catch (e: Exception) {
-                Log.w(TAG, "loadQuizQuestionsForTest $safeName", e)
-                val fromDisk = readQuizQuestionsFromDisk(key)
-                if (fromDisk.isNotEmpty()) {
-                    quizQuestionsMemory[key] = fromDisk
-                    return@withContext fromDisk
+                Log.w(TAG, "loadQuizQuestionsBundleForTest $safeName", e)
+                if (shuffleDelivery) {
+                    throw e
+                }
+                findUniqueQuizQuestionsCache(titleKey, userScope)?.let { return@withContext it }
+                findQuizQuestionsOnDisk(titleKey, userScope)?.let { disk ->
+                    val cacheKey = quizQuestionsCacheKey(titleKey, userScope, disk.meta.cycleKey)
+                    quizQuestionsMemory[cacheKey] = disk
+                    return@withContext disk
+                }
+                val legacy = readLegacyQuizQuestionsFromDisk(titleKey)
+                if (legacy.isNotEmpty()) {
+                    return@withContext QuizQuestionsCacheBundle(
+                        items = legacy,
+                        meta = QuizQuestionsCacheMeta("legacy", false, false),
+                    )
                 }
                 throw e
             }

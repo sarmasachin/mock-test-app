@@ -143,6 +143,9 @@ async function main() {
         attemptStatus_userA_call1: a1.status,
         attemptStatus_userA_call2: a2.status,
         attemptStatus_userB: b1.status,
+        cycleKey: a1.json?.cycleKey,
+        shuffleQuestions: a1.json?.shuffleQuestions,
+        shuffleOptions: a1.json?.shuffleOptions,
         itemCountA: (a1.json?.items || []).length,
         itemCountB: (b1.json?.items || []).length,
         sameUserTwice_identical: sameUserStable,
@@ -175,6 +178,22 @@ async function main() {
       console.error('E2E_FAIL single_question_options_should_differ');
       process.exit(1);
     }
+  }
+
+  if ((a1.json?.items || []).length >= 1) {
+    for (const it of a1.json.items) {
+      const text = String(it.correctOptionText || '').trim();
+      const idx = Number(it.correctIndex);
+      const opts = it.options || [];
+      if (!text || !(idx >= 0 && idx < opts.length) || opts[idx] !== text) {
+        console.error('E2E_FAIL correctOptionText_invariant', { id: it.id, text, idx, opts });
+        process.exit(1);
+      }
+    }
+  }
+  if (a1.json?.cycleKey === undefined) {
+    console.error('E2E_FAIL missing_cycleKey_in_response');
+    process.exit(1);
   }
 
   console.log('E2E_OK');

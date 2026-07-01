@@ -1,0 +1,42 @@
+Phase 4 — Navigation: category → tests list (100% SAFE)
+========================================================
+
+What changed
+------------
+MainBottomNavHost.kt navigation helpers:
+
+1. navigateToTestsCatalog(subcategory)
+   - Home category chips (e.g. "HP GK")
+   - Category screen subcategory rows (e.g. "Static GK")
+   → Opens TestsScreenNew at route tests/{subcategory}
+
+2. navigateToTestApply(testTitle)
+   - Exam hierarchy leaf pick (final test name)
+   - Central exam single-test shortcut
+   → Opens ApplyForTestScreenNew (unchanged intent for test titles)
+
+3. navigateToStartTestPreview(testTitle)
+   - User taps a test row in TestsScreenNew list
+   → Start Test Preview (apply or start) instead of jumping to Instructions
+
+Safety
+------
+- Home "HP GK" no longer opens Apply with category name as fake test title.
+- Exam See All / Tests tab still opens Apply only for real test names (level 3).
+- Uri.encode on route args (spaces/special chars).
+- APPLY route unchanged; INSTRUCTIONS still used from preview after apply.
+
+User flow (fixed)
+-----------------
+Home → Category "HP GK"
+  → Tests list for subcategory HP GK
+  → Tap test "RRB Mock 1"
+  → Start Test Preview → Apply / Start
+
+Exam hierarchy → pick final test name
+  → Apply screen (same as before)
+
+Verify
+------
+./gradlew :app:compileDebugKotlin
+Manual: Home category → must show tests list, not empty apply.

@@ -1,6 +1,10 @@
 'use strict';
 
 const { pool } = require('../db');
+const {
+  trimPublishSchedulingItems,
+  PUBLISH_SCHEDULE_MAX_PUBLISHED_PER_ENTITY,
+} = require('./schedulingQueueLimits');
 
 function parseScheduleMs(value) {
   const raw = String(value || '').trim();
@@ -91,6 +95,10 @@ function isManagedAdvancedScheduleItem(item, testId) {
   return id === scheduleItemId(testId, 'publish') || id === scheduleItemId(testId, 'unpublish');
 }
 
+function resolveNotifyOnCycleRepublish(advancedConfig) {
+  return (advancedConfig || {}).notifyOnCycleRepublish === true;
+}
+
 function buildAdvancedScheduleItems(testId, advancedConfig, options = {}) {
   const notifyOnPublish = options.notifyOnPublish !== false;
   const publishAt = String(advancedConfig?.publishAt || '').trim();
@@ -131,8 +139,8 @@ function buildAdvancedScheduleItems(testId, advancedConfig, options = {}) {
   return items;
 }
 
-async function getPublishSchedulingItems() {
-  const { rows } = await pool.query(
+async function getPublishSchedulingItems(db = pool) {
+  const { rows } = await db.query(
     `SELECT setting_value FROM app_settings WHERE setting_key = 'publishScheduling' LIMIT 1`,
   );
   if (!rows[0]) return [];
@@ -144,14 +152,80 @@ async function getPublishSchedulingItems() {
   }
 }
 
-async function savePublishSchedulingItems(items, userId = null) {
-  await pool.query(
+async function savePublishSchedulingItems(items, userId = null, db = pool) {
+  const trimmed = trimPublishSchedulingItems(
+    Array.isArray(items) ? items : [],
+    PUBLISH_SCHEDULE_MAX_PUBLISHED_PER_ENTITY,
+  );
+  await db.query(
     `INSERT INTO app_settings (setting_key, setting_value, updated_by)
      VALUES ('publishScheduling', $1, $2::uuid)
      ON CONFLICT (setting_key)
      DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [JSON.stringify({ items }), userId],
+    [JSON.stringify({ items: trimmed }), userId],
   );
+}
+
+/** Advisory lock key — serializes publishScheduling JSON read/write across scheduler ticks. */
+const PUBLISH_SCHEDULING_ADVISORY_LOCK_KEY = 84729103;
+
+/** processing items older than this are reset to scheduled for retry. */
+const PUBLISH_SCHEDULE_STALE_PROCESSING_MS = 15 * 60 * 1000;
+
+function isPublishScheduleItemPending(item) {
+  const status = String((item || {}).status || '').trim().toLowerCase();
+  return status === 'scheduled' || status === 'processing';
+}
+
+function recoverStalePublishScheduleItems(items, nowMs = Date.now()) {
+  return (Array.isArray(items) ? items : []).map((raw) => {
+    const item = raw || {};
+    if (String(item.status || '').trim().toLowerCase() !== 'processing') return item;
+    const startedMs = Date.parse(String(item.processingStartedAt || ''));
+    if (!Number.isFinite(startedMs) || nowMs - startedMs < PUBLISH_SCHEDULE_STALE_PROCESSING_MS) {
+      return item;
+    }
+    return {
+      ...item,
+      status: 'scheduled',
+      processingStartedAt: '',
+      lastError: 'stale_processing_recovered',
+    };
+  });
+}
+
+/**
+ * Run callback while holding an exclusive transaction lock on publishScheduling mutations.
+ * @param {(client: import('pg').PoolClient) => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+async function withPublishSchedulingLock(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [PUBLISH_SCHEDULING_ADVISORY_LOCK_KEY]);
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function markPublishScheduleNotifySent(itemId, notifySentAt) {
+  const safeId = String(itemId || '').trim();
+  const sentAt = String(notifySentAt || '').trim();
+  if (!safeId || !sentAt) return;
+  await withPublishSchedulingLock(async (client) => {
+    const items = recoverStalePublishScheduleItems(await getPublishSchedulingItems(client));
+    const idx = items.findIndex((x) => String((x || {}).id || '') === safeId);
+    if (idx < 0) return;
+    items[idx] = { ...items[idx], notifySentAt: sentAt };
+    await savePublishSchedulingItems(items, null, client);
+  });
 }
 
 async function syncTestPublishScheduleFromAdvancedConfig(testId, advancedConfig, userId = null) {
@@ -189,4 +263,11 @@ module.exports = {
   savePublishSchedulingItems,
   scheduleItemId,
   isManagedAdvancedScheduleItem,
+  PUBLISH_SCHEDULING_ADVISORY_LOCK_KEY,
+  PUBLISH_SCHEDULE_STALE_PROCESSING_MS,
+  isPublishScheduleItemPending,
+  recoverStalePublishScheduleItems,
+  withPublishSchedulingLock,
+  markPublishScheduleNotifySent,
+  resolveNotifyOnCycleRepublish,
 };

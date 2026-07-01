@@ -1,0 +1,61 @@
+Phase 2 — Test resolve API (100% SAFE)
+======================================
+
+What changed
+------------
+New authenticated endpoint (additive only — no existing route changed):
+
+  GET /v1/tests/resolve?title=HP%20GK
+  GET /v1/tests/resolve?slug=hp-gk
+  GET /v1/tests/resolve?testId=<uuid>
+
+Requires: Authorization Bearer token (same as /tests/my-applications).
+
+Response (example — test between cycles):
+{
+  "found": true,
+  "id": "b6b2fc1c-...",
+  "title": "HP GK",
+  "slug": "hp-gk",
+  "subcategory": "GK",
+  "isPublished": false,
+  "catalogVisible": false,
+  "cyclePhase": "between_cycles",
+  "republishAt": "2026-07-01T12:30:00.000Z",
+  "canApply": false,
+  "alreadyAppliedInCurrentCycle": false,
+  "mayReapplyForNewCycle": false,
+  "blockReason": "Test is between cycles — opens again when republished"
+}
+
+cyclePhase values
+-----------------
+- live              — in catalog, apply allowed (if not already applied)
+- between_cycles    — unpublished after cycle end / republish pending
+- unpublished       — admin unpublished, not a cycle gap
+- scheduled         — publishAt in future
+- closed            — validUntil passed or unpublishAt passed
+- not_found         — no matching test
+
+Safety
+------
+- Read-only endpoint (no DB writes).
+- Placed BEFORE /:id routes so it never conflicts with UUID paths.
+- Public GET /tests unchanged.
+- POST /:id/apply unchanged.
+
+Verify (local, no writes)
+-------------------------
+  cd server
+  npm run verify:test-resolve-phase2
+
+Deploy
+------
+1. Deploy server code
+2. pm2 restart mocktestapp-api
+3. Test with curl (replace TOKEN):
+
+  curl -s -H "Authorization: Bearer TOKEN" \
+    "https://admin-admin.govmocktest.com/v1/tests/resolve?title=HP%20GK"
+
+Next: Phase 3 wires Android Apply screen to this API.

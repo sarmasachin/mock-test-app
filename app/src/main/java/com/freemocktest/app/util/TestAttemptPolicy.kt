@@ -10,6 +10,15 @@ data class AttemptAccessResult(
     val attemptsAllowed: Int = 1,
 )
 
+/**
+ * Client-side attempt limit checks (mirrors server [evaluateAttemptAccess]).
+ *
+ * - [attemptsAllowed]: max scored submissions per test catalog id (typical default 1).
+ * - [reattemptCooldownMinutes]: minimum gap before another try in the same cycle.
+ * - Does **not** control shuffle; new shuffle order comes from a new catalog cycle + re-apply.
+ *
+ * @see com.freemocktest.app.util.ShuffleAttemptRules
+ */
 object TestAttemptPolicy {
     fun evaluate(
         attemptsAllowed: Int,

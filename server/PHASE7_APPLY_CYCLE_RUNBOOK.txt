@@ -1,0 +1,69 @@
+MockTestApp — Phase 7 Runbook (Apply cycle E2E verification)
+================================================================
+
+Goal
+----
+Prove the full apply cycle flow (publish → apply → between cycles → republish →
+re-apply) with automated checks. 100% safe: no DB writes, no test mutations.
+
+What changed
+------------
+Server lib:
+- `applyCycleE2eScenarios.js` — offline timeline simulation for apply/catalog/resolve
+
+Scripts:
+- `verifyApplyCyclePhase7.js` — offline unit E2E (no API/DB)
+- `e2eTestApplyCycle.js` — read-only live smoke (GET only + optional DB cross-check)
+
+Offline verify (always run first)
+---------------------------------
+cd server
+npm run verify:apply-cycle-phase7
+Expected: PHASE7_VERIFY_OK
+
+This simulates:
+1. Live cycle → catalog listed, canApply=true, apply OK
+2. Already applied → canApply=false
+3. Between cycles → catalog empty, resolve finds test, apply 403
+4. After republish → catalog again, re-apply for new cycle OK
+
+Live read-only smoke (optional)
+-------------------------------
+# Local API
+npm run e2e:apply-cycle
+
+# Production API (read-only GETs)
+node scripts/e2eTestApplyCycle.js --api https://admin-admin.govmocktest.com/v1
+
+# With DB cross-check (needs DATABASE_URL + login)
+node scripts/e2eTestApplyCycle.js --api https://admin-admin.govmocktest.com/v1 --with-db
+
+Env for resolve API checks:
+  E2E_LOGIN_IDENTIFIER=9817585270
+  E2E_LOGIN_PASSWORD=123456
+  PHASE7_TEST_TITLE=HP GK   (optional specific test)
+
+Manual phone QA checklist
+-------------------------
+1. Admin publish test (duration 1440 for easy testing)
+2. App → Tests list → test visible
+3. Apply for test → success
+4. (Optional) shorten duration in admin for cycle test
+5. After cycle ends: catalog empty, apply screen shows "between cycles" + republish time
+6. After republish or Admin → Republish now: test live again
+7. Apply again → re-enrolled for new cycle
+
+Safety notes
+------------
+- e2eTestApplyCycle.js never POSTs /apply or mutates tests
+- No waiting/sleeping in scripts (no flaky 5-min timers)
+- Offline verify is the gate for CI/deploy confidence
+- Live smoke may exit PHASE7_E2E_NEEDS_ATTENTION if catalog empty (expected when between cycles)
+
+Rollback
+--------
+Remove scripts only — no server behavior change in Phase 7.
+
+Phase roadmap complete
+----------------------
+Phase 0–7 apply/cycle track done. Future: optional timed integration test in staging only.

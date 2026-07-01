@@ -66,7 +66,33 @@ type PublishScheduleItem = {
   entityId: string;
   scheduleAt: string;
   notifyOnPublish: boolean;
-  status: 'scheduled' | 'cancelled' | 'published';
+  status: 'scheduled' | 'cancelled' | 'published' | 'processing';
+  action?: string;
+  scheduleHealth?: {
+    isOverdue: boolean;
+    overdueMinutes: number | null;
+    isStaleProcessing: boolean;
+    needsAttention: boolean;
+  };
+};
+type PublishSchedulingDiagnostics = {
+  serverNow: string;
+  overdueCount: number;
+  staleProcessingCount: number;
+  maxOverdueMinutes: number;
+  alertWorthyCount: number;
+  alertAfterMinutes: number;
+  healthy: boolean;
+  overdueSamples: Array<{
+    id: string;
+    entityType: string;
+    entityId: string;
+    entityLabel: string;
+    scheduleAt: string;
+    status: string;
+    action: string;
+    overdueMinutes: number;
+  }>;
 };
 type ExamCategoryItem = {
   id: string;
@@ -386,6 +412,7 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
   const guard = usePermissionGuard();
   const ITEMS_PER_PAGE = 20;
   const [items, setItems] = useState<PublishScheduleItem[]>([]);
+  const [diagnostics, setDiagnostics] = useState<PublishSchedulingDiagnostics | null>(null);
   const [tests, setTests] = useState<TestItemLite[]>([]);
   const [articles, setArticles] = useState<ArticleItemLite[]>([]);
   const [entityType, setEntityType] = useState<'test' | 'article'>('test');
@@ -393,10 +420,16 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
   const [scheduleAt, setScheduleAt] = useState('');
   const [notifyOnPublish, setNotifyOnPublish] = useState(true);
   const [page, setPage] = useState(1);
+  const [cleanupPreview, setCleanupPreview] = useState<{
+    publishScheduling: { before: number; after: number; removed: number };
+    notificationScheduling: { before: number; after: number; removed: number };
+  } | null>(null);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
   async function load() {
     try {
       const [schRes, testRes, articleRes] = await Promise.all([apiClient.get('/admin/publish-scheduling'), apiClient.get('/admin/tests'), apiClient.get('/admin/articles')]);
       setItems(schRes.data?.items || []);
+      setDiagnostics(schRes.data?.diagnostics || null);
       setTests(testRes.data?.items || []);
       setArticles(articleRes.data?.items || []);
       setPage(1);
@@ -437,6 +470,41 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
       pushToast('error', err?.response?.data?.error || 'Failed to update schedule status');
     }
   }
+  async function runQueueCleanup(apply: boolean) {
+    if (!guard('tab_publish_scheduling')) return;
+    if (apply && !window.confirm('Trim old publish history and failed notifications? Pending schedules are kept.')) {
+      return;
+    }
+    setCleanupBusy(true);
+    try {
+      const res = await apiClient.post('/admin/scheduling-queues/cleanup', { apply });
+      const summary = res.data?.summary;
+      if (summary) {
+        setCleanupPreview({
+          publishScheduling: {
+            before: Number(summary.publishScheduling?.before || 0),
+            after: Number(summary.publishScheduling?.after || 0),
+            removed: Number(summary.publishScheduling?.removed || 0),
+          },
+          notificationScheduling: {
+            before: Number(summary.notificationScheduling?.before || 0),
+            after: Number(summary.notificationScheduling?.after || 0),
+            removed: Number(summary.notificationScheduling?.removed || 0),
+          },
+        });
+      }
+      if (apply) {
+        await load();
+        pushToast('success', 'Scheduling queues cleaned.');
+      } else {
+        pushToast('success', 'Cleanup preview ready (no changes saved).');
+      }
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to run queue cleanup');
+    } finally {
+      setCleanupBusy(false);
+    }
+  }
   const sourceList = entityType === 'test' ? tests : articles;
   const totalPages = Math.max(1, Math.ceil(items.length / ITEMS_PER_PAGE));
   const safePage = Math.min(page, totalPages);
@@ -474,27 +542,96 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
       <p style={{ margin: '0 0 10px', fontSize: '0.82rem', color: 'var(--text-muted, #5f6b7a)' }}>
         Pick date &amp; time from the calendar; it is sent to the server as ISO (UTC). List shows India time (IST) for readability.
       </p>
+      {diagnostics && !diagnostics.healthy ? (
+        <div className="publish-schedule-alert" role="status">
+          <strong>Scheduler attention needed</strong>
+          <p>
+            {diagnostics.overdueCount > 0
+              ? `${diagnostics.overdueCount} overdue schedule(s) — oldest ${diagnostics.maxOverdueMinutes} min late. `
+              : ''}
+            {diagnostics.staleProcessingCount > 0
+              ? `${diagnostics.staleProcessingCount} stuck in processing (auto-recovers after 15 min). `
+              : ''}
+            Server runs publish scheduler every 60s and once on boot. For test cycle republish, use All Tests → Republish now.
+          </p>
+        </div>
+      ) : diagnostics ? (
+        <p className="publish-schedule-ok" role="status">
+          Scheduler healthy — no overdue or stuck publish schedules.
+        </p>
+      ) : null}
+      <div className="panel-card" style={{ marginBottom: 12, padding: 12 }}>
+        <div className="panel-head" style={{ marginBottom: 8 }}>
+          <h4 style={{ margin: 0 }}>Queue cleanup</h4>
+        </div>
+        <p style={{ margin: '0 0 10px', fontSize: '0.82rem', color: 'var(--text-muted, #5f6b7a)' }}>
+          Safely trims old published history (keeps latest 50 per test), removes stale failed notifications, and fixes stuck overdue rows. Pending schedules are not deleted.
+        </p>
+        <div className="inline-form">
+          <button type="button" className="ghost" disabled={cleanupBusy} onClick={() => void runQueueCleanup(false)}>
+            {cleanupBusy ? 'Working...' : 'Preview cleanup'}
+          </button>
+          <button type="button" className="ghost" disabled={cleanupBusy} onClick={() => void runQueueCleanup(true)}>
+            Apply cleanup
+          </button>
+        </div>
+        {cleanupPreview ? (
+          <p style={{ margin: '10px 0 0', fontSize: '0.82rem' }}>
+            Publish queue: {cleanupPreview.publishScheduling.before} → {cleanupPreview.publishScheduling.after}
+            {cleanupPreview.publishScheduling.removed > 0 ? ` (−${cleanupPreview.publishScheduling.removed})` : ''}
+            {' · '}
+            Notification queue: {cleanupPreview.notificationScheduling.before} → {cleanupPreview.notificationScheduling.after}
+            {cleanupPreview.notificationScheduling.removed > 0 ? ` (−${cleanupPreview.notificationScheduling.removed})` : ''}
+          </p>
+        ) : null}
+      </div>
       <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button></div>
       <div className="list table">
         <div className="row row-head" style={{ gridTemplateColumns: '120px 1fr 150px 110px 110px 100px' }}><span>Type</span><span>Entity ID</span><span>Schedule At</span><span>Status</span><span>Notify</span><span>Action</span></div>
-        {pagedItems.map((item) => (
-          <div key={item.id} className="row" style={{ gridTemplateColumns: '120px 1fr 150px 110px 110px 100px' }}>
+        {pagedItems.map((item) => {
+          const health = item.scheduleHealth;
+          const rowClass = health?.needsAttention ? 'row publish-schedule-row--attention' : 'row';
+          return (
+          <div key={item.id} className={rowClass} style={{ gridTemplateColumns: '120px 1fr 150px 110px 110px 100px' }}>
             <span>{item.entityType}</span>
-            <span>{item.entityId}</span>
-            <span title={item.scheduleAt}>{formatScheduleAtDisplay(item.scheduleAt)}</span>
-            <span>{item.status}</span>
+            <span title={item.entityId}>
+              {tests.find((t) => t.id === item.entityId)?.title ||
+                articles.find((a) => a.id === item.entityId)?.headline ||
+                item.entityId}
+            </span>
+            <span title={item.scheduleAt}>
+              {formatScheduleAtDisplay(item.scheduleAt)}
+              {health?.isOverdue && health.overdueMinutes != null ? (
+                <>
+                  <br />
+                  <span className="publish-schedule-overdue-tag">Overdue {health.overdueMinutes}m</span>
+                </>
+              ) : null}
+            </span>
+            <span>
+              {item.status}
+              {health?.isStaleProcessing ? (
+                <>
+                  <br />
+                  <span className="publish-schedule-overdue-tag">Stale processing</span>
+                </>
+              ) : null}
+            </span>
             <span>{item.notifyOnPublish ? 'Yes' : 'No'}</span>
             {item.status === 'scheduled' ? (
               <button type="button" className="danger" onClick={() => changeStatus(item.id, 'cancelled')}>
                 Cancel
               </button>
+            ) : item.status === 'processing' ? (
+              <span className="publish-schedule-processing-hint">Processing…</span>
             ) : (
               <button type="button" className="ghost" onClick={() => changeStatus(item.id, 'scheduled')}>
                 Re-Schedule
               </button>
             )}
           </div>
-        ))}
+        );
+        })}
       </div>
       <div className="pagination-wrap"><span>Page {safePage} of {totalPages}</span><div className="inline-form pagination-controls"><button type="button" className="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}>Previous</button><button type="button" className="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Next</button></div></div>
     </section>

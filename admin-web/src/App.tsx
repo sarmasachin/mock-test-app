@@ -73,6 +73,10 @@ type TestAdvancedConfig = {
   fullscreenRequired: boolean;
   copyPasteBlocked: boolean;
   notifyOnPublish: boolean;
+  /** When true, push notification on automatic test-cycle republish (default off). */
+  notifyOnCycleRepublish: boolean;
+  /** Minutes after cycle end before auto-republish; empty/null = server default (env, default 30). */
+  cycleRepublishGapMinutes?: number | null;
   sendEmailOnPublish: boolean;
   /** Ordered sections — keys match question `subject_key`; used for subject-wise shuffle on the API. */
   subjectSections?: SubjectSectionRow[];
@@ -107,6 +111,13 @@ type TestItem = {
   is_published: boolean;
   dynamic_fluctuation_on_publish: boolean;
   advanced_config?: Partial<TestAdvancedConfig> | null;
+  cycle_status?: 'live' | 'between_cycles' | 'unpublished' | 'republish_overdue' | 'scheduled' | 'closed';
+  cycle_status_label?: string;
+  cycle_phase?: string;
+  republish_at?: string | null;
+  republish_overdue?: boolean;
+  catalog_visible?: boolean;
+  can_republish_now?: boolean;
 };
 
 type QuestionItem = {
@@ -714,6 +725,13 @@ function mapApiTestItem(x: any): TestItem {
             fullscreenRequired: normalizeBoolean(x.advanced_config.fullscreenRequired, false),
             copyPasteBlocked: normalizeBoolean(x.advanced_config.copyPasteBlocked, false),
             notifyOnPublish: normalizeBoolean(x.advanced_config.notifyOnPublish, true),
+            notifyOnCycleRepublish: normalizeBoolean(x.advanced_config.notifyOnCycleRepublish, false),
+            cycleRepublishGapMinutes:
+              x.advanced_config.cycleRepublishGapMinutes === undefined ||
+              x.advanced_config.cycleRepublishGapMinutes === null ||
+              String(x.advanced_config.cycleRepublishGapMinutes).trim() === ''
+                ? null
+                : Number(x.advanced_config.cycleRepublishGapMinutes),
             sendEmailOnPublish: normalizeBoolean(x.advanced_config.sendEmailOnPublish, false),
             subjectSections: Array.isArray(x.advanced_config.subjectSections)
               ? x.advanced_config.subjectSections
@@ -726,6 +744,13 @@ function mapApiTestItem(x: any): TestItem {
               : [],
           }
         : null,
+    cycle_status: String(x.cycle_status || 'unpublished') as TestItem['cycle_status'],
+    cycle_status_label: String(x.cycle_status_label || ''),
+    cycle_phase: String(x.cycle_phase || ''),
+    republish_at: x.republish_at || null,
+    republish_overdue: normalizeBoolean(x.republish_overdue, false),
+    catalog_visible: normalizeBoolean(x.catalog_visible, false),
+    can_republish_now: normalizeBoolean(x.can_republish_now, false),
   };
 }
 
@@ -1615,6 +1640,8 @@ function TestsTab({
   const [fullscreenRequired, setFullscreenRequired] = useState(false);
   const [copyPasteBlocked, setCopyPasteBlocked] = useState(false);
   const [notifyOnPublish, setNotifyOnPublish] = useState(true);
+  const [notifyOnCycleRepublish, setNotifyOnCycleRepublish] = useState(false);
+  const [cycleRepublishGapMinutes, setCycleRepublishGapMinutes] = useState('');
   const [sendEmailOnPublish, setSendEmailOnPublish] = useState(false);
   /** Draft rows for All Tests → Advanced → subject sections (saved with test advancedConfig). */
   const [subjectSectionRows, setSubjectSectionRows] = useState<SubjectSectionRow[]>([]);
@@ -1628,6 +1655,7 @@ function TestsTab({
   const [isPublished, setIsPublished] = useState(true);
   const [dynamicFluctuationOnPublish, setDynamicFluctuationOnPublish] = useState(true);
   const [isRefreshingTests, setIsRefreshingTests] = useState(false);
+  const [republishingTestId, setRepublishingTestId] = useState('');
   const [selectedTest, setSelectedTest] = useState<TestItem | null>(null);
   const [questions, setQuestions] = useState<QuestionItem[]>([]);
   const [showQuestionForm, setShowQuestionForm] = useState(false);
@@ -1698,6 +1726,8 @@ function TestsTab({
     fullscreenRequired?: boolean;
     copyPasteBlocked?: boolean;
     notifyOnPublish?: boolean;
+    notifyOnCycleRepublish?: boolean;
+    cycleRepublishGapMinutes?: string | number;
     sendEmailOnPublish?: boolean;
     testKind: string;
     isPublished: boolean;
@@ -1735,6 +1765,8 @@ function TestsTab({
     const reattemptCooldownValue = Number(input.reattemptCooldownMinutes || 0);
     const lateJoinValue = Number(input.lateJoinMinutes || 0);
     const notifyBeforeValue = Number(input.notifyBeforeMinutes || 0);
+    const cycleGapRaw = String(input.cycleRepublishGapMinutes ?? '').trim();
+    const cycleGapValue = cycleGapRaw === '' ? null : Number(cycleGapRaw);
 
     if (!titleValue || !slugValue || !['mock', 'quiz'].includes(testKindValue)) {
       return { error: 'title, slug, and valid testKind are required' };
@@ -1819,6 +1851,12 @@ function TestsTab({
     if (!Number.isFinite(notifyBeforeValue) || !Number.isInteger(notifyBeforeValue) || notifyBeforeValue < 0 || notifyBeforeValue > 10080) {
       return { error: 'advancedConfig.notifyBeforeMinutes must be an integer between 0 and 10080' };
     }
+    if (
+      cycleGapValue !== null &&
+      (!Number.isFinite(cycleGapValue) || !Number.isInteger(cycleGapValue) || cycleGapValue < 0 || cycleGapValue > 10080)
+    ) {
+      return { error: 'advancedConfig.cycleRepublishGapMinutes must be an integer between 0 and 10080 (or leave blank for server default)' };
+    }
 
     const subjectSectionsDraftErr = validateSubjectSectionDraft(input.subjectSectionRows ?? []);
     if (subjectSectionsDraftErr) {
@@ -1864,6 +1902,8 @@ function TestsTab({
           fullscreenRequired: input.fullscreenRequired === true,
           copyPasteBlocked: input.copyPasteBlocked === true,
           notifyOnPublish: input.notifyOnPublish !== false,
+          notifyOnCycleRepublish: input.notifyOnCycleRepublish === true,
+          cycleRepublishGapMinutes: cycleGapValue,
           sendEmailOnPublish: input.sendEmailOnPublish === true,
           subjectSections: subjectSectionsNormalized,
         },
@@ -1909,6 +1949,29 @@ function TestsTab({
     }
   }
 
+  async function republishTestNow(item: TestItem) {
+    if (!item.can_republish_now) return;
+    const ok = await adminConfirm({
+      title: 'Republish now?',
+      message: `Republish "${item.title}" now? This starts a new live cycle immediately (no push notification).`,
+      confirmLabel: 'Republish now',
+      cancelLabel: 'Cancel',
+    });
+    if (!ok) return;
+    try {
+      setRepublishingTestId(item.id);
+      const res = await apiClient.post(`/admin/tests/${item.id}/republish-now`);
+      const saved = mapApiTestItem(res.data?.item || {});
+      setItems((prev) => prev.map((row) => (row.id === saved.id ? saved : row)));
+      setSelectedTest((prev) => (prev?.id === saved.id ? saved : prev));
+      pushToast('success', `${saved.title} republished — cycle is live`);
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to republish test');
+    } finally {
+      setRepublishingTestId('');
+    }
+  }
+
   function resetTestFormToCreate() {
     setEditingTestId('');
     setTitle('');
@@ -1945,6 +2008,7 @@ function TestsTab({
     setFullscreenRequired(false);
     setCopyPasteBlocked(false);
     setNotifyOnPublish(true);
+    setNotifyOnCycleRepublish(false);
     setSendEmailOnPublish(false);
     setSubjectSectionRows([]);
     setKind('mock');
@@ -1991,6 +2055,12 @@ function TestsTab({
     setFullscreenRequired(normalizeBoolean(ac?.fullscreenRequired, false));
     setCopyPasteBlocked(normalizeBoolean(ac?.copyPasteBlocked, false));
     setNotifyOnPublish(normalizeBoolean(ac?.notifyOnPublish, true));
+    setNotifyOnCycleRepublish(normalizeBoolean(ac?.notifyOnCycleRepublish, false));
+    setCycleRepublishGapMinutes(
+      ac?.cycleRepublishGapMinutes === undefined || ac?.cycleRepublishGapMinutes === null
+        ? ''
+        : String(ac.cycleRepublishGapMinutes),
+    );
     setSendEmailOnPublish(normalizeBoolean(ac?.sendEmailOnPublish, false));
     const secs = ac?.subjectSections;
     setSubjectSectionRows(
@@ -2045,6 +2115,8 @@ function TestsTab({
       fullscreenRequired,
       copyPasteBlocked,
       notifyOnPublish,
+      notifyOnCycleRepublish,
+      cycleRepublishGapMinutes,
       sendEmailOnPublish,
       testKind: kind,
       isPublished,
@@ -2590,6 +2662,25 @@ function TestsTab({
                     <input type="checkbox" checked={notifyOnPublish} onChange={(e) => setNotifyOnPublish(e.target.checked)} />
                     notify on publish
                   </label>
+                  <label className="check-wrap" title="When the test auto-republishes after each cycle (duration + gap minutes)">
+                    <input
+                      type="checkbox"
+                      checked={notifyOnCycleRepublish}
+                      onChange={(e) => setNotifyOnCycleRepublish(e.target.checked)}
+                    />
+                    notify on auto-cycle republish
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={10080}
+                    step={1}
+                    value={cycleRepublishGapMinutes}
+                    onChange={(e) => setCycleRepublishGapMinutes(e.target.value)}
+                    placeholder="Cycle republish gap (min) — blank = server default 30"
+                    title="Minutes after cycle ends before auto-republish. Leave blank to use server env CYCLE_REPUBLISH_GAP_MINUTES (default 30)."
+                    style={{ minWidth: 280 }}
+                  />
                   <label className="check-wrap">
                     <input type="checkbox" checked={sendEmailOnPublish} onChange={(e) => setSendEmailOnPublish(e.target.checked)} />
                     send email on publish
@@ -2766,7 +2857,28 @@ function TestsTab({
                 <span>
                   {item.is_published ? 'Published' : 'Hidden'}
                   <br />
+                  <span
+                    className={`test-cycle-badge test-cycle-badge--${item.cycle_status || 'unpublished'}`}
+                    title={
+                      item.republish_at
+                        ? `Republish scheduled: ${new Date(item.republish_at).toLocaleString()}`
+                        : item.cycle_status_label || ''
+                    }
+                  >
+                    {item.cycle_status_label || 'Unpublished'}
+                  </span>
+                  {item.republish_at ? (
+                    <>
+                      <br />
+                      <span className="test-cycle-republish-at">
+                        Republish: {new Date(item.republish_at).toLocaleString()}
+                      </span>
+                    </>
+                  ) : null}
+                  <br />
                   {item.enrolled_count || 0}/{item.capacity_total || 0}
+                  <br />
+                  Catalog: {item.catalog_visible ? 'Visible' : 'Hidden'}
                 </span>
                 <span>
                   {item.dynamic_fluctuation_on_publish ? 'Fluctuation: On' : 'Fluctuation: Off'}
@@ -2789,6 +2901,16 @@ function TestsTab({
                   Edit
                 </button>
                 <div className="inline-form">
+                  {item.can_republish_now ? (
+                    <button
+                      type="button"
+                      onClick={() => republishTestNow(item)}
+                      disabled={!canEditTests || republishingTestId === item.id}
+                      title="Start a new live cycle immediately (no push notification)"
+                    >
+                      {republishingTestId === item.id ? 'Republishing…' : 'Republish now'}
+                    </button>
+                  ) : null}
                   <button type="button" onClick={() => loadQuestions(item)}>
                     Open Builder
                   </button>

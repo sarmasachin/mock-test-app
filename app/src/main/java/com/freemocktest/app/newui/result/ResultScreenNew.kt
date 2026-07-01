@@ -62,6 +62,7 @@ import kotlinx.coroutines.delay
 fun ResultScreenNew(
     modifier: Modifier = Modifier,
     testName: String,
+    cacheUserScope: String? = null,
     scoreText: String = "0 / 10",
     answered: Int = 3,
     correct: Int = 0,
@@ -151,24 +152,36 @@ fun ResultScreenNew(
     val isAnswerKeyLocked = (answerKeyReleaseAtMs ?: 0L) > nowMs
     val resultCountdown = formatCountdown(effectiveResultReleaseAt - nowMs)
     val answerKeyCountdown = formatCountdown((answerKeyReleaseAtMs ?: 0L) - nowMs)
-    LaunchedEffect(testName, questionsReloadKey) {
+    LaunchedEffect(testName, questionsReloadKey, cacheUserScope) {
         questionsLoadFailed = false
         try {
-            val cachedQs = runCatching { ContentRepository.loadCachedQuizQuestionsForTest(testName) }
-                .getOrDefault(emptyList())
-            val hadCache = cachedQs.isNotEmpty()
-            if (hadCache) {
-                questionCount = cachedQs.size
-            } else {
-                questionCount = null
+            val cached = runCatching {
+                ContentRepository.loadCachedQuizQuestionsForTest(testName, cacheUserScope)
+            }.getOrDefault(emptyList())
+            if (cached.isNotEmpty()) {
+                questionCount = cached.size
+                return@LaunchedEffect
             }
-            val outcome = runCatching { ContentRepository.loadQuizQuestionsForTest(testName, forceRefresh = true) }
+            val submitted = runCatching {
+                val owner = cacheUserScope?.trim().orEmpty().ifBlank {
+                    AppPreferencesRepository.peekEditableProfileNow().email.trim().ifBlank { "guest" }
+                }
+                AppPreferencesRepository.peekSubmittedAttemptSnapshot(owner, testName)?.questions?.size
+            }.getOrNull()
+            if ((submitted ?: 0) > 0) {
+                questionCount = submitted
+                return@LaunchedEffect
+            }
+            val outcome = runCatching {
+                ContentRepository.loadQuizQuestionsForTest(
+                    testName = testName,
+                    forceRefresh = false,
+                    cacheUserScope = cacheUserScope,
+                )
+            }
             when {
                 outcome.isSuccess -> {
                     questionCount = outcome.getOrNull()?.size ?: 0
-                }
-                hadCache -> {
-                    questionCount = cachedQs.size
                 }
                 else -> {
                     questionCount = 0
@@ -185,16 +198,16 @@ fun ResultScreenNew(
     val hasQuestionData = (questionCount ?: 0) > 0
     val canOpenDetailViews = !isQuestionDataLoading && hasQuestionData
     val answerKeyButtonText = when {
-        isQuestionDataLoading -> "Answer Key â€¢ Loading..."
-        questionsLoadFailed -> "Answer Key â€¢ Unavailable"
-        !hasQuestionData -> "Answer Key â€¢ Not available"
-        isAnswerKeyLocked -> "Answer Key â€¢ $answerKeyCountdown"
+        isQuestionDataLoading -> "Answer Key • Loading..."
+        questionsLoadFailed -> "Answer Key • Unavailable"
+        !hasQuestionData -> "Answer Key • Not available"
+        isAnswerKeyLocked -> "Answer Key • $answerKeyCountdown"
         else -> "Answer Key"
     }
     val reviewButtonText = when {
-        isQuestionDataLoading -> "Review â€¢ Loading..."
-        questionsLoadFailed -> "Review â€¢ Unavailable"
-        !hasQuestionData -> "Review â€¢ Not available"
+        isQuestionDataLoading -> "Review • Loading..."
+        questionsLoadFailed -> "Review • Unavailable"
+        !hasQuestionData -> "Review • Not available"
         else -> "Review"
     }
 
@@ -441,7 +454,7 @@ fun ResultScreenNew(
                                 }
                                 context.startActivity(Intent.createChooser(send, "Share score"))
                             } catch (_: ActivityNotFoundException) {
-                                // No share handler; ignore â€” avoids crash on stripped-down builds.
+                                // No share handler; ignore — avoids crash on stripped-down builds.
                             } catch (_: Exception) {
                                 // Ignore share failures to keep result flow safe.
                             }

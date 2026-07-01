@@ -47,6 +47,14 @@ interface AppApiService {
     @GET("tests/my-applications")
     suspend fun getMyTestApplications(): MyTestApplicationsResponse
 
+    /** Phase 2 resolve — works when test is unpublished / between cycles (auth required). */
+    @GET("tests/resolve")
+    suspend fun resolveTest(
+        @Query("title") title: String? = null,
+        @Query("slug") slug: String? = null,
+        @Query("testId") testId: String? = null,
+    ): TestResolveResponse
+
     @GET("tests/{testId}/questions-attempt")
     suspend fun getAttemptQuestions(
         @Path("testId") testId: String,

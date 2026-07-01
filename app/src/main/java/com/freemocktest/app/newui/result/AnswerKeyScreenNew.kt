@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.freemocktest.app.data.AttemptReviewLoader
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
@@ -61,6 +62,7 @@ private const val ANSWER_KEY_QUESTIONS_LOAD_ERROR_MESSAGE =
 fun AnswerKeyScreenNew(
     modifier: Modifier = Modifier,
     testName: String,
+    cacheUserScope: String? = null,
     onBack: () -> Unit,
 ) {
     val p = mockTestPalette()
@@ -98,7 +100,7 @@ fun AnswerKeyScreenNew(
     val isLocked = (answerKeyReleaseAtMs ?: 0L) > nowMs
     val countdown = formatCountdown((answerKeyReleaseAtMs ?: 0L) - nowMs)
 
-    LaunchedEffect(testName, answerKeyReloadKey, isLocked) {
+    LaunchedEffect(testName, answerKeyReloadKey, isLocked, cacheUserScope) {
         if (isLocked) {
             items = emptyList()
             questionsLoading = false
@@ -108,12 +110,13 @@ fun AnswerKeyScreenNew(
         questionsLoading = true
         questionsLoadFailed = false
         try {
-            val result = runCatching { ContentRepository.loadQuizQuestionsForTest(testName) }
-            items = result.getOrElse { emptyList() }.mapIndexed { index, q ->
+            val result = runCatching { AttemptReviewLoader.load(testName, cacheUserScope) }
+            val payload = result.getOrElse { AttemptReviewLoader.LoadResult(emptyList(), AttemptReviewLoader.Source.NETWORK_SOFT) }
+            items = payload.rows.mapIndexed { index, row ->
                 AnswerKeyItem(
                     label = "Q${index + 1}",
-                    title = q.title,
-                    correctAnswer = q.options.getOrNull(q.correctIndex).orEmpty().ifBlank { "Not available" },
+                    title = row.title,
+                    correctAnswer = row.correctAnswerText(),
                 )
             }
             questionsLoadFailed = result.isFailure

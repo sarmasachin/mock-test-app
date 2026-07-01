@@ -45,7 +45,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.freemocktest.app.data.ContentRepository
+import com.freemocktest.app.data.AttemptReviewLoader
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import kotlinx.coroutines.CancellationException
@@ -60,6 +60,7 @@ private const val REVIEW_SOLUTION_LOAD_ERROR_MESSAGE =
 fun ReviewScreenNew(
     modifier: Modifier = Modifier,
     testName: String,
+    cacheUserScope: String? = null,
     onBack: () -> Unit,
     onOpenSolution: (Int) -> Unit,
 ) {
@@ -70,17 +71,18 @@ fun ReviewScreenNew(
     var questionsLoadFailed by remember(testName) { mutableStateOf(false) }
     var reviewReloadKey by remember(testName) { mutableIntStateOf(0) }
 
-    LaunchedEffect(testName, reviewReloadKey) {
+    LaunchedEffect(testName, reviewReloadKey, cacheUserScope) {
         questionsLoading = true
         questionsLoadFailed = false
         try {
-            val result = runCatching { ContentRepository.loadQuizQuestionsForTest(testName) }
-            questions = result.getOrElse { emptyList() }.map { q ->
+            val result = runCatching { AttemptReviewLoader.load(testName, cacheUserScope) }
+            val payload = result.getOrElse { AttemptReviewLoader.LoadResult(emptyList(), AttemptReviewLoader.Source.NETWORK_SOFT) }
+            questions = payload.rows.map { row ->
                 ReviewItem(
-                    title = q.title,
-                    yourAnswer = "Not available",
-                    correctAnswer = q.options.getOrNull(q.correctIndex).orEmpty().ifBlank { "Not available" },
-                    explanation = q.explanation,
+                    title = row.title,
+                    yourAnswer = row.yourAnswerText(),
+                    correctAnswer = row.correctAnswerText(),
+                    explanation = row.explanation,
                 )
             }
             questionsLoadFailed = result.isFailure
@@ -282,6 +284,7 @@ private fun ReviewQuestionCard(
 fun ReviewSolutionScreenNew(
     testName: String,
     questionNo: Int,
+    cacheUserScope: String? = null,
     onBack: () -> Unit,
     onOpenQuestion: (Int) -> Unit,
 ) {
@@ -292,17 +295,18 @@ fun ReviewSolutionScreenNew(
     var questionsLoadFailed by remember(testName) { mutableStateOf(false) }
     var solutionReloadKey by remember(testName) { mutableIntStateOf(0) }
 
-    LaunchedEffect(testName, solutionReloadKey) {
+    LaunchedEffect(testName, solutionReloadKey, cacheUserScope) {
         questionsLoading = true
         questionsLoadFailed = false
         try {
-            val result = runCatching { ContentRepository.loadQuizQuestionsForTest(testName) }
-            questions = result.getOrElse { emptyList() }.map { q ->
+            val result = runCatching { AttemptReviewLoader.load(testName, cacheUserScope) }
+            val payload = result.getOrElse { AttemptReviewLoader.LoadResult(emptyList(), AttemptReviewLoader.Source.NETWORK_SOFT) }
+            questions = payload.rows.map { row ->
                 ReviewItem(
-                    title = q.title,
-                    yourAnswer = "Not available",
-                    correctAnswer = q.options.getOrNull(q.correctIndex).orEmpty().ifBlank { "Not available" },
-                    explanation = q.explanation,
+                    title = row.title,
+                    yourAnswer = row.yourAnswerText(),
+                    correctAnswer = row.correctAnswerText(),
+                    explanation = row.explanation,
                 )
             }
             questionsLoadFailed = result.isFailure

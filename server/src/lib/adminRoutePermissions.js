@@ -70,6 +70,7 @@ const ADMIN_ROUTE_RULES = [
   { method: 'POST', pattern: /^\/tests\/badge\/bulk-live$/, permission: 'tab_all_tests' },
   { method: 'POST', pattern: /^\/tests$/, permission: 'tab_all_tests' },
   { method: 'PATCH', pattern: /^\/tests\/[^/]+$/, permission: 'tab_all_tests' },
+  { method: 'POST', pattern: /^\/tests\/[^/]+\/republish-now$/, permission: 'tab_all_tests' },
   { method: 'DELETE', pattern: /^\/tests\/[^/]+$/, permission: 'tab_all_tests' },
   {
     method: 'GET',
@@ -127,6 +128,7 @@ const ADMIN_ROUTE_RULES = [
   { method: 'GET', pattern: /^\/publish-scheduling$/, permission: 'tab_publish_scheduling' },
   { method: 'POST', pattern: /^\/publish-scheduling$/, permission: 'tab_publish_scheduling' },
   { method: 'PATCH', pattern: /^\/publish-scheduling\/[^/]+$/, permission: 'tab_publish_scheduling' },
+  { method: 'POST', pattern: /^\/scheduling-queues\/cleanup$/, permission: 'tab_publish_scheduling' },
 
   {
     method: 'GET',

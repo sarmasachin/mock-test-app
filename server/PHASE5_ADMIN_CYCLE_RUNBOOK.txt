@@ -1,0 +1,57 @@
+MockTestApp — Phase 5 Runbook (Admin cycle status + republish now)
+================================================================
+
+Goal
+----
+Admin All Tests list shows cycle badges (Live / Between cycles / Republish overdue / etc.)
+and lets admins manually republish stuck tests. Server runs one scheduler tick on boot.
+
+What changed
+------------
+Server:
+- GET /v1/admin/tests — adds cycle_status, cycle_status_label, republish_at,
+  republish_overdue, catalog_visible, can_republish_now
+- POST /v1/admin/tests/:id/republish-now — starts new cycle (no push notification)
+- Startup: one publish + cycle scheduler tick after listen; logs overdue schedule count
+
+Admin web:
+- All Tests table: cycle badge + republish time + catalog visibility
+- "Republish now" button when can_republish_now=true
+
+Deploy steps
+------------
+1. Server (production):
+   cd server
+   npm run verify:admin-cycle-phase5
+   pm2 restart mocktestapp-api
+
+2. Admin web:
+   cd admin-web
+   npm run build
+   (deploy dist to admin host)
+
+3. Verify in Admin UI:
+   - All Tests → each row shows cycle badge under Published/Hidden
+   - Tests between cycles show "Republish now" button
+   - Click Republish now → badge becomes Live, catalog Visible
+
+4. Verify server boot log (optional):
+   pm2 logs mocktestapp-api --lines 50
+   Look for publish_schedule_overdue_count if schedules are stuck
+
+Safety notes
+------------
+- Republish now does NOT send push notifications (manual admin action only)
+- Republish now marks pending auto-republish schedule rows as published (no double-fire)
+- Republish now is blocked with 409 if test is live or not eligible
+- Existing 60s schedulers unchanged; boot tick is additive one-shot
+
+Rollback
+--------
+Revert server + admin-web deploy. No DB migration required.
+
+Verify script (local)
+---------------------
+cd server
+npm run verify:admin-cycle-phase5
+Expected: PHASE5_VERIFY_OK

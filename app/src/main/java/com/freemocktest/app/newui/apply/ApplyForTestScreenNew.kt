@@ -112,6 +112,8 @@ fun ApplyForTestScreenNew(
     var hasAlreadyApplied by remember { mutableStateOf(false) }
     var testBetweenCycles by remember { mutableStateOf(false) }
     var testUnavailable by remember { mutableStateOf(false) }
+    var resolveBlockReason by remember { mutableStateOf<String?>(null) }
+    var republishAtHint by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -160,17 +162,15 @@ fun ApplyForTestScreenNew(
                 ?.getOrNull()
                 .orEmpty()
 
-            val directMatch = runCatching {
-                ContentRepository.loadTestByTitle(routeTitle, forceRefresh = true, allowDefaultFallback = false)
+            val applyLoad = runCatching {
+                ContentRepository.loadTestForApplyScreen(routeTitle, forceRefresh = true)
             }.getOrNull()
-            val publishedTest = if (directMatch?.id?.isNotBlank() == true) {
-                directMatch
-            } else {
-                runCatching {
+            val resolveSnapshot = applyLoad?.resolveSnapshot
+            val publishedTest = applyLoad?.effectiveCard
+                ?: runCatching {
                     ContentRepository.loadTestsForSubcategory(routeTitle, forceRefresh = true)
                         .firstOrNull { it.id.isNotBlank() }
                 }.getOrNull()
-            }
 
             val matchedApplication = myApplications.firstOrNull { app ->
                 val appTitle = app.testTitle.trim()
@@ -217,9 +217,15 @@ fun ApplyForTestScreenNew(
             resolvedSlotLabel = publishedTest?.slotLabel ?: resolvedTest?.slotLabel ?: matchedApplication?.slotLabel
             slotInfo = resolvedTest?.slotLabel?.ifBlank { "Morning Slot" } ?: "Morning Slot"
 
-            hasAlreadyApplied = matchedApplication != null
-            testBetweenCycles = matchedApplication != null && !matchedApplication.isPublished
+            hasAlreadyApplied =
+                resolveSnapshot?.alreadyAppliedInCurrentCycle == true ||
+                    matchedApplication != null
+            testBetweenCycles =
+                resolveSnapshot?.cyclePhase == "between_cycles" ||
+                    (matchedApplication != null && !matchedApplication.isPublished)
             testUnavailable = resolvedTest == null || testId.isBlank()
+            resolveBlockReason = resolveSnapshot?.blockReason
+            republishAtHint = resolveSnapshot?.republishAt
 
             when {
                 publishedTest != null -> {
@@ -472,16 +478,27 @@ fun ApplyForTestScreenNew(
                         testBetweenCycles && !hasAlreadyApplied -> {
                             Spacer(Modifier.height(6.dp))
                             Text(
-                                text = "Applications are closed while this test is between cycles.",
+                                text = resolveBlockReason
+                                    ?: "Applications are closed while this test is between cycles.",
                                 color = p.textSecondary,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold,
                             )
+                            if (!republishAtHint.isNullOrBlank()) {
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    text = "Expected republish: $republishAtHint",
+                                    color = p.textSecondary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            }
                         }
                         testUnavailable -> {
                             Spacer(Modifier.height(6.dp))
                             Text(
-                                text = "This test is not open for applications right now.",
+                                text = resolveBlockReason
+                                    ?: "This test is not open for applications right now.",
                                 color = p.textSecondary,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold,

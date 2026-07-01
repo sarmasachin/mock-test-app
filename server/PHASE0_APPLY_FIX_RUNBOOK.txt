@@ -1,0 +1,111 @@
+Phase 0 — Apply / Catalog Unstick (100% SAFE)
+=============================================
+
+Goal
+----
+Live app par tests dubara "apply" ke liye available hon.
+Is phase mein koi automatic DB mutation script nahi — sirf read-only check + manual admin steps.
+
+Safety rules
+------------
+- Pehle hamesha diagnostic chalao (read-only):
+    cd server
+    node scripts/phase0Diag.js
+- Production par sirf admin UI se publish karo — random SQL mat chalao.
+- Queue cleanup: pehle Preview, phir Apply (sirf jab preview sahi lage).
+- Git commit / deploy is runbook ke baad alag step hai — yahan sirf unstick.
+
+Step 1 — Read-only diagnostic (local machine)
+---------------------------------------------
+    cd server
+    node scripts/phase0Diag.js
+
+Expected:
+- GET /health → 200
+- GET /tests → items.length (0 = problem, >0 = catalog live)
+
+Agar catalog empty + leaderboard mein tests dikhen:
+→ Tests DB mein hain par is_published=false (between cycles).
+
+Step 2 — Admin: tests dubara publish (PRODUCTION)
+-------------------------------------------------
+1. Open: https://admin-admin.govmocktest.com/admin (ya tumhara admin URL)
+2. Login
+3. Tab: All Tests
+4. Har test jisko live chahiye:
+   a. Edit / row open
+   b. "Published" checkbox → ON
+   c. Duration minutes → testing ke liye 1440 (24h) ya zyada rakho
+      (12 min par har test ~12 min baad auto band ho jata hai)
+   d. Save
+
+Repeat for all 5 tests (ya jitne chahiye).
+
+Step 3 — Admin: Publish Scheduling check
+----------------------------------------
+1. Tab: Publish Scheduling
+2. Click: Load
+3. Dekho:
+   - status = scheduled, schedule time guzar chuka → overdue
+   - Server scheduler (60s) inhe process karega AGAR PM2 chal raha ho
+4. Queue cleanup:
+   a. Preview cleanup (safe, no changes)
+   b. Apply cleanup — sirf agar preview theek ho
+      (pending schedules delete NAHI hote)
+
+Step 4 — Server process confirm (VPS / production)
+--------------------------------------------------
+SSH par:
+    pm2 status
+    pm2 logs mocktestapp-api --lines 50
+
+Dekho:
+- Process "online"
+- Errors: publish_scheduler_error nahi hona chahiye
+
+Agar process down:
+    cd /path/to/MockTestApp/server
+    pm2 restart mocktestapp-api
+
+Step 5 — Verify (read-only)
+---------------------------
+Local machine:
+    node scripts/phase0Diag.js
+
+Browser / curl:
+    GET https://admin-admin.govmocktest.com/v1/tests?limit=50
+    → "items" array mein test titles aane chahiye
+
+Phone app:
+1. Force close app → reopen (ya Tests screen par pull refresh)
+2. Start Test → Apply
+3. "Apply for Test" button dikhna chahiye (agar pehle apply nahi kiya)
+
+Step 6 — Agar phir bhi empty catalog
+-------------------------------------
+Checklist:
+[ ] Admin save ke baad test row mein is_published=true dikhe
+[ ] advancedConfig.publishAt future mein to nahi
+[ ] advancedConfig.unpublishAt past to nahi
+[ ] valid_until date pass to nahi hui
+[ ] PM2 online + no scheduler errors
+[ ] Sahi API URL app mein: admin-admin.govmocktest.com/v1
+
+Common mistake
+--------------
+- Admin mein test bana diya par Published OFF
+- Duration 12 min → 12 min baad sab tests band
+- Home category se apply khola par test title match nahi (title exact hona chahiye)
+
+What Phase 0 does NOT do
+------------------------
+- Code change nahi
+- Auto republish script nahi (Phase 1+)
+- Android app change nahi
+- Cycle gap (30 min) change nahi
+
+Next phases (after Phase 0 stable)
+---------------------------------
+Phase 1: Configurable cycle gap
+Phase 2: resolve API (between-cycles UX)
+Phase 3: Android apply screen fix

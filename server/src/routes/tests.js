@@ -1,9 +1,21 @@
 'use strict';
 
+/**
+ * Mock-test catalog + attempt question delivery.
+ *
+ * SHUFFLE / CYCLE RULES (authoritative detail: /SHUFFLE_AND_ATTEMPT_RULES.txt at repo root)
+ * - GET /:id/questions           → DB order, NO shuffle (catalog/preview only).
+ * - GET /:id/questions-attempt   → per-user shuffle when advancedConfig flags are on.
+ * - Delivery seed: `${userId}:${testId}:${last_cycle_started_at}` — new cycle ⇒ new order.
+ * - shuffleQuestions / shuffleOptions are independent (see rules file §2).
+ * - correctIndex always tracks admin's correct OPTION TEXT after option shuffle (§6).
+ * - isApplicationFromOlderCycle() gates re-apply for a new catalog cycle (§5).
+ */
+
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../middleware/requireAuth');
-const { clampMcqCorrectIndex } = require('../mcqShuffle');
+const { clampMcqCorrectIndex, correctTextAtIndex, attachCorrectOptionText, verifyAllMcqDeliveryItems, mapDbRowToDeliveryItem } = require('../mcqShuffle');
 const { normalizeSubjectSectionsInput } = require('../util/subjectSections');
 const { isBeforeExamStart, isExamJoinAllowed } = require('../lib/examSchedule');
 const {
@@ -11,6 +23,11 @@ const {
   catalogVisibilityError,
 } = require('../lib/testVisibility');
 const { assertUserCanStartAttempt } = require('../lib/testAttempts');
+const {
+  buildTestResolvePayload,
+  lookupTestForResolve,
+  loadPublishScheduleItemsSafe,
+} = require('../lib/testResolve');
 
 const PUBLISHED_QUESTION_COUNT_SQL = `(SELECT COUNT(*)::int FROM questions q WHERE q.test_id = tests.id AND q.is_published = true) AS published_question_count`;
 
@@ -41,6 +58,7 @@ function toStartOfDayMs(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
+/** True when user's application predates the current test cycle (may re-apply for new shuffle round). */
 function isApplicationFromOlderCycle(row, appliedAtIso) {
   if (!appliedAtIso) return false;
   const appliedAt = new Date(appliedAtIso);
@@ -147,12 +165,20 @@ function normalizeTestAdvancedConfig(rawValue) {
     lateJoinMinutes: Math.max(0, Number(raw.lateJoinMinutes || 0)),
     notifyBeforeMinutes: Math.max(0, Number(raw.notifyBeforeMinutes || 0)),
     resumeEnabled: raw.resumeEnabled !== false,
+    /** When true: permute question sequence for delivery (see SHUFFLE_AND_ATTEMPT_RULES.txt §2). */
     shuffleQuestions: raw.shuffleQuestions === true,
+    /** When true: permute all four option texts per question; correctIndex remaps to same text. */
     shuffleOptions: raw.shuffleOptions === true,
     fullscreenRequired: raw.fullscreenRequired === true,
     copyPasteBlocked: raw.copyPasteBlocked === true,
     notifyOnPublish: raw.notifyOnPublish !== false,
     subjectSections,
+    cycleRepublishGapMinutes:
+      raw.cycleRepublishGapMinutes === undefined ||
+      raw.cycleRepublishGapMinutes === null ||
+      String(raw.cycleRepublishGapMinutes).trim() === ''
+        ? null
+        : Math.max(0, Math.min(10080, Math.floor(Number(raw.cycleRepublishGapMinutes)))),
   };
 }
 
@@ -188,6 +214,11 @@ function seededShuffle(list, rng) {
   return arr;
 }
 
+/**
+ * Per-user delivery shuffle for GET /questions-attempt only (does not mutate DB).
+ * seedText must be `${userId}:${testId}:${cycleKey}` so a new catalog cycle yields new order.
+ * When shuffleOptions is on, all four choices permute and correctIndex remaps to the same text.
+ */
 function applyPerUserShuffleToQuestions(rows, seedText, options) {
   const safeRows = Array.isArray(rows) ? rows : [];
   const seed = hashStringToSeed(seedText);
@@ -239,6 +270,7 @@ function applyPerUserShuffleToQuestions(rows, seedText, options) {
       String(row.choice_d || ''),
     ].map((x) => x.trim());
     const sourceCorrect = clampMcqCorrectIndex(row.correct_index);
+    const correctOptionText = correctTextAtIndex(sourceOptions, sourceCorrect);
     const baseOut = {
       id: Number(row.id),
       position: Number(newPosition + 1),
@@ -247,28 +279,37 @@ function applyPerUserShuffleToQuestions(rows, seedText, options) {
       subjectKey: subjectKeyOut,
     };
     if (!shuffleOptions) {
-      return {
-        ...baseOut,
-        options: sourceOptions,
-        correctIndex: sourceCorrect,
-      };
+      return attachCorrectOptionText(
+        {
+          ...baseOut,
+          options: sourceOptions,
+          correctIndex: sourceCorrect,
+        },
+        correctOptionText,
+      );
     }
     const indexed = sourceOptions.map((opt, idx) => ({ opt, idx }));
     const shuffledOpts = seededShuffle(indexed, rng);
     const newOptions = shuffledOpts.map((x) => x.opt);
     const newCorrectIndex = shuffledOpts.findIndex((x) => x.idx === sourceCorrect);
     if (newCorrectIndex < 0) {
-      return {
-        ...baseOut,
-        options: sourceOptions,
-        correctIndex: sourceCorrect,
-      };
+      return attachCorrectOptionText(
+        {
+          ...baseOut,
+          options: sourceOptions,
+          correctIndex: sourceCorrect,
+        },
+        correctOptionText,
+      );
     }
-    return {
-      ...baseOut,
-      options: newOptions,
-      correctIndex: newCorrectIndex,
-    };
+    return attachCorrectOptionText(
+      {
+        ...baseOut,
+        options: newOptions,
+        correctIndex: newCorrectIndex,
+      },
+      correctOptionText,
+    );
   });
 }
 
@@ -368,6 +409,69 @@ router.get('/', async (req, res) => {
   }
 });
 
+/**
+ * Phase 2: resolve test by title/slug/id even when not in public catalog (auth required).
+ * GET /v1/tests/resolve?title=HP%20GK
+ * GET /v1/tests/resolve?testId=<uuid>
+ */
+router.get('/resolve', requireAuth, async (req, res) => {
+  const testId = String(req.query.testId || '').trim();
+  const title = String(req.query.title || '').trim();
+  const slug = String(req.query.slug || '').trim();
+
+  try {
+    const lookup = await lookupTestForResolve(pool, { testId, title, slug });
+    if (lookup.error) {
+      return res.status(400).json({ error: lookup.error });
+    }
+    if (lookup.ambiguous) {
+      return res.status(409).json({ error: 'Multiple tests match this name — use testId' });
+    }
+    if (!lookup.row) {
+      return res.json(buildTestResolvePayload({ row: null }));
+    }
+
+    const row = lookup.row;
+    const [advancedMap, publishScheduleItems, applicationRes] = await Promise.all([
+      loadAdvancedConfigMap(),
+      loadPublishScheduleItemsSafe(pool),
+      pool.query(
+        `SELECT applied_at
+         FROM test_applications
+         WHERE user_id = $1::uuid AND test_id = $2::uuid
+         LIMIT 1`,
+        [req.userId, row.id],
+      ).catch((e) => {
+        if (e && e.code === '42P01') return { rows: [] };
+        throw e;
+      }),
+    ]);
+
+    const advancedConfig = normalizeTestAdvancedConfig(
+      resolveAdvancedConfigForTest(advancedMap, row.id),
+    );
+    const appliedAt = applicationRes.rows[0]?.applied_at
+      ? new Date(applicationRes.rows[0].applied_at).toISOString()
+      : null;
+    const fromOlderCycle = isApplicationFromOlderCycle(row, appliedAt);
+    const alreadyAppliedInCurrentCycle = Boolean(appliedAt) && !fromOlderCycle;
+    const mayReapplyForNewCycle = Boolean(appliedAt) && fromOlderCycle;
+
+    const payload = buildTestResolvePayload({
+      row,
+      advancedConfig,
+      publishScheduleItems,
+      alreadyAppliedInCurrentCycle,
+      mayReapplyForNewCycle,
+    });
+
+    return res.json(payload);
+  } catch (e) {
+    console.error('tests_resolve_error', e);
+    return res.status(500).json({ error: 'Failed to resolve test' });
+  }
+});
+
 router.get('/my-applications', requireAuth, async (req, res) => {
   try {
     const rowsRes = await pool.query(
@@ -407,6 +511,7 @@ router.get('/my-applications', requireAuth, async (req, res) => {
   }
 });
 
+/** Public catalog: DB question order only — never apply per-user shuffle (SHUFFLE_AND_ATTEMPT_RULES.txt §3C). */
 router.get('/:id/questions', async (req, res) => {
   const id = String(req.params.id || '').trim();
   if (!id) return res.status(400).json({ error: 'test id required' });
@@ -427,20 +532,7 @@ router.get('/:id/questions', async (req, res) => {
        ORDER BY position ASC, id ASC`,
       [id],
     );
-    const items = rows.map((row) => ({
-      id: Number(row.id),
-      position: Number(row.position || 0),
-      questionPrompt: String(row.stem || ''),
-      options: [
-        String(row.choice_a || ''),
-        String(row.choice_b || ''),
-        String(row.choice_c || ''),
-        String(row.choice_d || ''),
-      ].map((x) => x.trim()),
-      correctIndex: Number(row.correct_index || 0),
-      explanation: String(row.explanation || ''),
-      subjectKey: String(row.subject_key || '').trim(),
-    }));
+    const items = rows.map((row) => mapDbRowToDeliveryItem(row));
     return res.json({ items });
   } catch (e) {
     if (e.code === '22P02') {
@@ -451,6 +543,7 @@ router.get('/:id/questions', async (req, res) => {
   }
 });
 
+/** Authenticated attempt delivery: applies shuffleQuestions/shuffleOptions via applyPerUserShuffleToQuestions. */
 router.get('/:id/questions-attempt', requireAuth, async (req, res) => {
   const id = String(req.params.id || '').trim();
   if (!id) return res.status(400).json({ error: 'test id required' });
@@ -509,15 +602,32 @@ router.get('/:id/questions-attempt', requireAuth, async (req, res) => {
       [id],
     );
     const cycleKey = String(test.last_cycle_started_at || '').trim() || 'no_cycle';
+    // Seed ties shuffle to user + catalog + cycle — NOT to attempt number (see SHUFFLE_AND_ATTEMPT_RULES.txt §4–5).
     const seedText = `${req.userId}:${id}:${cycleKey}`;
     const useWithinSubject =
       advancedConfig.shuffleQuestions === true && (advancedConfig.subjectSections || []).length > 0;
+    const shuffleQuestions = advancedConfig.shuffleQuestions === true;
+    const shuffleOptions = advancedConfig.shuffleOptions === true;
     const items = applyPerUserShuffleToQuestions(rowsRes.rows || [], seedText, {
-      shuffleQuestions: advancedConfig.shuffleQuestions === true,
-      shuffleOptions: advancedConfig.shuffleOptions === true,
+      shuffleQuestions,
+      shuffleOptions,
       subjectSections: useWithinSubject ? advancedConfig.subjectSections : [],
     });
-    return res.json({ items });
+    const invariant = verifyAllMcqDeliveryItems(items);
+    if (!invariant.ok) {
+      console.error('questions_attempt_invariant_failed', {
+        testId: id,
+        userId: req.userId,
+        cycleKey,
+        failures: invariant.failures,
+      });
+    }
+    return res.json({
+      items,
+      cycleKey,
+      shuffleQuestions,
+      shuffleOptions,
+    });
   } catch (e) {
     if (e.code === '22P02') {
       return res.status(400).json({ error: 'Invalid test id' });

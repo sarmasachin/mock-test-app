@@ -76,6 +76,8 @@ object AppPreferencesRepository {
     private val keyAppliedTestSeries = stringPreferencesKey("applied_test_series")
     /** Single JSON blob: recover quiz after process death / swipe away only (cleared on explicit back/submit). */
     private val keyInProgressQuizJson = stringPreferencesKey("in_progress_quiz_json")
+    /** Frozen delivery + user picks from the last scored submit (answer key / review). */
+    private val keySubmittedAttemptJson = stringPreferencesKey("submitted_attempt_delivery_json")
     /** Last successful CMS home payload, persisted so cold start can render instantly while refresh runs in the background. */
     private val keyCachedHomeContentJson = stringPreferencesKey("cached_home_content_json")
     /** Last successful news list payloads per feed kind (all / job / exam) for stale-while-revalidate on feed screens. */
@@ -201,8 +203,35 @@ object AppPreferencesRepository {
     }
 
     /**
+     * Frozen MCQ row for resume — exact delivery order the user already saw.
+     * [correctOptionText] is the admin source-of-truth text (stable across shuffle).
+     */
+    data class QuizQuestionSnapshot(
+        val title: String,
+        val options: List<String>,
+        val correctIndex: Int,
+        val correctOptionText: String = "",
+        val explanation: String = "",
+    )
+
+    /**
+     * Post-submit delivery snapshot for answer key / review (same order user saw when scoring).
+     */
+    data class SubmittedAttemptSnapshot(
+        val ownerUserKey: String,
+        val testName: String,
+        val cycleKey: String,
+        val questions: List<QuizQuestionSnapshot>,
+        val answers: Map<Int, Int>,
+        val submittedAtMillis: Long,
+    )
+
+    /**
      * In-memory shape for a resumable quiz session (persisted as JSON under [keyInProgressQuizJson]).
      * [deadlineAtMillis] is wall-clock end time; remaining time = deadline - now.
+     *
+     * Phase 4: [questionsSnapshot] + [cycleKey] freeze delivery order on resume so shuffle
+     * cannot change mid-attempt (see [com.freemocktest.app.util.ShuffleAttemptRules]).
      */
     data class InProgressQuizState(
         val ownerUserKey: String,
@@ -214,6 +243,8 @@ object AppPreferencesRepository {
         val questionNavigationMode: String,
         val resultReleaseAtMillis: Long?,
         val configuredDurationSeconds: Int,
+        val cycleKey: String = "",
+        val questionsSnapshot: List<QuizQuestionSnapshot> = emptyList(),
     )
 
     val drawerUserProfile: Flow<DrawerUserProfile>
@@ -749,6 +780,7 @@ object AppPreferencesRepository {
                     prefs[keyPendingResultCorrect] = 0
                     prefs[keyPendingResultWrong] = 0
                     prefs[keyPendingResultTotal] = 0
+                    prefs[keySubmittedAttemptJson] = ""
                 }
             }.onFailure { Log.e(TAG, "markPendingResultViewedAndClear failed", it) }
         }
@@ -896,6 +928,58 @@ object AppPreferencesRepository {
                 prefs[keyInProgressQuizJson] = ""
             }
         }.onFailure { Log.e(TAG, "clearInProgressQuizNow failed", it) }
+    }
+
+    suspend fun saveSubmittedAttemptSnapshotNow(
+        ownerUserKey: String,
+        testName: String,
+        cycleKey: String,
+        questions: List<QuizQuestionSnapshot>,
+        answers: Map<Int, Int>,
+    ) {
+        if (!::appContext.isInitialized) return
+        if (questions.isEmpty()) return
+        val owner = ownerUserKey.trim().ifBlank { "guest" }
+        val name = testName.trim().ifBlank { return }
+        runCatching {
+            store().edit { prefs ->
+                prefs[keySubmittedAttemptJson] = encodeSubmittedAttempt(
+                    SubmittedAttemptSnapshot(
+                        ownerUserKey = owner,
+                        testName = name,
+                        cycleKey = cycleKey.trim(),
+                        questions = questions,
+                        answers = answers.filter { (qi, ai) -> qi >= 0 && ai >= 0 },
+                        submittedAtMillis = System.currentTimeMillis(),
+                    ),
+                )
+            }
+        }.onFailure { Log.e(TAG, "saveSubmittedAttemptSnapshotNow failed", it) }
+    }
+
+    suspend fun peekSubmittedAttemptSnapshot(
+        ownerUserKey: String,
+        testName: String,
+    ): SubmittedAttemptSnapshot? {
+        if (!::appContext.isInitialized) return null
+        val owner = ownerUserKey.trim().ifBlank { "guest" }
+        val want = testName.trim().ifBlank { return null }
+        val raw = runCatching { store().data.first()[keySubmittedAttemptJson].orEmpty().trim() }.getOrDefault("")
+        if (raw.isBlank()) return null
+        val parsed = parseSubmittedAttempt(raw) ?: return null
+        if (!parsed.ownerUserKey.equals(owner, ignoreCase = true)) return null
+        if (!parsed.testName.equals(want, ignoreCase = true)) return null
+        if (parsed.questions.isEmpty()) return null
+        return parsed
+    }
+
+    suspend fun clearSubmittedAttemptSnapshotNow() {
+        if (!::appContext.isInitialized) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keySubmittedAttemptJson] = ""
+            }
+        }.onFailure { Log.e(TAG, "clearSubmittedAttemptSnapshotNow failed", it) }
     }
 
     /**
@@ -1235,6 +1319,13 @@ object AppPreferencesRepository {
         val ansObj = JSONObject()
         state.answers.forEach { (k, v) -> ansObj.put(k.toString(), v) }
         o.put("answers", ansObj)
+        val cycleKey = state.cycleKey.trim()
+        if (cycleKey.isNotBlank()) {
+            o.put("cycleKey", cycleKey)
+        }
+        if (state.questionsSnapshot.isNotEmpty()) {
+            o.put("questionsSnapshot", encodeQuestionSnapshotsJsonArray(state.questionsSnapshot))
+        }
         return o.toString()
     }
 
@@ -1266,6 +1357,8 @@ object AppPreferencesRepository {
                     if (ai >= 0) put(qi, ai)
                 }
             }
+            val cycleKey = o.optString("cycleKey", "").trim()
+            val questionsSnapshot = parseQuizQuestionSnapshots(o.optJSONArray("questionsSnapshot"))
             InProgressQuizState(
                 ownerUserKey = owner,
                 testName = testName,
@@ -1276,8 +1369,115 @@ object AppPreferencesRepository {
                 questionNavigationMode = navMode,
                 resultReleaseAtMillis = resultRelease,
                 configuredDurationSeconds = durationSec,
+                cycleKey = cycleKey,
+                questionsSnapshot = questionsSnapshot,
             )
         }.getOrNull()
+    }
+
+    private fun parseQuizQuestionSnapshots(arr: JSONArray?): List<QuizQuestionSnapshot> {
+        if (arr == null || arr.length() == 0) return emptyList()
+        return buildList {
+            for (i in 0 until arr.length()) {
+                val jo = arr.optJSONObject(i) ?: continue
+                val title = jo.optString("title", "").trim()
+                if (title.isBlank()) continue
+                val optsArr = jo.optJSONArray("options") ?: JSONArray()
+                val options = buildList {
+                    for (j in 0 until optsArr.length()) {
+                        val opt = optsArr.optString(j, "").trim()
+                        if (opt.isNotBlank()) add(opt)
+                    }
+                }
+                if (options.size < 2) continue
+                var correctIndex = jo.optInt("correctIndex", -1)
+                val correctOptionText = jo.optString("correctOptionText", "").trim()
+                if (correctOptionText.isNotBlank()) {
+                    val byText = options.indexOf(correctOptionText)
+                    if (byText >= 0) correctIndex = byText
+                }
+                if (correctIndex !in options.indices) continue
+                add(
+                    QuizQuestionSnapshot(
+                        title = title,
+                        options = options,
+                        correctIndex = correctIndex,
+                        correctOptionText = correctOptionText.ifBlank { options[correctIndex] },
+                        explanation = jo.optString("explanation", "").trim(),
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun encodeSubmittedAttempt(state: SubmittedAttemptSnapshot): String {
+        val o = JSONObject()
+        o.put("ownerUserKey", state.ownerUserKey)
+        o.put("testName", state.testName)
+        o.put("submittedAtMillis", state.submittedAtMillis)
+        val cycleKey = state.cycleKey.trim()
+        if (cycleKey.isNotBlank()) {
+            o.put("cycleKey", cycleKey)
+        }
+        val ansObj = JSONObject()
+        state.answers.forEach { (k, v) -> ansObj.put(k.toString(), v) }
+        o.put("answers", ansObj)
+        o.put("questionsSnapshot", encodeQuestionSnapshotsJsonArray(state.questions))
+        return o.toString()
+    }
+
+    private fun parseSubmittedAttempt(raw: String): SubmittedAttemptSnapshot? {
+        return runCatching {
+            val o = JSONObject(raw)
+            val owner = o.optString("ownerUserKey", "").trim().ifBlank { return@runCatching null }
+            val testName = o.optString("testName", "").trim().ifBlank { return@runCatching null }
+            val cycleKey = o.optString("cycleKey", "").trim()
+            val submittedAt = o.optLong("submittedAtMillis", 0L).takeIf { it > 0L } ?: System.currentTimeMillis()
+            val questions = parseQuizQuestionSnapshots(o.optJSONArray("questionsSnapshot"))
+            if (questions.isEmpty()) return@runCatching null
+            val ansObj = o.optJSONObject("answers") ?: JSONObject()
+            val answers = buildMap {
+                val keys = ansObj.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val qi = key.toIntOrNull() ?: continue
+                    val ai = ansObj.optInt(key, -1)
+                    if (ai >= 0) put(qi, ai)
+                }
+            }
+            SubmittedAttemptSnapshot(
+                ownerUserKey = owner,
+                testName = testName,
+                cycleKey = cycleKey,
+                questions = questions,
+                answers = answers,
+                submittedAtMillis = submittedAt,
+            )
+        }.getOrNull()
+    }
+
+    private fun encodeQuestionSnapshotsJsonArray(questions: List<QuizQuestionSnapshot>): JSONArray {
+        val snapArr = JSONArray()
+        questions.forEach { q ->
+            snapArr.put(
+                JSONObject().apply {
+                    put("title", q.title)
+                    val opts = JSONArray()
+                    q.options.forEach { opts.put(it) }
+                    put("options", opts)
+                    put("correctIndex", q.correctIndex)
+                    val cot = q.correctOptionText.trim()
+                    if (cot.isNotBlank()) {
+                        put("correctOptionText", cot)
+                    }
+                    val expl = q.explanation.trim()
+                    if (expl.isNotBlank()) {
+                        put("explanation", expl)
+                    }
+                },
+            )
+        }
+        return snapArr
     }
 
     private fun parseStringSet(raw: String?): Set<String> {
@@ -1432,6 +1632,7 @@ object AppPreferencesRepository {
                 prefs[keyAppliedTestSeries] = "[]"
                 prefs[keyAuthBootstrapState] = RestoreSessionStatus.LoggedOut.name
                 prefs[keyInProgressQuizJson] = ""
+                prefs[keySubmittedAttemptJson] = ""
                 // Reset ownership so the next signed-in user starts fresh for unread badges.
                 prefs[keySeenNotificationIdsOwner] = ""
                 prefs[keySeenPollIdsOwner] = ""

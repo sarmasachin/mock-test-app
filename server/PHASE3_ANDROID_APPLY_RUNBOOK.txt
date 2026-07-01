@@ -1,0 +1,38 @@
+Phase 3 — Android apply resolve fallback (100% SAFE)
+====================================================
+
+What changed
+------------
+- AppApiService: GET tests/resolve (authenticated)
+- ContentRepository:
+    resolveTestForApply()
+    loadTestForApplyScreen() — catalog first, resolve fallback
+- ApplyForTestScreenNew: uses loadTestForApplyScreen; shows server blockReason + republishAt
+- StartTestPreviewScreenNew: same fallback for test card load
+
+Safety / backward compatibility
+-------------------------------
+- Catalog hit → resolve API NOT called (same as before).
+- resolve only when catalog returns no test id.
+- Logged out → resolve skipped (null), old behavior.
+- resolve API error → null, screen shows existing fallback messages.
+- loadTestByTitle() unchanged for other screens.
+- No defaultTests placeholder on apply path.
+
+Requires
+--------
+- Phase 2 server deployed (GET /v1/tests/resolve).
+- User logged in on Apply screen (Bearer token).
+
+Verify
+------
+1. Server: npm run verify:test-resolve-phase2
+2. Build app: ./gradlew :app:compileReleaseKotlin (or assembleDebug)
+3. Manual:
+   - Test between cycles → Apply shows test name + "between cycles" + republish time
+   - Live test → Apply button works as before
+
+Deploy order
+------------
+1. Deploy + restart server (Phase 2 endpoint)
+2. Ship new APK

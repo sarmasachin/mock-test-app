@@ -162,13 +162,10 @@ fun StartTestPreviewScreenNew(
                 testSnapshot = cached
             }
             primaryLoading = testSnapshot == null
-            testSnapshot = runCatching {
-                ContentRepository.loadTestByTitle(
-                    title = target,
-                    forceRefresh = true,
-                    allowDefaultFallback = false,
-                )
-            }.getOrNull()?.takeIf { it.id.isNotBlank() } ?: testSnapshot
+            val loadResult = runCatching {
+                ContentRepository.loadTestForApplyScreen(target, forceRefresh = true)
+            }.getOrNull()
+            testSnapshot = loadResult?.effectiveCard ?: testSnapshot
         } catch (e: CancellationException) {
             throw e
         } finally {
@@ -183,12 +180,8 @@ fun StartTestPreviewScreenNew(
             }
             names.forEach { name ->
                 appliedSnapshots[name] = runCatching {
-                    ContentRepository.loadTestByTitle(
-                        title = name,
-                        forceRefresh = true,
-                        allowDefaultFallback = false,
-                    )
-                }.getOrNull()?.takeIf { it.id.isNotBlank() } ?: appliedSnapshots[name]
+                    ContentRepository.loadTestForApplyScreen(name, forceRefresh = true).effectiveCard
+                }.getOrNull() ?: appliedSnapshots[name]
             }
         } catch (e: CancellationException) {
             throw e

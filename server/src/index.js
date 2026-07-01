@@ -33,8 +33,26 @@ const emailPreferencesRouter = require('./routes/emailPreferences');
 const { PROTECTED_SUPER_ADMIN_EMAIL_LIST } = require('./constants/protectedSuperAdminEmails');
 const pollsRouter = require('./routes/polls');
 const { pool } = require('./db');
-const { clampMcqCorrectIndex } = require('./mcqShuffle');
+const { clampMcqCorrectIndex, verifyDbRowMcqInvariant } = require('./mcqShuffle');
 const { selectQuestionsFromSubcategoryPool } = require('./lib/subcategoryPoolSelection');
+const {
+  getPublishSchedulingItems,
+  savePublishSchedulingItems,
+  isPublishScheduleItemPending,
+  recoverStalePublishScheduleItems,
+  withPublishSchedulingLock,
+  markPublishScheduleNotifySent,
+  resolveNotifyOnCycleRepublish,
+} = require('./lib/testVisibility');
+const { cycleRepublishAtMs } = require('./lib/cycleRepublishGap');
+const { countOverduePublishSchedules } = require('./lib/adminTestCycleStatus');
+const { promoteWaitlistForTest } = require('./lib/testRepublishNow');
+const { buildPublishSchedulingDiagnostics } = require('./lib/publishScheduleDiagnostics');
+const {
+  buildTestPublishDedupeKey,
+  prependNotificationIfNotDuplicate,
+} = require('./lib/notificationScheduling');
+const { trimNotificationSchedulingPayload } = require('./lib/schedulingQueueLimits');
 const { sendPushToToken } = require('./notificationDispatch');
 const {
   isMailConfigured,
@@ -376,7 +394,7 @@ function shuffleQuestionOptions(row) {
   const shuffled = shuffleArray(options);
   const newCorrectIndex = shuffled.findIndex((x) => x.oldIndex === sourceOld);
   if (newCorrectIndex < 0) {
-    return {
+    const fallback = {
       stem: row.stem,
       choice_a: row.choice_a,
       choice_b: row.choice_b,
@@ -385,8 +403,13 @@ function shuffleQuestionOptions(row) {
       correct_index: sourceOld,
       explanation: row.explanation || '',
     };
+    const invariant = verifyDbRowMcqInvariant(fallback);
+    if (!invariant.ok) {
+      console.error('shuffleQuestionOptions_invariant_failed', invariant);
+    }
+    return fallback;
   }
-  return {
+  const out = {
     stem: row.stem,
     choice_a: shuffled[0]?.text || '',
     choice_b: shuffled[1]?.text || '',
@@ -395,6 +418,11 @@ function shuffleQuestionOptions(row) {
     correct_index: newCorrectIndex,
     explanation: row.explanation || '',
   };
+  const invariant = verifyDbRowMcqInvariant(out);
+  if (!invariant.ok) {
+    console.error('shuffleQuestionOptions_invariant_failed', invariant);
+  }
+  return out;
 }
 
 async function regenerateTestFromSubcategoryPool(testId) {
@@ -464,181 +492,208 @@ async function regenerateTestFromSubcategoryPool(testId) {
   }
 }
 
-async function promoteWaitlistForTest(testId) {
-  const id = String(testId || '').trim();
-  if (!id) return { promotedCount: 0, waitingLeft: 0 };
-  const client = await pool.connect();
+async function runSchedulerBootTick() {
   try {
-    await client.query('BEGIN');
-    const testRes = await client.query(
-      `SELECT id, capacity_total, enrolled_count
-       FROM tests
-       WHERE id = $1::uuid
-       LIMIT 1
-       FOR UPDATE`,
-      [id],
-    );
-    const test = testRes.rows[0];
-    if (!test) {
-      await client.query('COMMIT');
-      return { promotedCount: 0, waitingLeft: 0 };
+    const publishItems = await getPublishSchedulingItems(pool);
+    const overdueCount = countOverduePublishSchedules(publishItems);
+    if (overdueCount > 0) {
+      console.warn('publish_schedule_overdue_count', { overdueCount });
     }
-    const capacity = Math.max(0, Number(test.capacity_total || 0));
-    const currentEnrolled = Math.max(0, Number(test.enrolled_count || 0));
-    let availableSeats = capacity > 0 ? Math.max(0, capacity - currentEnrolled) : Number.MAX_SAFE_INTEGER;
-    if (availableSeats <= 0) {
-      await client.query('COMMIT');
-      return { promotedCount: 0, waitingLeft: 0 };
-    }
-
-    const waitRes = await client.query(
-      `SELECT id, user_id
-       FROM test_waitlist
-       WHERE test_id = $1::uuid AND status = 'waiting'
-       ORDER BY created_at ASC, id ASC
-       FOR UPDATE`,
-      [id],
-    );
-    const waitingRows = waitRes.rows || [];
-    if (!waitingRows.length) {
-      await client.query('COMMIT');
-      return { promotedCount: 0, waitingLeft: 0 };
-    }
-
-    const toPromote = waitingRows.slice(0, Math.min(availableSeats, waitingRows.length));
-    let promotedCount = 0;
-    const promotedIds = [];
-    for (const row of toPromote) {
-      const insertRes = await client.query(
-        `INSERT INTO test_applications (user_id, test_id)
-         VALUES ($1::uuid, $2::uuid)
-         ON CONFLICT (user_id, test_id) DO NOTHING`,
-        [String(row.user_id), id],
-      );
-      if (insertRes.rowCount > 0) {
-        promotedCount += 1;
-        promotedIds.push(Number(row.id));
-      }
-      availableSeats -= 1;
-      if (availableSeats <= 0) break;
-    }
-
-    if (promotedIds.length > 0) {
-      await client.query(
-        `UPDATE test_waitlist
-         SET status = 'promoted', promoted_at = now()
-         WHERE id = ANY($1::bigint[])`,
-        [promotedIds],
-      );
-    }
-    if (promotedCount > 0) {
-      await client.query(
-        `UPDATE tests
-         SET enrolled_count = enrolled_count + $2, updated_at = now()
-         WHERE id = $1::uuid`,
-        [id, promotedCount],
-      );
-    }
-    const leftRes = await client.query(
-      `SELECT COUNT(*)::int AS total
-       FROM test_waitlist
-       WHERE test_id = $1::uuid AND status = 'waiting'`,
-      [id],
-    );
-    const waitingLeft = Number(leftRes.rows?.[0]?.total || 0);
-    await client.query('COMMIT');
-    return { promotedCount, waitingLeft };
   } catch (e) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw e;
-  } finally {
-    client.release();
+    if (e && e.code === '42P01') return;
+    console.error('publish_schedule_overdue_boot_check', e);
+  }
+
+  setImmediate(() => {
+    processPublishSchedules().catch((e) => console.error('publish_scheduler_boot', e));
+    processTestCycleAutoReschedule().catch((e) => console.error('cycle_scheduler_boot', e));
+  });
+}
+
+async function runPublishScheduleItemWork(item) {
+  const scheduleItem = item || {};
+  let notifySentAt = String(scheduleItem.notifySentAt || '').trim();
+
+  if (scheduleItem.entityType === 'test') {
+    const testId = String(scheduleItem.entityId || '').trim();
+    const action = String(scheduleItem.action || 'publish').trim().toLowerCase();
+    if (action === 'unpublish') {
+      await pool.query(
+        `UPDATE tests
+         SET is_published = false, updated_at = now()
+         WHERE id = $1::uuid`,
+        [testId],
+      );
+    } else {
+      const existingRes = await pool.query(
+        `SELECT is_published, last_cycle_started_at
+         FROM tests
+         WHERE id = $1::uuid
+         LIMIT 1`,
+        [testId],
+      );
+      const existing = existingRes.rows[0];
+      const scheduleMs = Date.parse(String(scheduleItem.scheduleAt || ''));
+      const cycleMs = Date.parse(String(existing?.last_cycle_started_at || ''));
+      const alreadyPublishedForSchedule =
+        existing?.is_published === true &&
+        Number.isFinite(cycleMs) &&
+        Number.isFinite(scheduleMs) &&
+        cycleMs >= scheduleMs;
+
+      if (!alreadyPublishedForSchedule) {
+        await regenerateTestFromSubcategoryPool(testId);
+        await pool.query(
+          `UPDATE tests
+           SET is_published = true, last_cycle_started_at = now(), updated_at = now()
+           WHERE id = $1::uuid`,
+          [testId],
+        );
+        await promoteWaitlistForTest(pool, testId);
+      }
+
+      if (!notifySentAt && scheduleItem.notifyOnPublish !== false && !alreadyPublishedForSchedule) {
+        const advancedMap = await getSettingJson('testAdvancedConfigs', {});
+        const adv = resolveAdvancedConfigForTest(advancedMap, testId);
+        if (adv?.notifyOnPublish !== false) {
+          const metaRes = await pool.query(
+            `SELECT title, last_cycle_started_at
+             FROM tests
+             WHERE id = $1::uuid
+             LIMIT 1`,
+            [testId],
+          );
+          const testTitle = String(metaRes.rows[0]?.title || 'New test').trim() || 'New test';
+          const cycleIso = String(metaRes.rows[0]?.last_cycle_started_at || '').trim();
+          const dedupeKey = buildTestPublishDedupeKey(testId, cycleIso);
+          const enqueueResult = await enqueueScheduledPushNotification({
+            title: 'New Test Published',
+            message: `${testTitle} is now available.`,
+            target: 'all',
+            deepLink: 'main/tests',
+            dedupeKey,
+          });
+          if (enqueueResult.enqueued || enqueueResult.skipped) {
+            notifySentAt = new Date().toISOString();
+            await markPublishScheduleNotifySent(scheduleItem.id, notifySentAt);
+          }
+        }
+      }
+    }
+  } else if (scheduleItem.entityType === 'article') {
+    await pool.query(`UPDATE news_articles SET is_published = true WHERE id = $1::uuid`, [
+      String(scheduleItem.entityId || ''),
+    ]);
+  }
+
+  return { notifySentAt };
+}
+
+let lastPublishOverdueAlertLogMs = 0;
+const PUBLISH_OVERDUE_ALERT_LOG_COOLDOWN_MS = 5 * 60 * 1000;
+
+async function maybeLogOverduePublishAlert() {
+  try {
+    const nowMs = Date.now();
+    const items = await getPublishSchedulingItems(pool);
+    const { diagnostics } = buildPublishSchedulingDiagnostics(items, nowMs);
+    if (!diagnostics.alertWorthyCount) return;
+    if (nowMs - lastPublishOverdueAlertLogMs < PUBLISH_OVERDUE_ALERT_LOG_COOLDOWN_MS) return;
+    lastPublishOverdueAlertLogMs = nowMs;
+    console.warn('publish_schedule_overdue_alert', {
+      overdueCount: diagnostics.overdueCount,
+      alertWorthyCount: diagnostics.alertWorthyCount,
+      maxOverdueMinutes: diagnostics.maxOverdueMinutes,
+      alertAfterMinutes: diagnostics.alertAfterMinutes,
+    });
+  } catch (e) {
+    if (e && e.code === '42P01') return;
+    console.error('publish_schedule_overdue_alert_check', e);
   }
 }
 
 async function processPublishSchedules() {
   try {
-    const settingsRes = await pool.query(
-      `SELECT setting_value FROM app_settings WHERE setting_key = 'publishScheduling' LIMIT 1`,
-    );
-    if (!settingsRes.rows[0]) return;
-    let payload = { items: [] };
-    try {
-      payload = JSON.parse(String(settingsRes.rows[0].setting_value || '{}')) || { items: [] };
-    } catch (_e) {
-      return;
-    }
-    const items = Array.isArray(payload.items) ? payload.items : [];
-    if (!items.length) return;
-    const nowMs = Date.now();
-    let changed = false;
-    const nextItems = [];
-    for (const raw of items) {
-      const item = raw || {};
-      if (item.status !== 'scheduled') {
-        nextItems.push(item);
-        continue;
-      }
-      const scheduleMs = new Date(String(item.scheduleAt || '')).getTime();
-      if (!Number.isFinite(scheduleMs) || scheduleMs > nowMs) {
-        nextItems.push(item);
-        continue;
-      }
-      if (item.entityType === 'test') {
-        const action = String(item.action || 'publish').trim().toLowerCase();
-        if (action === 'unpublish') {
-          await pool.query(
-            `UPDATE tests
-             SET is_published = false, updated_at = now()
-             WHERE id = $1::uuid`,
-            [String(item.entityId || '')],
-          );
-        } else {
-          await regenerateTestFromSubcategoryPool(String(item.entityId || ''));
-          await pool.query(
-            `UPDATE tests
-             SET is_published = true, last_cycle_started_at = now(), updated_at = now()
-             WHERE id = $1::uuid`,
-            [String(item.entityId || '')],
-          );
-          await promoteWaitlistForTest(String(item.entityId || ''));
-          if (item.notifyOnPublish !== false) {
-            const advancedMap = await getSettingJson('testAdvancedConfigs', {});
-            const adv = resolveAdvancedConfigForTest(advancedMap, String(item.entityId || ''));
-            if (adv?.notifyOnPublish !== false) {
-              const titleRes = await pool.query(
-                `SELECT title FROM tests WHERE id = $1::uuid LIMIT 1`,
-                [String(item.entityId || '')],
-              );
-              const testTitle = String(titleRes.rows[0]?.title || 'New test').trim() || 'New test';
-              await enqueueScheduledPushNotification({
-                title: 'New Test Published',
-                message: `${testTitle} is now available.`,
-                target: 'all',
-                deepLink: 'main/tests',
-              });
-            }
-          }
+    await maybeLogOverduePublishAlert();
+    const claimedItems = await withPublishSchedulingLock(async (client) => {
+      const nowMs = Date.now();
+      const nowIso = new Date(nowMs).toISOString();
+      const items = recoverStalePublishScheduleItems(await getPublishSchedulingItems(client), nowMs);
+      if (!items.length) return [];
+
+      const claimed = [];
+      const nextItems = [];
+      for (const raw of items) {
+        const item = raw || {};
+        const status = String(item.status || '').trim().toLowerCase();
+        if (status !== 'scheduled') {
+          nextItems.push(item);
+          continue;
         }
-      } else if (item.entityType === 'article') {
-        await pool.query(`UPDATE news_articles SET is_published = true WHERE id = $1::uuid`, [String(item.entityId || '')]);
+        const scheduleMs = Date.parse(String(item.scheduleAt || ''));
+        if (!Number.isFinite(scheduleMs) || scheduleMs > nowMs) {
+          nextItems.push(item);
+          continue;
+        }
+        const claimedItem = {
+          ...item,
+          status: 'processing',
+          processingStartedAt: nowIso,
+        };
+        nextItems.push(claimedItem);
+        claimed.push(claimedItem);
       }
-      nextItems.push({
-        ...item,
-        status: 'published',
-        processedAt: new Date().toISOString(),
-      });
-      changed = true;
+
+      if (claimed.length) {
+        await savePublishSchedulingItems(nextItems, null, client);
+      }
+      return claimed;
+    });
+
+    if (!claimedItems.length) return;
+
+    const outcomes = [];
+    for (const item of claimedItems) {
+      try {
+        const result = await runPublishScheduleItemWork(item);
+        outcomes.push({ item, ok: true, notifySentAt: result.notifySentAt || '' });
+      } catch (e) {
+        outcomes.push({
+          item,
+          ok: false,
+          error: String(e && (e.message || e) || 'publish_failed'),
+        });
+      }
     }
-    if (changed) {
-      await pool.query(
-        `INSERT INTO app_settings (setting_key, setting_value, updated_by)
-         VALUES ('publishScheduling', $1, NULL)
-         ON CONFLICT (setting_key)
-         DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = now()`,
-        [JSON.stringify({ items: nextItems })],
-      );
-    }
+
+    await withPublishSchedulingLock(async (client) => {
+      const nowIso = new Date().toISOString();
+      const items = recoverStalePublishScheduleItems(await getPublishSchedulingItems(client));
+      for (const outcome of outcomes) {
+        const itemId = String((outcome.item || {}).id || '').trim();
+        if (!itemId) continue;
+        const idx = items.findIndex((x) => String((x || {}).id || '') === itemId);
+        if (idx < 0) continue;
+        if (outcome.ok) {
+          items[idx] = {
+            ...items[idx],
+            status: 'published',
+            processedAt: nowIso,
+            processingStartedAt: String(items[idx].processingStartedAt || nowIso),
+            notifySentAt: String(outcome.notifySentAt || items[idx].notifySentAt || ''),
+            lastError: '',
+          };
+        } else {
+          items[idx] = {
+            ...items[idx],
+            status: 'scheduled',
+            processingStartedAt: '',
+            lastError: String(outcome.error || 'publish_failed').slice(0, 200),
+          };
+        }
+      }
+      await savePublishSchedulingItems(items, null, client);
+    });
   } catch (e) {
     if (e && e.code === '42P01') return;
     console.error('publish_scheduler_error', e);
@@ -647,20 +702,8 @@ async function processPublishSchedules() {
 
 async function processTestCycleAutoReschedule() {
   try {
-    const settingsRes = await pool.query(
-      `SELECT setting_value FROM app_settings WHERE setting_key = 'publishScheduling' LIMIT 1`,
-    );
-    let payload = { items: [] };
-    if (settingsRes.rows[0]) {
-      try {
-        payload = JSON.parse(String(settingsRes.rows[0].setting_value || '{}')) || { items: [] };
-      } catch (_e) {
-        payload = { items: [] };
-      }
-    }
-    const items = Array.isArray(payload.items) ? [...payload.items] : [];
     const nowMs = Date.now();
-    let changedSettings = false;
+    const advancedMap = await getSettingJson('testAdvancedConfigs', {});
 
     const testsRes = await pool.query(
       `SELECT id, duration_minutes, last_cycle_started_at
@@ -670,6 +713,7 @@ async function processTestCycleAutoReschedule() {
          AND last_cycle_started_at IS NOT NULL`,
     );
 
+    const cycleActions = [];
     for (const row of testsRes.rows || []) {
       const testId = String(row.id || '').trim();
       if (!testId) continue;
@@ -678,14 +722,10 @@ async function processTestCycleAutoReschedule() {
       const durationMinutes = Math.max(1, Number(row.duration_minutes || 0));
       const cycleEndMs = startedMs + durationMinutes * 60 * 1000;
       if (nowMs < cycleEndMs) continue;
-      const scheduleAtIso = new Date(cycleEndMs + 30 * 60 * 1000).toISOString();
-
-      const hasPendingSchedule = items.some(
-        (x) =>
-          String((x || {}).entityType || '').toLowerCase() === 'test' &&
-          String((x || {}).entityId || '') === testId &&
-          String((x || {}).status || '') === 'scheduled',
-      );
+      const adv = resolveAdvancedConfigForTest(advancedMap, testId);
+      const republishAtMs = cycleRepublishAtMs(cycleEndMs, adv);
+      if (!Number.isFinite(republishAtMs)) continue;
+      const scheduleAtIso = new Date(republishAtMs).toISOString();
 
       const client = await pool.connect();
       try {
@@ -724,9 +764,6 @@ async function processTestCycleAutoReschedule() {
            WHERE id = $1::uuid`,
           [testId],
         );
-        // Keep test_applications through the between-cycle window so users still see
-        // "already applied" in the app; stale rows are filtered on republish via
-        // isApplicationFromOlderCycle(last_cycle_started_at).
         await client.query(
           `UPDATE test_waitlist
            SET status = 'cancelled'
@@ -734,37 +771,54 @@ async function processTestCycleAutoReschedule() {
           [testId],
         );
         await client.query('COMMIT');
+        cycleActions.push({ testId, scheduleAtIso });
       } catch (e) {
         await client.query('ROLLBACK').catch(() => {});
         throw e;
       } finally {
         client.release();
       }
+    }
 
-      if (!hasPendingSchedule) {
+    if (!cycleActions.length) return;
+
+    await withPublishSchedulingLock(async (client) => {
+      const items = recoverStalePublishScheduleItems(await getPublishSchedulingItems(client), nowMs);
+      let changedSettings = false;
+      const nowIso = new Date().toISOString();
+
+      for (const action of cycleActions) {
+        const testId = String(action.testId || '').trim();
+        if (!testId) continue;
+        const hasPendingSchedule = items.some(
+          (x) =>
+            String((x || {}).entityType || '').toLowerCase() === 'test' &&
+            String((x || {}).entityId || '') === testId &&
+            isPublishScheduleItemPending(x),
+        );
+        if (hasPendingSchedule) continue;
+
+        const adv = resolveAdvancedConfigForTest(advancedMap, testId);
+        const notifyOnCycleRepublish = resolveNotifyOnCycleRepublish(adv);
+
         items.unshift({
           id: `publish-${Date.now()}-${testId.slice(0, 8)}`,
           entityType: 'test',
           entityId: testId,
-          scheduleAt: scheduleAtIso,
-          notifyOnPublish: true,
+          scheduleAt: action.scheduleAtIso,
+          notifyOnPublish: notifyOnCycleRepublish,
+          source: 'autoCycle',
           status: 'scheduled',
-          createdAt: new Date().toISOString(),
+          createdAt: nowIso,
           processedAt: '',
         });
         changedSettings = true;
       }
-    }
 
-    if (changedSettings) {
-      await pool.query(
-        `INSERT INTO app_settings (setting_key, setting_value, updated_by)
-         VALUES ('publishScheduling', $1, NULL)
-         ON CONFLICT (setting_key)
-         DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = now()`,
-        [JSON.stringify({ items })],
-      );
-    }
+      if (changedSettings) {
+        await savePublishSchedulingItems(items, null, client);
+      }
+    });
   } catch (e) {
     if (e && e.code === '42P01') return;
     if (e && e.code === '42703') return;
@@ -1100,12 +1154,16 @@ async function getSettingJson(settingKey, fallback) {
 }
 
 async function setSettingJson(settingKey, value) {
+  let payload = value;
+  if (settingKey === 'notificationScheduling') {
+    payload = trimNotificationSchedulingPayload(value);
+  }
   await pool.query(
     `INSERT INTO app_settings (setting_key, setting_value, updated_by)
      VALUES ($1, $2, NULL)
      ON CONFLICT (setting_key)
      DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = now()`,
-    [settingKey, JSON.stringify(value)],
+    [settingKey, JSON.stringify(payload)],
   );
 }
 
@@ -1125,30 +1183,11 @@ function resolveAdvancedConfigForTest(advancedMap, testId) {
 
 async function enqueueScheduledPushNotification(payload) {
   const current = await getSettingJson('notificationScheduling', { items: [] });
-  const items = Array.isArray(current.items) ? current.items : [];
-  const next = {
-    ...current,
-    items: [
-      {
-        id: `schedule-${Date.now()}-${Math.floor(Math.random() * 9999)}`,
-        title: String(payload.title || '').slice(0, 100),
-        message: String(payload.message || '').slice(0, 300),
-        target: String(payload.target || 'all'),
-        segmentKey: String(payload.segmentKey || ''),
-        scheduleAt: String(payload.scheduleAt || new Date().toISOString()),
-        repeatType: 'none',
-        dayOfWeek: 1,
-        dayOfMonth: 1,
-        repeatUntil: '',
-        status: 'scheduled',
-        createdAt: new Date().toISOString(),
-        sentAt: '',
-        deepLink: String(payload.deepLink || '').trim(),
-      },
-      ...items,
-    ],
-  };
-  await setSettingJson('notificationScheduling', next);
+  const result = prependNotificationIfNotDuplicate(current, payload);
+  if (result.enqueued) {
+    await setSettingJson('notificationScheduling', result.current);
+  }
+  return result;
 }
 
 async function sendPushToAudience({ title, message, target, deepLink }) {
@@ -1856,6 +1895,7 @@ ensureOptionalColumns().finally(() => {
   }
   httpServer = app.listen(port, () => {
     console.log(`MockTestApp API listening on http://0.0.0.0:${port}`);
+    runSchedulerBootTick();
   });
 });
 

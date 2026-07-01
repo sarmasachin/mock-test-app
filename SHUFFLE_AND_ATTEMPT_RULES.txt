@@ -1,0 +1,218 @@
+MockTestApp — Shuffle, Attempt & Cycle Rules (Phase 1 design lock)
+================================================================
+
+This file is the single source of truth for mock-test shuffle behaviour.
+Phase 1 = documentation only (no runtime behaviour change).
+Phases 2–5 implement fixes listed under "Known gaps".
+
+----------------------------------------------------------------------
+1. ADMIN SOURCE OF TRUTH
+----------------------------------------------------------------------
+- Question Builder saves: choice_a/b/c/d + correct_index (0=A, 1=B, 2=C, 3=D).
+- correct_index points at the OPTION TEXT the admin marked correct — not a
+  fixed screen letter after shuffle.
+- Admin list UI always shows database column order (A/B/C/D as stored).
+
+----------------------------------------------------------------------
+2. TWO INDEPENDENT SHUFFLE FLAGS (per test advancedConfig)
+----------------------------------------------------------------------
+shuffleQuestions (admin: All Tests → Advanced)
+  - When true: reorder which question appears first, second, …
+  - If subjectSections[] is non-empty: shuffle WITHIN each subject bucket only;
+    section order follows subjectSections order; untagged questions shuffled last.
+  - When false: questions stay in DB position order.
+
+shuffleOptions (admin: All Tests → Advanced)
+  - When true: all four option texts for each question are permuted for delivery.
+  - The correct option TEXT never changes — only its index (0–3) is remapped.
+  - When false: options stay in DB column order (choice_a → index 0, etc.).
+
+Both flags are independent. Either, both, or neither may be enabled.
+
+----------------------------------------------------------------------
+3. WHEN SHUFFLE RUNS (server)
+----------------------------------------------------------------------
+A) Publish-time DB shuffle (admin.js / index.js: shuffleQuestionOptions)
+   - Runs when: test is first published, or regenerateTestFromSubcategoryPool runs.
+   - Physically rewrites choice_a..d + correct_index in PostgreSQL.
+   - All four slots are permuted; correct_index follows the correct TEXT.
+
+B) Per-user delivery shuffle (tests.js: applyPerUserShuffleToQuestions)
+   - Runs when: GET /tests/:id/questions-attempt (authenticated attempt start).
+   - Controlled by advancedConfig.shuffleQuestions / shuffleOptions.
+   - Does NOT write to DB — only shapes the JSON response.
+
+C) Public catalog endpoint GET /tests/:id/questions
+   - Never shuffles. Returns DB order. Must NOT be used for scored attempts when
+     shuffleQuestions or shuffleOptions is enabled (see Known gaps).
+
+----------------------------------------------------------------------
+4. SHUFFLE SEED (per-user delivery)
+----------------------------------------------------------------------
+seedText = "{userId}:{testId}:{cycleKey}"
+cycleKey = tests.last_cycle_started_at ISO string, or "no_cycle" if null.
+
+Same user + same test + same cycle → same question order + same option order.
+New cycle (last_cycle_started_at changes) → new seed → new order.
+
+cycleKey changes when:
+  - Admin first publishes a test (last_cycle_started_at := now()).
+  - Admin republishes after a cycle expired (PATCH justPublished path).
+  - Scheduled republish after duration elapses (index.js cycle worker).
+
+cycleKey does NOT change when:
+  - User resumes an in-progress attempt mid-timer.
+  - Admin edits a single question via Question Builder (no republish).
+
+----------------------------------------------------------------------
+5. TEST CYCLE vs ATTEMPT (not the same thing)
+----------------------------------------------------------------------
+TEST CYCLE (catalog round)
+  - Bounded by last_cycle_started_at + test duration / admin republish.
+  - User re-applies after isApplicationFromOlderCycle() → new enrollment for new round.
+  - New cycle ⇒ new shuffle seed ⇒ new question/option order for that user.
+
+ATTEMPT (within a cycle)
+  - tests.attempts_allowed = max scored submissions per user per test catalog id.
+  - Default attempts_allowed = 1 (one scored try per cycle in typical config).
+  - reattemptCooldownMinutes = minimum wait between attempts when attempts_allowed > 1.
+  - Same cycle + second allowed attempt: seed unchanged ⇒ same shuffle order (by design).
+
+RESUME (in-progress, not a new attempt)
+  - User pauses mid-quiz (app saves InProgressQuizState).
+  - Must restore the EXACT options[] + correctIndex[] the user already saw.
+  - Must NOT re-fetch questions-attempt and re-shuffle on resume (Phase 4 fix).
+
+----------------------------------------------------------------------
+6. CORRECT ANSWER INVARIANT (must always hold)
+----------------------------------------------------------------------
+Let T = the option text admin marked correct at save time.
+After any shuffle (publish DB shuffle or per-user delivery shuffle):
+  - options[correctIndex] === T   (same string content)
+Scoring must accept a user pick when:
+  - options[userSelectedIndex] === options[correctIndex]
+Index-only comparison is valid ONLY when options[] and correctIndex come from the
+same payload / same frozen snapshot.
+
+----------------------------------------------------------------------
+7. ANDROID DATA RULES (target state after Phases 3–5)
+----------------------------------------------------------------------
+- Scored quiz load: always GET questions-attempt when shuffle is enabled.
+- Cache key must include: normalizedTestTitle + userId + cycleKey (not title alone).
+- Quiz start: forceRefresh attempt questions; evict stale disk/memory cache on cycle change.
+- Resume: persist questions snapshot + cycleKey in InProgressQuizState.
+- Answer key / review: same cycle delivery order or submitted snapshot — never admin DB order
+  when shuffle was enabled for that attempt.
+
+----------------------------------------------------------------------
+8. KNOWN GAPS (Phase 1 — not yet fixed)
+----------------------------------------------------------------------
+G1. RESOLVED Phase 3 — no public /questions fallback when shuffle is on.
+G2. RESOLVED Phase 3 — cache keyed by title|user|cycleKey.
+G3. RESOLVED Phase 3 — quiz start uses forceRefresh.
+G4. RESOLVED Phase 4 — resume persists questionsSnapshot + cycleKey; no re-fetch on resume.
+G5. RESOLVED Phase 5 — Review shows user picks from submitted attempt snapshot.
+G6. RESOLVED Phase 5 — Answer key/review use AttemptReviewLoader (snapshot → cache → soft load).
+
+Resolved in Phase 3 (Android):
+  - Cache key includes title + user scope + cycleKey.
+  - Shuffle ON: no public /questions fallback; quiz start uses forceRefresh.
+  - correctOptionText used to repair correctIndex when mapping API rows.
+
+----------------------------------------------------------------------
+13. PHASE 3 ANDROID (implemented)
+----------------------------------------------------------------------
+ContentRepository.loadQuizQuestionsForTest(testName, forceRefresh, cacheUserScope):
+  - cacheKey = "{title}|{userScope}|{cycleKey}" from questions-attempt response.
+  - forceRefresh evicts all cache entries for title+user before fetch.
+  - shuffleQuestions || shuffleOptions => attempt API only (login required).
+  - Public /questions fallback only when shuffle flags are off.
+
+QuizScreenNew: forceRefresh=true, cacheUserScope=attemptsUserKey on quiz start.
+
+Disk cache payload: { cycleKey, shuffleQuestions, shuffleOptions, items[] }.
+Legacy title-only disk entries still read when shuffle is off.
+
+----------------------------------------------------------------------
+14. PHASE 4 ANDROID (implemented)
+----------------------------------------------------------------------
+InProgressQuizState (AppPreferencesRepository):
+  - cycleKey: catalog cycle from questions-attempt (or resume restore).
+  - questionsSnapshot[]: frozen title, options[], correctIndex, correctOptionText per question.
+  - Legacy saved sessions without snapshot are discarded on resume (unsafe with shuffle).
+
+QuizScreenNew:
+  - Resume: load questionsSnapshot from disk — NO network re-fetch / re-shuffle.
+  - Fresh start: loadQuizQuestionsBundleForTest(forceRefresh=true) then persist snapshot on save.
+  - Scoring: McqScoring.isAnswerCorrect — compares option TEXT, not screen letter.
+
+ContentRepository.loadQuizQuestionsBundleForTest returns items + cycleKey meta.
+
+----------------------------------------------------------------------
+15. PHASE 5 ANDROID (implemented)
+----------------------------------------------------------------------
+SubmittedAttemptSnapshot (saved at quiz submit in QuizScreenNew):
+  - Frozen questions + user answer indices + cycleKey for answer key / review.
+  - Cleared on logout and when pending result is dismissed.
+
+AttemptReviewLoader.load(testName, cacheUserScope) priority:
+  1. Submitted attempt snapshot (same order user was scored on).
+  2. Cycle-aware quiz cache (title|user|cycleKey) — no forceRefresh.
+  3. Soft network load (forceRefresh=false only).
+
+ResultScreenNew: never forceRefresh after submit (avoids re-shuffle).
+AnswerKeyScreenNew / ReviewScreenNew: correctOptionText + user answer text display.
+
+----------------------------------------------------------------------
+16. PHASE 5 QA CHECKLIST (manual)
+----------------------------------------------------------------------
+[ ] Shuffle ON: complete quiz → Review shows your actual option TEXT per question.
+[ ] Shuffle ON: Answer key order matches quiz order (not admin DB order).
+[ ] Resume mid-quiz → submit → Review matches frozen delivery from that attempt.
+[ ] New catalog cycle + re-apply → new quiz order; old submitted snapshot replaced on new submit.
+[ ] Shuffle OFF: answer key / review still work from cache or snapshot.
+[ ] Logout clears submitted snapshot; another user cannot see previous user's picks.
+
+----------------------------------------------------------------------
+9. PHASE ROADMAP
+----------------------------------------------------------------------
+Phase 1 (this file + code comments) — design lock, zero behaviour change.
+Phase 2 — server: cycleKey in API response, shuffle invariants verified, correctOptionText on items.
+Phase 3 — Android: cache key, no unsafe fallback, forceRefresh, cycle invalidation (done).
+Phase 4 — Android: resume snapshot, text-based scoring (done).
+Phase 5 — Answer key/review + line-by-line QA checklist (done).
+
+----------------------------------------------------------------------
+10. QUICK REFERENCE TABLE
+----------------------------------------------------------------------
+| Event                         | Q order      | Option order | Seed changes |
+|-------------------------------|--------------|--------------|--------------|
+| Admin saves question          | —            | —            | —            |
+| Publish / pool regenerate     | pool pick    | DB shuffle   | new cycle    |
+| User starts attempt           | per config   | per config   | —            |
+| User resumes same attempt     | frozen       | frozen       | —            |
+| New cycle + user re-applies   | new shuffle  | new shuffle  | yes          |
+| 2nd attempt same cycle        | same         | same         | —            |
+
+End of Phase 1 design lock.
+
+----------------------------------------------------------------------
+11. PHASE 2 API FIELDS (backward-compatible additions)
+----------------------------------------------------------------------
+GET /v1/tests/:id/questions — each item may include:
+  correctOptionText: string — admin's correct answer text (options[correctIndex]).
+
+GET /v1/tests/:id/questions-attempt — response:
+  items[] — as above, each with correctOptionText after per-user shuffle.
+  cycleKey: string — tests.last_cycle_started_at ISO or "no_cycle".
+  shuffleQuestions: boolean — advancedConfig flag used for this response.
+  shuffleOptions: boolean — advancedConfig flag used for this response.
+
+Clients that ignore unknown JSON keys continue to work unchanged.
+
+----------------------------------------------------------------------
+12. PHASE 2 INVARIANT (enforced in mcqShuffle.js)
+----------------------------------------------------------------------
+For every delivered item:
+  options[correctIndex] === correctOptionText
+Server logs questions_attempt_invariant_failed on violation (does not change HTTP status).

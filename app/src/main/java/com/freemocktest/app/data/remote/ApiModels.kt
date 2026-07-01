@@ -210,10 +210,16 @@ data class TestQuestionDto(
     val explanation: String? = null,
     /** Present when server stores subject tags (optional for older APIs). */
     @SerializedName("subjectKey") val subjectKey: String? = null,
+    /** Phase 2: admin's correct option text (stable across shuffle). */
+    @SerializedName("correctOptionText") val correctOptionText: String? = null,
 )
 
 data class TestQuestionsResponse(
     val items: List<TestQuestionDto> = emptyList(),
+    /** Phase 2: catalog cycle id for delivery shuffle cache invalidation. */
+    @SerializedName("cycleKey") val cycleKey: String? = null,
+    @SerializedName("shuffleQuestions") val shuffleQuestions: Boolean? = null,
+    @SerializedName("shuffleOptions") val shuffleOptions: Boolean? = null,
 )
 
 data class DailyDigestItemDto(
@@ -567,6 +573,23 @@ data class MyTestApplicationDto(
 
 data class MyTestApplicationsResponse(
     val items: List<MyTestApplicationDto> = emptyList(),
+)
+
+/** Phase 2: GET /tests/resolve — test status when not in public catalog. */
+data class TestResolveResponse(
+    val found: Boolean = false,
+    val id: String? = null,
+    val title: String? = null,
+    val slug: String? = null,
+    val subcategory: String? = null,
+    @SerializedName("isPublished") val isPublished: Boolean = false,
+    @SerializedName("catalogVisible") val catalogVisible: Boolean = false,
+    @SerializedName("cyclePhase") val cyclePhase: String? = null,
+    @SerializedName("republishAt") val republishAt: String? = null,
+    @SerializedName("canApply") val canApply: Boolean = false,
+    @SerializedName("alreadyAppliedInCurrentCycle") val alreadyAppliedInCurrentCycle: Boolean = false,
+    @SerializedName("mayReapplyForNewCycle") val mayReapplyForNewCycle: Boolean = false,
+    @SerializedName("blockReason") val blockReason: String? = null,
 )
 
 data class LeaderboardFilterTestDto(

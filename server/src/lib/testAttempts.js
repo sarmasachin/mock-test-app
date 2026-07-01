@@ -1,5 +1,14 @@
 'use strict';
 
+/**
+ * Attempt limits within a single test catalog id (all cycles share attempt count today).
+ *
+ * - attempts_allowed: max scored submissions per user per test id (default 1).
+ * - reattemptCooldownMinutes: wait between tries when attempts_allowed > 1.
+ * - New catalog cycle (last_cycle_started_at) does NOT reset attempt count here — it only
+ *   changes shuffle seed via questions-attempt (see SHUFFLE_AND_ATTEMPT_RULES.txt §5).
+ */
+
 async function countUserTestAttempts(pool, userId, testCatalogId) {
   const uid = String(userId || '').trim();
   const tid = String(testCatalogId || '').trim();

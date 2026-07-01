@@ -1,0 +1,69 @@
+MockTestApp — Phase 6 Runbook (Scheduler hardening + overdue diagnostics)
+============================================================================
+
+Goal
+----
+Make stuck/overdue publish schedules visible in admin + logs, without changing
+scheduler behavior. Complements Phase 5 boot tick and existing advisory locks.
+
+What changed
+------------
+Server:
+- `publishScheduleDiagnostics.js` — overdue + stale processing detection
+- GET /v1/admin/publish-scheduling — adds `diagnostics` + per-item `scheduleHealth`
+- `processPublishSchedules()` — rate-limited log when overdue >= 5 min
+  (`publish_schedule_overdue_alert`, max once per 5 min)
+- Env optional: `PUBLISH_SCHEDULE_OVERDUE_ALERT_MINUTES` (default 5)
+
+Admin web:
+- Publish Scheduling tab — health banner (green OK / red alert)
+- Overdue rows highlighted with "Overdue Xm" tag
+- Stale `processing` rows tagged
+
+Already in place (verified, not reimplemented)
+----------------------------------------------
+- Advisory lock on publish scheduler (Phase 1 notification fix)
+- Stale `processing` auto-recovery after 15 min
+- Startup one-shot `processPublishSchedules()` + cycle scheduler (Phase 5)
+
+Deploy steps
+------------
+1. Server:
+   cd server
+   npm run verify:scheduler-hardening-phase6
+   pm2 restart mocktestapp-api
+
+2. Admin web rebuild + deploy
+
+3. Verify Admin UI:
+   Admin → Publish Scheduling → Load
+   - Healthy: green "Scheduler healthy" message
+   - Overdue: red banner + row tags
+
+4. Optional CLI (read-only, needs DATABASE_URL):
+   npm run phase6:publish-diag
+
+5. PM2 logs (if overdue):
+   pm2 logs mocktestapp-api --lines 100
+   Look for: publish_schedule_overdue_alert
+
+Safety notes
+------------
+- Read-only diagnostics — no auto mutations
+- GET /publish-scheduling response is backward compatible (extra fields only)
+- Alert log is rate-limited — no log spam
+- Does NOT change 60s scheduler interval or republish logic
+
+Rollback
+--------
+Revert server + admin-web deploy. No DB migration.
+
+Verify (local, no DB)
+---------------------
+cd server
+npm run verify:scheduler-hardening-phase6
+Expected: PHASE6_VERIFY_OK
+
+Next
+----
+Phase 7 — E2E apply cycle verify (see PHASE7_APPLY_CYCLE_RUNBOOK.txt)

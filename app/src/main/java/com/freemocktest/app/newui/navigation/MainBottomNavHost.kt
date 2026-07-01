@@ -131,6 +131,29 @@ private fun NavController.popBackOrHome() {
     }
 }
 
+/** Phase 4: topic/subcategory → published tests list (not direct apply). */
+private fun NavController.navigateToTestsCatalog(subcategory: String) {
+    val safe = subcategory.trim().ifBlank { "Topic" }
+    val encoded = Uri.encode(safe, StandardCharsets.UTF_8.name())
+    navigate("${RoutesNew.TESTS}/$encoded")
+}
+
+/** Leaf exam pick / known test title → apply screen. */
+private fun NavController.navigateToTestApply(testTitle: String) {
+    val safe = testTitle.trim()
+    if (safe.isBlank()) return
+    val encoded = Uri.encode(safe, StandardCharsets.UTF_8.name())
+    navigate("${RoutesNew.APPLY}/$encoded")
+}
+
+/** Test list row → preview (apply or start). */
+private fun NavController.navigateToStartTestPreview(testTitle: String) {
+    val safe = testTitle.trim()
+    if (safe.isBlank()) return
+    val encoded = Uri.encode(safe, StandardCharsets.UTF_8.name())
+    navigate("${RoutesNew.START_TEST_PREVIEW}/$encoded")
+}
+
 /**
  * News feed and [RoutesNew.NEWS_DETAIL] are sibling destinations in the same graph, so
  * [NavDestination.hierarchy] does not include [MainTabRoutes.News] on the article screen.
@@ -440,7 +463,7 @@ fun MainBottomNavHost(
                     onOpenHistory = { mainNavController.navigate(RoutesNew.HISTORY) },
                     onOpenActivity = { mainNavController.navigate(RoutesNew.RESULTS_HISTORY) },
                     onOpenCategory = { cat ->
-                        mainNavController.navigate("${RoutesNew.APPLY}/$cat")
+                        mainNavController.navigateToTestsCatalog(cat)
                     },
                     onSeeAllCategories = {
                         mainNavController.navigateMainTab(MainTabRoutes.Tests)
@@ -505,7 +528,7 @@ fun MainBottomNavHost(
                     showAppBarBack = false,
                     onBack = { mainNavController.goToHomeTab() },
                     onOpenCategory = { cat ->
-                        mainNavController.navigate("${RoutesNew.APPLY}/$cat")
+                        mainNavController.navigateToTestApply(cat)
                     },
                 )
             }
@@ -538,7 +561,7 @@ fun MainBottomNavHost(
                     category = name.ifBlank { "Category" },
                     onBack = { mainNavController.popBackOrHome() },
                     onOpenSubcategory = { sub ->
-                        mainNavController.navigate("${RoutesNew.APPLY}/$sub")
+                        mainNavController.navigateToTestsCatalog(sub)
                     },
                 )
             }
@@ -571,7 +594,7 @@ fun MainBottomNavHost(
                                     return@launch
                                 }
                             }
-                            mainNavController.navigate("${RoutesNew.INSTRUCTIONS}/$test")
+                            mainNavController.navigateToStartTestPreview(test)
                         }
                     },
                 )
@@ -742,6 +765,7 @@ fun MainBottomNavHost(
                 val publishAt = entry.arguments?.getLong("publishAt") ?: 0L
                 ResultScreenNew(
                     testName = name.ifBlank { "Arithmetic Sprint" },
+                    cacheUserScope = attemptsUserKey,
                     scoreText = "-",
                     answered = answered,
                     correct = correct,
@@ -761,6 +785,7 @@ fun MainBottomNavHost(
                 val name = entry.arguments?.getString("name").orEmpty()
                 AnswerKeyScreenNew(
                     testName = name.ifBlank { "Test" },
+                    cacheUserScope = attemptsUserKey,
                     onBack = { mainNavController.popBackOrHome() },
                 )
             }
@@ -772,6 +797,7 @@ fun MainBottomNavHost(
                 val name = entry.arguments?.getString("name").orEmpty()
                 ReviewScreenNew(
                     testName = name.ifBlank { "Test" },
+                    cacheUserScope = attemptsUserKey,
                     onBack = { mainNavController.popBackOrHome() },
                     onOpenSolution = { qNo ->
                         mainNavController.navigate("${RoutesNew.REVIEW_SOLUTION}/$name/$qNo")
@@ -791,6 +817,7 @@ fun MainBottomNavHost(
                 ReviewSolutionScreenNew(
                     testName = name.ifBlank { "Test" },
                     questionNo = qNo,
+                    cacheUserScope = attemptsUserKey,
                     onBack = { mainNavController.popBackOrHome() },
                     onOpenQuestion = { nextQ ->
                         if (nextQ != qNo) {
@@ -940,7 +967,7 @@ fun MainBottomNavHost(
                 SeeAllCategoriesScreenNew(
                     onBack = { mainNavController.popBackOrHome() },
                     onOpenCategory = { cat ->
-                        mainNavController.navigate("${RoutesNew.APPLY}/$cat")
+                        mainNavController.navigateToTestApply(cat)
                     },
                 )
             }

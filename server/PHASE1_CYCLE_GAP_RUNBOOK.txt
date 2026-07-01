@@ -1,0 +1,47 @@
+Phase 1 — Configurable cycle republish gap (100% SAFE)
+======================================================
+
+What changed
+------------
+- Auto-cycle republish gap is no longer hardcoded to 30 minutes only.
+- Default remains **30 minutes** when env is unset (identical to old behavior).
+- Optional server env: CYCLE_REPUBLISH_GAP_MINUTES
+- Optional per-test admin Advanced field: cycleRepublishGapMinutes (blank = server default)
+
+What did NOT change
+-------------------
+- Cycle still ends after duration_minutes → is_published=false → gap → republish.
+- No automatic DB migrations.
+- Existing tests without per-test override behave exactly as before (30 min gap).
+
+Deploy (production)
+-------------------
+1. Pull server code + restart API (PM2):
+       pm2 restart mocktestapp-api
+2. Optional — faster testing on VPS only (NOT required):
+   In server/.env add:
+       CYCLE_REPUBLISH_GAP_MINUTES=5
+   Then restart again. Production users see shorter between-cycle window.
+3. Rebuild admin-web if you use per-test gap field in UI:
+       cd admin-web && npm run build
+4. Verify (no writes):
+       cd server
+       npm run verify:cycle-gap-phase1
+       npm run phase0:diag
+
+Per-test override (admin)
+-------------------------
+All Tests → Advanced (expand) →
+  "Cycle republish gap (min)" — leave blank for server default (30).
+  Example: 5 = republish 5 minutes after cycle ends.
+
+Safety
+------
+- Invalid env values fall back to 30.
+- Gap clamped 0–10080 minutes (7 days max).
+- 0 = republish immediately when cycle ends (use only for testing).
+
+Rollback
+--------
+- Remove CYCLE_REPUBLISH_GAP_MINUTES from .env → back to 30 min default.
+- Redeploy previous server build if needed.
