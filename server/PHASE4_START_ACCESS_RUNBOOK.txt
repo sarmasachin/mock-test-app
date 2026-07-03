@@ -1,0 +1,26 @@
+Phase 4 — Android server sync (authoritative local state)
+============================================================
+
+Goal
+----
+After apply → back without start, local list must match server so Start stays enabled.
+
+Changes
+-------
+- AppPreferencesRepository.replaceAppliedTestSeriesFromServer()
+  Atomic replace from GET /my-applications (clears stale/expired ghosts).
+- AuthRepository.syncAppliedTestSeriesFromServer() uses replace (not merge loop).
+- resolveStartBlockMessageNow() — navigation uses server canStart first.
+- MainBottomNavHost — quiz + tests routes use server start access.
+- ApplyForTestScreen — sync from server immediately after successful apply.
+
+Verify (offline)
+----------------
+  cd server
+  npm run verify:start-access-phase4
+
+Manual QA
+---------
+1. Schedule timer OFF: apply → Start screen → back → Home → Start Test → button enabled
+2. Kill app, reopen → applied test still visible (90d joinClosesAt from server)
+3. Schedule timer ON before slot → blocked with server startBlockReason

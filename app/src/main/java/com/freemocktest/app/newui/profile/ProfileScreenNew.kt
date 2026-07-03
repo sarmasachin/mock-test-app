@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.ContentRepository
+import com.freemocktest.app.util.UserInterestUtils
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import androidx.compose.runtime.remember
@@ -65,6 +66,7 @@ private fun defaultDynamicProfileMenuItems() = listOf(
     DynamicProfileMenuItem("edit-mobile", "Mobile number", "{value}", "/edit-mobile", true),
     DynamicProfileMenuItem("edit-dob", "Date of birth", "{value}", "/edit-dob", true),
     DynamicProfileMenuItem("edit-gender", "Gender", "{value}", "/edit-gender", true),
+    DynamicProfileMenuItem("edit-interests", "Meri interests", "{value}", "/edit-interests", true),
     DynamicProfileMenuItem("edit-password", "Password", "Change password (current + new + confirm)", "/edit-password", true),
     DynamicProfileMenuItem("verify-email", "Email verification", "Not verified", "/verify-email", true),
     DynamicProfileMenuItem("verify-phone", "Phone verification", "Not verified", "/verify-phone", true),
@@ -79,6 +81,28 @@ private fun defaultDynamicProfileMenuItems() = listOf(
     DynamicProfileMenuItem("logout", "Log out", "Sign out on this device (keeps local practice history)", "/logout", true),
     DynamicProfileMenuItem("delete-account", "Delete account", "Removes your account on the server and clears this device", "/delete-account", true),
 )
+
+/** When remote profile menu omits `/edit-interests`, insert after gender. */
+private fun mergeRemoteMenuWithInterestsIfMissing(
+    mapped: List<DynamicProfileMenuItem>,
+): List<DynamicProfileMenuItem> {
+    if (mapped.any { it.path == "/edit-interests" }) return mapped
+    val interestsItem = DynamicProfileMenuItem(
+        id = "edit-interests",
+        title = "Meri interests",
+        subtitle = "{value}",
+        path = "/edit-interests",
+        enabled = true,
+    )
+    val iGender = mapped.indexOfFirst { it.path == "/edit-gender" }
+    val insertAt = if (iGender >= 0) iGender + 1 else {
+        val iDob = mapped.indexOfFirst { it.path == "/edit-dob" }
+        if (iDob >= 0) iDob + 1 else mapped.size
+    }
+    val out = mapped.toMutableList()
+    out.add(insertAt.coerceIn(0, out.size), interestsItem)
+    return out
+}
 
 /** When remote profile menu omits `/edit-dob`, insert it next to other identity fields — not at the list tail. */
 private fun mergeRemoteMenuWithDobIfMissing(
@@ -126,6 +150,7 @@ fun ProfileScreenNew(
     onEditMobile: () -> Unit,
     onEditDob: () -> Unit,
     onEditGender: () -> Unit,
+    onEditInterests: () -> Unit,
     onEditPassword: () -> Unit,
     onOpenNotifications: () -> Unit,
     onOpenHelpSupport: () -> Unit,
@@ -145,6 +170,7 @@ fun ProfileScreenNew(
     val scroll = rememberScrollState()
     val emailOk by AppPreferencesRepository.emailVerified.collectAsState(initial = false)
     val phoneOk by AppPreferencesRepository.phoneVerified.collectAsState(initial = false)
+    val userInterests by AppPreferencesRepository.loginPickedSubcategories.collectAsState(initial = emptyList())
     // Avoid rendering placeholder profile values first (looks like "wrong profile then correct profile").
     // DataStore emits asynchronously; we wait for the first real emission and keep it stable.
     val profileLive by remember { AppPreferencesRepository.editableProfile.map { it as AppPreferencesRepository.EditableProfileState? } }
@@ -157,7 +183,8 @@ fun ProfileScreenNew(
             profileStable = AppPreferencesRepository.peekEditableProfileNow()
             val cachedMenu = runCatching { ContentRepository.loadCachedProfileMenuItems() }.getOrDefault(emptyList())
             if (cachedMenu.isNotEmpty()) {
-                menuItems = mergeRemoteMenuWithDobIfMissing(
+                menuItems = mergeRemoteMenuWithInterestsIfMissing(
+                    mergeRemoteMenuWithDobIfMissing(
                     cachedMenu.map {
                         DynamicProfileMenuItem(
                             id = it.id,
@@ -167,12 +194,14 @@ fun ProfileScreenNew(
                             enabled = it.enabled,
                         )
                     },
+                    ),
                 )
             }
             val remote = runCatching { ContentRepository.loadProfileMenuItems(forceRefresh = true) }.getOrDefault(emptyList())
             when {
                 remote.isNotEmpty() -> {
-                    menuItems = mergeRemoteMenuWithDobIfMissing(
+                    menuItems = mergeRemoteMenuWithInterestsIfMissing(
+                        mergeRemoteMenuWithDobIfMissing(
                         remote.map {
                             DynamicProfileMenuItem(
                                 id = it.id,
@@ -182,6 +211,7 @@ fun ProfileScreenNew(
                                 enabled = it.enabled,
                             )
                         },
+                        ),
                     )
                 }
                 cachedMenu.isEmpty() -> {
@@ -277,6 +307,14 @@ fun ProfileScreenNew(
                             profile.birthdayDate.ifBlank { "Tap to set" }.let { v -> if (v == "Tap to set") v else formatDobForUi(v) },
                         )
                         "/edit-gender" -> item.subtitle.replace("{value}", profile.gender.ifBlank { "Tap to set" })
+                        "/edit-interests" -> {
+                            val subs = UserInterestUtils.normalizeInterestSubcategories(userInterests)
+                            when {
+                                subs.isEmpty() -> "Abhi set nahi — tap karke chunein"
+                                subs.size <= 3 -> subs.joinToString(separator = " · ")
+                                else -> subs.take(3).joinToString(separator = " · ") + " +${subs.size - 3}"
+                            }
+                        }
                         "/verify-email" -> if (emailOk) "Verified" else if (item.subtitle.isBlank()) "Not verified — tap to send OTP" else item.subtitle
                         "/verify-phone" -> if (phoneOk) "Verified" else if (item.subtitle.isBlank()) "Not verified — tap to send OTP" else item.subtitle
                         else -> item.subtitle
@@ -287,6 +325,7 @@ fun ProfileScreenNew(
                         "/edit-mobile" -> onEditMobile
                         "/edit-dob" -> onEditDob
                         "/edit-gender" -> onEditGender
+                        "/edit-interests" -> onEditInterests
                         "/edit-password" -> onEditPassword
                         "/verify-email" -> onSendEmailVerification
                         "/verify-phone" -> onSendPhoneVerification

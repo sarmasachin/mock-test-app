@@ -93,6 +93,7 @@ const appliedPayload = buildTestResolvePayload({
 });
 ok = line(appliedPayload.canApply === false, 'already applied → canApply=false') && ok;
 ok = line(appliedPayload.alreadyAppliedInCurrentCycle === true, 'alreadyApplied flag') && ok;
+ok = line(appliedPayload.canStart === true, 'already applied timer off → canStart=true') && ok;
 
 const reapplyPayload = buildTestResolvePayload({
   row: liveRow,

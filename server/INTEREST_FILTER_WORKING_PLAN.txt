@@ -1,0 +1,270 @@
+Interest-based tests + Browse all + Admin “Show to users” checkbox
+====================================================================
+Status: Phase 5 COMPLETE — Phase 6 pending
+Last updated: 2026-07-01
+
+Phase 0 deliverables:
+  - server/src/lib/userInterests.js
+  - server/PHASE0_INTEREST_FILTER_RUNBOOK.txt
+  - npm run verify:interest-phase0
+
+Phase 1 deliverables:
+  - user_test_interests table + GET/PUT /v1/me/interests
+  - GET /v1/tests?subcategories= (optional, backward compatible)
+  - server/PHASE1_INTEREST_FILTER_RUNBOOK.txt
+  - npm run verify:interest-phase1
+
+Phase 2 deliverables:
+  - Android sync (UserInterestUtils, prefs, AuthRepository, ContentRepository)
+  - Picker → subcategories + PUT server
+  - server/PHASE2_INTEREST_FILTER_RUNBOOK.txt
+
+Phase 3 deliverables:
+  - Subcategory picker UI + test counts + Start Test labels
+  - server/PHASE3_INTEREST_FILTER_RUNBOOK.txt
+
+Phase 4 deliverables:
+  - Tests tab interest filter + Saare tests / Sirf mere tests toggle
+  - TestsScreenNew soft gate for non-interest deep links
+  - server/PHASE4_INTEREST_FILTER_RUNBOOK.txt
+
+Phase 5 deliverables:
+  - Profile "Meri interests" edit screen + server sync
+  - Start Test "Aapke exams" + Saare tests browse karein
+  - server/PHASE5_INTEREST_FILTER_RUNBOOK.txt
+
+GOAL
+----
+1. Login ke baad user apni INTEREST (subcategory / exam topic) choose kare.
+2. Default: app me sirf interest-matching tests / categories dikhein.
+3. User ke paas hamesha “Saare tests dekho” option ho (toggle ya link).
+4. Admin jab test add/edit kare, wahan ek CHECKBOX ho:
+   “User ko dikhao” (show in user-facing interest/catalog flows).
+   — Alag se implement karenge; is plan me spec locked hai.
+
+INTEREST UNIT (DECISION)
+------------------------
+Primary: test.subcategory (examCategories level3 ke saath align).
+Fallback: test title sirf tab jab subcategory blank ho (discourage).
+
+Published (is_published) ≠ “user ko dikhao”:
+  - is_published = test live hai (apply/start cycle chal sakta hai)
+  - show_to_users (naya) = interest picker + filtered catalog me list ho
+
+====================================================================
+PHASE 0 — Spec & admin alignment (½ day)
+====================================================================
+
+RULES
+-----
+- examCategories.level3 SHOULD match tests.subcategory (admin doc).
+- Applied tests HAMESHA dikhein — chahe show_to_users off ho (user ne apply kar liya).
+- show_to_users OFF + is_published ON → direct link/resolve se apply ho sakta hai?
+  → Phase 1 decision: catalog/picker me hide; deep link / already-applied OK.
+
+ADMIN CHECKBOX (FUTURE — Phase 1b)
+----------------------------------
+Location: Admin → Tests → Add/Edit test form (Published checkbox ke paas).
+
+Label (Hindi UI):
+  [ ] User ko dikhao (interest / test list me)
+English key: showToUsers
+
+DB column (proposed):
+  tests.show_to_users BOOLEAN NOT NULL DEFAULT true
+
+Semantics:
+  true  = test interest picker + “mere tests” catalog + subcategory list me aa sakta hai
+          (subject to is_published + publishAt/validUntil/unpublishAt visibility)
+  false = user-facing LISTS me hide; test published reh sakta hai for:
+          - users who already applied
+          - admin / resolve-by-id (optional Phase 2)
+
+API:
+  - mapTest() + admin GET/PATCH include showToUsers
+  - GET /v1/tests filters: AND (show_to_users IS NOT FALSE) for public catalog
+  - GET /v1/me/interests picker source: same filter
+
+Admin list badge:
+  Published + hidden from users → “Published (hidden from catalog)”
+
+FILES (later):
+  - server migration
+  - server/src/routes/admin.js, tests.js
+  - admin-web/src/App.tsx (test form checkbox)
+  - app ApiModels + filters in ContentRepository
+
+====================================================================
+PHASE 1 — Server: user interests (1 day)
+====================================================================
+
+DB
+--
+user_test_interests (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  subcategory TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, subcategory)
+)
+
+API
+---
+GET  /v1/me/interests
+     → { subcategories: ["HP GK", "SSC CGL"] }
+
+PUT  /v1/me/interests
+     body: { subcategories: string[] }
+     max 20, trim, dedupe, case-insensitive merge
+
+GET  /v1/tests?subcategory=X          (existing)
+GET  /v1/tests?subcategories=a,b,c    (new, optional OR filter ILIKE)
+
+Public catalog query adds (when Phase 1b lands):
+  AND COALESCE(show_to_users, true) = true
+
+VERIFY
+------
+  node scripts/verifyInterestPhase1.js
+
+====================================================================
+PHASE 2 — Android: data + sync (1 day)
+====================================================================
+
+AppPreferencesRepository
+------------------------
+loginPickedSubcategories: Flow<List<String>>   // replaces title-only pick as primary
+showAllTestsCatalog: Flow<Boolean>             // browse-all toggle
+loginInterestPickDone: flag (rename/extend login_test_pick_done)
+
+AuthRepository
+--------------
+- After login: GET /me/interests → local cache
+- Picker Continue: PUT /me/interests
+- Logout: clear local interests (keep server)
+
+ContentRepository
+-----------------
+loadInterestSubcategoriesForPicker()
+  → examCategories enabled level3 + counts from GET /tests (respect show_to_users)
+
+loadTestsMatchingInterests(subcategories)
+filterCatalogByInterests(tests, interests, showAll)
+
+Migration old users:
+  loginPickedTestTitles → derive subcategory from cached test cards (best effort)
+
+====================================================================
+PHASE 3 — Picker UI (1 day)
+====================================================================
+
+SelectLoginTestsScreenNew → SelectInterestsScreenNew (or extend)
+- Multi-select subcategories (chips/checkboxes) from examCategories
+- Min 1 required
+- Show count: “3 tests in HP GK”
+- Continue → save local + PUT server
+- Empty categories → message + optional “browse all later”
+
+Copy:
+  Title: “Apne exams chunein”
+  Subtitle: “Baad me Profile se badal sakte hain. Saare tests bhi dekh sakte hain.”
+
+====================================================================
+PHASE 4 — Tests tab + “Saare tests dekho” (1 day)
+====================================================================
+
+SeeAllCategoriesScreenNew
+-------------------------
+Default (showAllTestsCatalog = false):
+  - Hierarchy filter: sirf level3 ∈ userInterests
+Top bar:
+  - Button: “Saare tests dekho” → showAllTestsCatalog = true
+  - When all mode: “Sirf mere tests” → false
+
+TestsScreenNew
+--------------
+- Subcategory list already filtered by navigation
+- If user opens subcategory NOT in interests while in filtered mode:
+  → soft block with “Saare tests dekho” CTA (optional)
+
+MainBottomNavHost
+-----------------
+- Optional route arg: tests?all=1
+
+====================================================================
+PHASE 5 — Start Test + Profile edit (1 day)
+====================================================================
+
+StartTestPreviewScreenNew
+-------------------------
+- Section: “Aapke exams: HP GK · SSC CGL”
+- Applied cards (unchanged, always show)
+- Link: “Saare tests browse karein”
+
+Profile
+-------
+- “Meri interests” → same multi-select as picker
+- Save → PUT /me/interests
+
+====================================================================
+PHASE 6 — QA matrix (½ day)
+====================================================================
+
+| # | Case | Expected |
+|---|------|----------|
+| 1 | 1 interest, show_to_users ON | Test dikhe |
+| 2 | show_to_users OFF, published ON | Lists me hide; applied user ko card dikhe |
+| 3 | Browse all ON | Saari categories |
+| 4 | Logout/login | Interests server se restore |
+| 5 | subcategory mismatch admin | Test interest me nahi; admin warning doc |
+| 6 | Purana user, no interests | Picker force OR all tests fallback (TBD) |
+| 7 | 100+ tests one subcategory | Subcategory filter OK |
+
+====================================================================
+IMPLEMENTATION ORDER (recommended)
+====================================================================
+
+  Phase 0 (spec)
+       ↓
+  Phase 1 (server interests API)
+       ↓
+  Phase 1b (admin show_to_users checkbox + DB + API filter)  ← user request
+       ↓
+  Phase 2 (Android sync)
+       ↓
+  Phase 3 (picker)
+       ↓
+  Phase 4 (Tests tab + browse all)
+       ↓
+  Phase 5 (Start Test + Profile)
+       ↓
+  Phase 6 (QA)
+
+DEPLOY ORDER
+------------
+1. Server migration (user_test_interests + show_to_users column)
+2. Server API
+3. Admin-web checkbox
+4. Android app
+
+BACKWARD COMPATIBILITY
+----------------------
+- show_to_users column DEFAULT true → existing tests unchanged
+- Missing field in old app → treat as true
+- loginPickedTestTitles kept read-only until migration completes
+
+OPEN DECISIONS (LOCKED in Phase 0 — see PHASE0_INTEREST_FILTER_RUNBOOK.txt)
+---------------------------------------------------------------------------
+[x] Purane users: interests empty → saare tests; picker when login_test_pick_done=0
+[x] show_to_users OFF: hide from public lists; resolve/auth + applied OK
+[x] Interest email job: migrate to user_test_interests in Phase 1+
+
+NOT IN SCOPE (this plan)
+------------------------
+- Recurring round scheduler (separate plan)
+- Schedule timer changes (done)
+- Changing is_published semantics
+
+WHEN USER SAYS “implement karo”
+-------------------------------
+Start Phase 0 checklist + Phase 1 migration + verify script.
+Phase 1b admin checkbox same sprint ya immediately after Phase 1.

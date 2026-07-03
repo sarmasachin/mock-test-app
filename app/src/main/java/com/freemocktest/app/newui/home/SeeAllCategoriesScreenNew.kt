@@ -55,7 +55,13 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberCoroutineScope
+import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.ContentRepository
+import com.freemocktest.app.util.UserInterestUtils
+import kotlinx.coroutines.launch
 import com.freemocktest.app.newui.theme.palette.categoryLabelTintColor
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
@@ -165,6 +171,25 @@ private fun buildExamHierarchy(remote: List<ContentRepository.ExamCategoryItemRe
     }.sortedBy { it.label }
 }
 
+/** Keep branches that lead to at least one interest-matching level3 leaf. */
+private fun filterExamHierarchyForInterests(
+    nodes: List<ExamHierarchyNode>,
+    interests: List<String>,
+    showAllTests: Boolean,
+): List<ExamHierarchyNode> {
+    if (showAllTests || UserInterestUtils.normalizeInterestSubcategories(interests).isEmpty()) {
+        return nodes
+    }
+    return nodes.mapNotNull { node ->
+        if (node.children.isEmpty()) {
+            if (UserInterestUtils.subcategoryMatchesAnyInterest(node.label, interests)) node else null
+        } else {
+            val filteredChildren = filterExamHierarchyForInterests(node.children, interests, showAllTests)
+            if (filteredChildren.isEmpty()) null else node.copy(children = filteredChildren)
+        }
+    }
+}
+
 @Composable
 fun SeeAllCategoriesScreenNew(
     modifier: Modifier = Modifier,
@@ -174,9 +199,18 @@ fun SeeAllCategoriesScreenNew(
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
+    val scope = rememberCoroutineScope()
+    val userInterests by AppPreferencesRepository.loginPickedSubcategories.collectAsState(initial = emptyList())
+    val showAllTests by AppPreferencesRepository.showAllTestsCatalog.collectAsState(initial = false)
+    val interestFilterActive = remember(userInterests, showAllTests) {
+        !showAllTests && UserInterestUtils.normalizeInterestSubcategories(userInterests).isNotEmpty()
+    }
     val preloadedItems = remember { ContentRepository.peekExamCategoriesMemory() }
-    var hierarchy by remember {
+    var fullHierarchy by remember {
         mutableStateOf(preloadedItems?.let { buildExamHierarchy(it) } ?: emptyList())
+    }
+    val hierarchy = remember(fullHierarchy, userInterests, showAllTests) {
+        filterExamHierarchyForInterests(fullHierarchy, userInterests, showAllTests)
     }
     var hierarchyFetchError by remember { mutableStateOf(false) }
     var hierarchyReloadKey by remember { mutableIntStateOf(0) }
@@ -185,8 +219,13 @@ fun SeeAllCategoriesScreenNew(
     var didApplyPreload by remember { mutableStateOf(false) }
 
     fun applyRemoteItems(remote: List<ContentRepository.ExamCategoryItemRemote>) {
-        hierarchy = buildExamHierarchy(remote.filter { it.enabled })
+        fullHierarchy = buildExamHierarchy(remote.filter { it.enabled })
         hierarchyFetchError = false
+    }
+
+    LaunchedEffect(showAllTests) {
+        level1 = null
+        level2 = null
     }
 
     androidx.compose.runtime.SideEffect {
@@ -206,10 +245,10 @@ fun SeeAllCategoriesScreenNew(
             if (remote.isNotEmpty()) {
                 applyRemoteItems(remote)
             } else if (hierarchy.isEmpty()) {
-                hierarchy = emptyList()
+                fullHierarchy = emptyList()
                 hierarchyFetchError = false
             }
-        } else if (hierarchy.isEmpty()) {
+        } else if (fullHierarchy.isEmpty()) {
             hierarchyFetchError = true
         }
     }
@@ -232,7 +271,9 @@ fun SeeAllCategoriesScreenNew(
 
     val showEmptyMessage =
         !hierarchyFetchError && hierarchy.isEmpty() && level1 == null && level2 == null
-    val showLoadError = hierarchyFetchError && hierarchy.isEmpty()
+    val showInterestFilterEmpty =
+        showEmptyMessage && interestFilterActive && fullHierarchy.isNotEmpty()
+    val showLoadError = hierarchyFetchError && fullHierarchy.isEmpty()
     val showBackInAppBar = showAppBarBack || level1 != null || level2 != null
 
     val shownItems = when {
@@ -242,6 +283,7 @@ fun SeeAllCategoriesScreenNew(
     }
     val rows = shownItems.chunked(2)
     val title = when {
+        level1 == null && interestFilterActive -> "Mere exams"
         level1 == null -> "Exam Categories"
         level2 == null -> level1 ?: "Exam Categories"
         else -> level2 ?: "Exam Categories"
@@ -273,9 +315,50 @@ fun SeeAllCategoriesScreenNew(
                     fontWeight = FontWeight.SemiBold,
                 )
             }
+            if (UserInterestUtils.normalizeInterestSubcategories(userInterests).isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                InterestCatalogToggleRow(
+                    showAllTests = showAllTests,
+                    onToggle = {
+                        scope.launch {
+                            AppPreferencesRepository.setShowAllTestsCatalog(!showAllTests)
+                        }
+                    },
+                )
+            }
             Spacer(Modifier.height(16.dp))
 
-            if (showEmptyMessage) {
+            if (showInterestFilterEmpty) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(horizontal = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        text = "Aapke chune exams is list me match nahi kar rahe.",
+                        color = p.textSecondary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                AppPreferencesRepository.setShowAllTestsCatalog(true)
+                            }
+                        },
+                    ) {
+                        Text(
+                            text = "Saare tests dekho",
+                            color = p.systemBlue,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            } else if (showEmptyMessage) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -344,6 +427,35 @@ fun SeeAllCategoriesScreenNew(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun InterestCatalogToggleRow(
+    showAllTests: Boolean,
+    onToggle: () -> Unit,
+) {
+    val p = mockTestPalette()
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = if (showAllTests) "Saare exams dikh rahe hain" else "Sirf aapke chune exams",
+            color = p.textSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onToggle) {
+            Text(
+                text = if (showAllTests) "Sirf mere tests" else "Saare tests dekho",
+                color = p.systemBlue,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }

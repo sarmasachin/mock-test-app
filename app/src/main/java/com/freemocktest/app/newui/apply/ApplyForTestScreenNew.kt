@@ -95,6 +95,7 @@ fun ApplyForTestScreenNew(
     var resolvedTestName by remember { mutableStateOf(title) }
     var resolvedExamDate by remember { mutableStateOf<String?>(null) }
     var resolvedSlotLabel by remember { mutableStateOf<String?>(null) }
+    var resolvedLateJoinMinutes by remember { mutableIntStateOf(0) }
     var slotInfo by remember { mutableStateOf("Morning Slot") }
     var appliedInfo by remember { mutableStateOf("0") }
     var remainingSeatsInfo by remember { mutableStateOf("0 seats left") }
@@ -106,8 +107,7 @@ fun ApplyForTestScreenNew(
     var isSubmitting by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
     var refreshTick by remember { mutableIntStateOf(0) }
-    var startSeriesLockMs by remember { mutableStateOf(20_000L) }
-    var startSeriesActiveWindowMs by remember { mutableStateOf(30 * 60 * 1000L) }
+    var scheduleTimerEnabled by remember { mutableStateOf(false) }
     var localApplySeriesSaved by remember { mutableStateOf(false) }
     var hasAlreadyApplied by remember { mutableStateOf(false) }
     var testBetweenCycles by remember { mutableStateOf(false) }
@@ -137,16 +137,15 @@ fun ApplyForTestScreenNew(
         }
     }
     LaunchedEffect(Unit) {
-        // Lock-window/active-window come from CMS; on failure the safe defaults
-        // (`20_000L`, `30 * 60 * 1000L`) initialised above remain in effect.
+        // Schedule timer toggle from CMS; default off = immediate start after apply.
         try {
             val home = runCatching { ContentRepository.loadHomeContent() }.getOrNull() ?: return@LaunchedEffect
-            startSeriesLockMs = home.startSeriesLockSeconds.coerceAtLeast(0).toLong() * 1000L
-            startSeriesActiveWindowMs = home.startSeriesActiveWindowMinutes.coerceAtLeast(1).toLong() * 60_000L
+            scheduleTimerEnabled = home.startSeriesScheduleTimerEnabled
+            AppPreferencesRepository.reconcileAppliedTestSeriesForTimerMode(scheduleTimerEnabled)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            // Defaults remain in effect.
+            // Default remains false.
         }
     }
     LaunchedEffect(title, refreshTick) {
@@ -215,6 +214,7 @@ fun ApplyForTestScreenNew(
             resolvedTestName = resolvedTest?.title?.trim()?.ifBlank { routeTitle } ?: routeTitle
             resolvedExamDate = publishedTest?.examDate ?: resolvedTest?.examDate
             resolvedSlotLabel = publishedTest?.slotLabel ?: resolvedTest?.slotLabel ?: matchedApplication?.slotLabel
+            resolvedLateJoinMinutes = publishedTest?.lateJoinMinutes ?: resolvedTest?.lateJoinMinutes ?: 0
             slotInfo = resolvedTest?.slotLabel?.ifBlank { "Morning Slot" } ?: "Morning Slot"
 
             hasAlreadyApplied =
@@ -574,12 +574,17 @@ fun ApplyForTestScreenNew(
                                                 localApplySeriesSaved = runCatching {
                                                     AppPreferencesRepository.addAppliedTestSeriesNow(
                                                         testName = titleToSave,
-                                                        lockMs = startSeriesLockMs,
-                                                        activeWindowMs = startSeriesActiveWindowMs,
+                                                        scheduleTimerEnabled = scheduleTimerEnabled,
                                                         examDate = resolvedExamDate,
                                                         slotLabel = resolvedSlotLabel,
+                                                        lateJoinMinutes = resolvedLateJoinMinutes,
                                                     )
                                                 }.getOrDefault(false) || localApplySeriesSaved
+                                                runCatching {
+                                                    AuthRepository.syncAppliedTestSeriesFromServer(
+                                                        scheduleTimerEnabled = scheduleTimerEnabled,
+                                                    )
+                                                }.onSuccess { localApplySeriesSaved = true }
                                             }
                                             if (response.waitlisted) {
                                                 submitWarning = successMessage
@@ -681,10 +686,10 @@ fun ApplyForTestScreenNew(
                                     if (titleToSave.isNotBlank()) {
                                         localApplySeriesSaved = AppPreferencesRepository.addAppliedTestSeriesNow(
                                             testName = titleToSave,
-                                            lockMs = startSeriesLockMs,
-                                            activeWindowMs = startSeriesActiveWindowMs,
+                                            scheduleTimerEnabled = scheduleTimerEnabled,
                                             examDate = resolvedExamDate,
                                             slotLabel = resolvedSlotLabel,
+                                            lateJoinMinutes = resolvedLateJoinMinutes,
                                         )
                                     }
                                 }

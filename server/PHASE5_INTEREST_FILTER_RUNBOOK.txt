@@ -1,0 +1,41 @@
+Phase 5 — Start Test polish + Profile interests edit (Android)
+=============================================================
+Status: COMPLETE
+Last updated: 2026-07-01
+
+WHAT CHANGED
+------------
+- Profile → "Meri interests"
+    Multi-select subcategories (same as login picker)
+    Save → local prefs + PUT /v1/me/interests
+    Non-empty save resets browse-all toggle (interest filter on)
+- StartTestPreviewScreenNew
+    "Aapke exams: HP GK · SSC CGL" from subcategories (primary)
+    Link "Saare tests browse karein" when filter active
+    Browse opens Tests tab with showAllTestsCatalog = true
+
+RULES (safe)
+------------
+- Min 1 selection when categories exist (same as picker)
+- Empty interests allowed → legacy show-all catalog
+- Server sync fail → local save still OK; message on save
+- Applied tests section unchanged
+
+FILES
+-----
+  app/.../profile/ProfileEditInterestsScreenNew.kt
+  app/.../profile/ProfileScreenNew.kt
+  app/.../profile/ProfileRouteNew.kt
+  app/.../tests/StartTestPreviewScreenNew.kt
+  app/.../navigation/MainBottomNavHost.kt
+  app/.../data/AppPreferencesRepository.kt (saveProfileUserInterests)
+
+MANUAL QA
+---------
+1. Profile → Meri interests → change selection → Save
+2. Tests tab shows updated filter
+3. Start Test → "Aapke exams" line + browse link
+4. "Saare tests browse karein" → full Tests catalog
+5. Logout/login → interests restored from server
+
+NEXT: Phase 6 — E2E QA matrix

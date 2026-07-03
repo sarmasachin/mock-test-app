@@ -64,6 +64,9 @@ object ContentRepository {
         val mayReapplyForNewCycle: Boolean,
         val blockReason: String?,
         val republishAt: String?,
+        val canStart: Boolean = false,
+        val startBlockReason: String? = null,
+        val joinClosesAt: String? = null,
     )
 
     /** Catalog test (if live) + optional resolve metadata when catalog misses. */
@@ -161,8 +164,7 @@ object ContentRepository {
         val quickActionSections: List<HomeQuickActionSectionRemote>,
         val banners: List<String>,
         val newsSlides: List<HomeNewsSlideRemote>,
-        val startSeriesLockSeconds: Int,
-        val startSeriesActiveWindowMinutes: Int,
+        val startSeriesScheduleTimerEnabled: Boolean,
     )
     data class SubmitApplicationContentRemote(
         val title: String?,
@@ -437,17 +439,116 @@ object ContentRepository {
     /** Full catalog slice for post-login test picker (`GET /tests` without subcategory filter). */
     suspend fun loadCatalogTestsForPicker(limit: Int = 100): List<TestCardNew> = withContext(Dispatchers.IO) {
         val resp = RetrofitProvider.publicApi.listTests(subcategory = null, limit = limit)
-        resp.items
+        val rows = resp.items ?: emptyList()
+        // Server already applies isTestCatalogVisible; avoid a second client filter hiding every row.
+        rows
             .map { row -> row.toTestCard() }
-            .filter { card ->
-                card.title.isNotBlank() &&
-                    com.freemocktest.app.util.TestScheduleUtils.isTestListingVisible(
-                        validUntilIso = card.validUntilIso,
-                        publishAt = card.publishAt,
-                        unpublishAt = card.unpublishAt,
-                    )
-            }
+            .filter { card -> card.title.isNotBlank() }
             .distinctBy { it.title.trim().lowercase(Locale.US) }
+    }
+
+    data class InterestPickerCategory(
+        val subcategory: String,
+        val publishedTestCount: Int = 0,
+    )
+
+    /**
+     * Enabled examCategories level3 for interest picker.
+     * Falls back to distinct subcategories from published catalog when admin categories are empty.
+     */
+    suspend fun loadInterestSubcategoriesForPicker(limit: Int = 100): List<InterestPickerCategory> = withContext(Dispatchers.IO) {
+        val catalog = runCatching { loadCatalogTestsForPicker(limit = limit) }.getOrDefault(emptyList())
+        val items = runCatching { loadExamCategories(forceRefresh = true) }.getOrDefault(emptyList())
+        val seen = LinkedHashMap<String, String>()
+        for (item in items) {
+            if (!item.enabled) continue
+            val level3 = item.level3.trim()
+            if (level3.isBlank()) continue
+            val key = level3.lowercase(Locale.US)
+            if (!seen.containsKey(key)) seen[key] = level3
+        }
+        if (seen.isEmpty()) {
+            for (card in catalog) {
+                val sub = card.subcategory.trim()
+                if (sub.isBlank()) continue
+                val key = sub.lowercase(Locale.US)
+                if (!seen.containsKey(key)) seen[key] = sub
+            }
+        }
+        seen.values
+            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it })
+            .map { sub ->
+                val count = catalog.count { card ->
+                    com.freemocktest.app.util.UserInterestUtils.subcategoryMatchesSqlFilter(
+                        card.subcategory,
+                        sub,
+                    )
+                }
+                InterestPickerCategory(subcategory = sub, publishedTestCount = count)
+            }
+    }
+
+    /** One sample test title per subcategory — Start Test label until user applies. */
+    fun sampleTitlesForSubcategories(
+        catalog: List<TestCardNew>,
+        subcategories: List<String>,
+    ): List<String> {
+        val normalized = com.freemocktest.app.util.UserInterestUtils.normalizeInterestSubcategories(subcategories)
+        val titles = ArrayList<String>(normalized.size)
+        for (sub in normalized) {
+            val match = catalog.firstOrNull { card ->
+                com.freemocktest.app.util.UserInterestUtils.subcategoryMatchesSqlFilter(
+                    card.subcategory,
+                    sub,
+                )
+            }
+            if (match != null && match.title.isNotBlank()) {
+                titles.add(match.title.trim())
+            }
+        }
+        return titles.distinct()
+    }
+
+    /** Published tests matching user interests via GET /tests?subcategories= */
+    suspend fun loadTestsForUserInterests(
+        interests: List<String>,
+        limit: Int = 100,
+    ): List<TestCardNew> = withContext(Dispatchers.IO) {
+        val normalized = com.freemocktest.app.util.UserInterestUtils.normalizeInterestSubcategories(interests)
+        if (normalized.isEmpty()) {
+            return@withContext loadCatalogTestsForPicker(limit = limit)
+        }
+        val query = normalized.joinToString(",")
+        val resp = RetrofitProvider.publicApi.listTests(subcategory = null, subcategories = query, limit = limit)
+        val rows = resp.items ?: emptyList()
+        rows
+            .map { row -> row.toTestCard() }
+            .filter { card -> card.title.isNotBlank() }
+            .distinctBy { it.title.trim().lowercase(Locale.US) }
+    }
+
+    fun filterCatalogByInterests(
+        tests: List<TestCardNew>,
+        interests: List<String>,
+        showAllTests: Boolean,
+    ): List<TestCardNew> = com.freemocktest.app.util.UserInterestUtils.filterTestsByUserInterests(
+        tests = tests,
+        interests = interests,
+        showAllTests = showAllTests,
+    )
+
+    /** Best-effort map picker test titles → subcategories for server sync. */
+    suspend fun deriveSubcategoriesFromTestTitles(titles: List<String>): List<String> = withContext(Dispatchers.IO) {
+        val derived = ArrayList<String>(titles.size)
+        for (rawTitle in titles) {
+            val title = rawTitle.trim()
+            if (title.isBlank()) continue
+            val card = loadCachedTestByTitle(title)
+                ?: runCatching { loadTestByTitle(title, allowDefaultFallback = false) }.getOrNull()
+            val sub = card?.subcategory?.trim().orEmpty()
+            derived.add(if (sub.isNotBlank()) sub else title)
+        }
+        com.freemocktest.app.util.UserInterestUtils.normalizeInterestSubcategories(derived)
     }
 
     private fun jsonOptIntOrNull(o: JSONObject, key: String): Int? =
@@ -486,6 +587,7 @@ object ContentRepository {
         put("id", c.id)
         put("slug", c.slug)
         put("title", c.title)
+        put("subcategory", c.subcategory)
         put("meta", c.meta)
         c.examDate?.let { put("examDate", it) }
         c.durationLabel?.let { put("durationLabel", it) }
@@ -531,6 +633,7 @@ object ContentRepository {
             id = o.optString("id", ""),
             slug = o.optString("slug", ""),
             title = title,
+            subcategory = o.optString("subcategory", "").trim(),
             meta = o.optString("meta").ifBlank { "Test details are currently unavailable" },
             examDate = o.optString("examDate", "").trim().takeIf { it.isNotBlank() },
             durationLabel = o.optString("durationLabel", "").trim().takeIf { it.isNotBlank() },
@@ -740,6 +843,9 @@ object ContentRepository {
                 mayReapplyForNewCycle = resp.mayReapplyForNewCycle,
                 blockReason = resp.blockReason?.trim()?.takeIf { it.isNotBlank() },
                 republishAt = resp.republishAt?.trim()?.takeIf { it.isNotBlank() },
+                canStart = resp.canStart,
+                startBlockReason = resp.startBlockReason?.trim()?.takeIf { it.isNotBlank() },
+                joinClosesAt = resp.joinClosesAt?.trim()?.takeIf { it.isNotBlank() },
             )
         } catch (e: HttpException) {
             Log.w(TAG, "resolveTestForApply http ${e.code()} $titleQ", e)
@@ -1434,8 +1540,7 @@ object ContentRepository {
                         imageUrl = it.imageUrl,
                     )
                 },
-            startSeriesLockSeconds = (content.startSeriesLockSeconds ?: 20).coerceIn(0, 86_400),
-            startSeriesActiveWindowMinutes = (content.startSeriesActiveWindowMinutes ?: 30).coerceIn(1, 10_080),
+            startSeriesScheduleTimerEnabled = content.startSeriesScheduleTimerEnabled == true,
         )
     }
 
@@ -1496,8 +1601,7 @@ object ContentRepository {
             )
         }
         o.put("newsSlides", newsArr)
-        o.put("startSeriesLockSeconds", c.startSeriesLockSeconds)
-        o.put("startSeriesActiveWindowMinutes", c.startSeriesActiveWindowMinutes)
+        o.put("startSeriesScheduleTimerEnabled", c.startSeriesScheduleTimerEnabled)
         return o.toString()
     }
 
@@ -1578,8 +1682,7 @@ object ContentRepository {
             quickActionSections = quickActions,
             banners = stringList("banners"),
             newsSlides = newsSlides,
-            startSeriesLockSeconds = o.optInt("startSeriesLockSeconds", 20).coerceIn(0, 86_400),
-            startSeriesActiveWindowMinutes = o.optInt("startSeriesActiveWindowMinutes", 30).coerceIn(1, 10_080),
+            startSeriesScheduleTimerEnabled = o.optBoolean("startSeriesScheduleTimerEnabled", false),
         )
     }
 
@@ -2118,6 +2221,7 @@ object ContentRepository {
             id = id,
             slug = slug,
             title = title,
+            subcategory = subcategory.trim(),
             meta = meta,
             examDate = examDate,
             durationLabel = durationLabel,

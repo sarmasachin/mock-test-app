@@ -319,8 +319,8 @@ function normalizeHomeContent(value) {
   const rawSections = Array.isArray(safe.sections) ? safe.sections : [];
   const rawQuickActionSections = Array.isArray(safe.quickActionSections) ? safe.quickActionSections : [];
   const rawBanners = Array.isArray(safe.banners) ? safe.banners : [];
-  const startSeriesLockSeconds = Math.max(0, Math.min(86_400, Number(safe.startSeriesLockSeconds || 20)));
-  const startSeriesActiveWindowMinutes = Math.max(1, Math.min(10_080, Number(safe.startSeriesActiveWindowMinutes || 30)));
+  /** When true, applied tests unlock only at exam date/slot; when false, start immediately after apply. */
+  const startSeriesScheduleTimerEnabled = safe.startSeriesScheduleTimerEnabled === true;
   const sections = rawSections.map((section, index) => {
     const s = section || {};
     const title = String(s.title || '').trim().slice(0, 80);
@@ -413,8 +413,7 @@ function normalizeHomeContent(value) {
       quickActionSections,
       banners,
       newsSlides,
-      startSeriesLockSeconds,
-      startSeriesActiveWindowMinutes,
+      startSeriesScheduleTimerEnabled,
     },
   };
 }

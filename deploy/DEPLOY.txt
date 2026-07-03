@@ -1,0 +1,81 @@
+MockTestApp — Production deploy (ONLY govmocktest.com)
+======================================================
+
+Use this file as the single source of truth. Do NOT use livehospital.org or indiaapk.com.
+
+DOMAIN MAP (one VPS, one site)
+------------------------------
+  Admin UI : https://admin-admin.govmocktest.com/admin/
+  API      : https://admin-admin.govmocktest.com/v1
+  Health   : https://admin-admin.govmocktest.com/health
+  Uploads  : https://admin-admin.govmocktest.com/uploads/
+
+  Android release API default (build.gradle.kts):
+    https://admin-admin.govmocktest.com/v1/
+
+  Admin web production build (.env.production):
+    VITE_API_BASE_URL=https://admin-admin.govmocktest.com/v1
+
+  Server .env (server/.env on VPS):
+    PUBLIC_API_BASE_URL=https://admin-admin.govmocktest.com
+    CORS_ALLOWED_ORIGINS=https://admin-admin.govmocktest.com
+    MAIL_ADMIN_PANEL_URL=https://admin-admin.govmocktest.com/admin
+    DATABASE_URL=postgresql://mocktestapp_rw:commingsoon%40123@127.0.0.1:5432/mocktestapp
+
+  SMTP (Hostinger):
+    SMTP_HOST=smtp.hostinger.com
+    SMTP_PORT=587
+    SMTP_SECURE=false
+    SMTP_USER=no-reply@govmocktest.com
+    SMTP_PASS=commingsoon@123
+    MAIL_FROM="GovMockTest <no-reply@govmocktest.com>"
+
+SERVER PATHS
+------------
+  Git clone dir     : /var/www/mocktestapp
+  Admin static files: /var/www/admin-admin.govmocktest.com/site/admin/
+  Nginx site file   : /etc/nginx/sites-available/admin-admin.govmocktest.com
+  PM2 process name  : mocktest-api (port 3000)
+  PostgreSQL DB     : mocktestapp / user mocktestapp_rw
+
+NEVER ENABLE ON THIS VPS
+------------------------
+  livehospital.org nginx sites
+  indiaapk.com nginx sites
+  Any other server_name that catches admin-admin.govmocktest.com traffic
+
+Fresh server cleanup (run once on VPS as root)
+----------------------------------------------
+  rm -f /etc/nginx/sites-enabled/*
+  rm -f /etc/nginx/sites-available/livehospital*
+  rm -f /etc/nginx/sites-available/indiaapk*
+  rm -f /etc/nginx/sites-available/admin-admin.livehospital*
+  grep -r "livehospital\|indiaapk" /etc/nginx/ 2>/dev/null
+
+Install nginx site
+------------------
+  cp deploy/nginx-site.govmocktest.conf.example /etc/nginx/sites-available/admin-admin.govmocktest.com
+  ln -sf /etc/nginx/sites-available/admin-admin.govmocktest.com /etc/nginx/sites-enabled/
+  nginx -t && systemctl reload nginx
+  certbot --nginx -d admin-admin.govmocktest.com
+
+Deploy admin static from Windows
+--------------------------------
+  cd admin-web
+  echo VITE_API_BASE_URL=https://admin-admin.govmocktest.com/v1 > .env.production
+  npm install && npm run build
+  ..\deploy\deploy-admin.ps1 -ServerUser root -ServerHost YOUR_VPS_IP
+
+Redeploy after git push
+-----------------------
+  cd /var/www/mocktestapp && git pull origin main
+  cd server && npm install && pm2 restart mocktest-api
+  cd ../admin-web && npm install && npm run build
+  cp -r dist/* /var/www/admin-admin.govmocktest.com/site/admin/
+  systemctl reload nginx
+
+Default admin login (after SQL migration 009)
+-------------------------------------------
+  Email   : sharma.sachinctr@gmail.com
+  Password: commingsoon@123
+  Then email OTP (via no-reply@govmocktest.com SMTP)

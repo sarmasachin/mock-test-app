@@ -1,0 +1,39 @@
+Phase 3 — Server-authoritative start access (canStart)
+======================================================
+
+Goal
+----
+Fix "applied → back without start → Start button locked" by making the server
+the source of truth for whether a user may start an already-applied test.
+
+New API fields
+--------------
+GET /v1/tests/my-applications (each item):
+  - canStart (boolean)
+  - startBlockReason (string|null)
+  - joinClosesAt (ISO string|null)
+
+GET /v1/tests/resolve:
+  - canStart, startBlockReason, joinClosesAt (same semantics)
+
+Rules (testStartAccess.js)
+--------------------------
+- Timer OFF: applied + live cycle → canStart true; joinClosesAt ≈ now + 90 days
+- Timer ON: lock until exam date/slot; late join only when lateJoinMinutes > 0
+- Attempt limits / between_cycles / catalog errors block start with reason
+
+Verify (offline)
+----------------
+  cd server
+  npm run verify:start-access-phase3
+
+Also re-run:
+  npm run verify:test-resolve-phase2
+  npm run verify:schedule-timer-phase0
+  npm run verify:schedule-timer-phase1
+
+Manual QA
+---------
+1. Schedule timer OFF: apply → Start Test screen → back → return → Start enabled
+2. Schedule timer ON: before slot → blocked with scheduled message
+3. After late join (if configured) → blocked with late join message

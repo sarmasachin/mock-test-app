@@ -6,6 +6,7 @@ import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.PATCH
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -13,6 +14,12 @@ interface AppApiService {
 
     @GET("me")
     suspend fun me(): MeResponse
+
+    @GET("me/interests")
+    suspend fun getUserInterests(): UserInterestsResponse
+
+    @PUT("me/interests")
+    suspend fun putUserInterests(@Body body: PutUserInterestsRequest): UserInterestsResponse
 
     @PATCH("me/profile")
     suspend fun patchProfile(@Body body: PatchProfileRequest): MeResponse

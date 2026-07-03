@@ -19,6 +19,7 @@ interface PublicApiService {
     @GET("tests")
     suspend fun listTests(
         @Query("subcategory") subcategory: String? = null,
+        @Query("subcategories") subcategories: String? = null,
         @Query("limit") limit: Int = 40,
     ): TestsListResponse
 

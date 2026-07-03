@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import com.freemocktest.app.newui.auth.isValidEmail
 import com.freemocktest.app.newui.auth.isValidMobile
 import com.freemocktest.app.util.TestScheduleUtils
+import com.freemocktest.app.util.UserInterestUtils
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -106,11 +107,14 @@ object AppPreferencesRepository {
     private val keyLoginTestPickDone = intPreferencesKey("login_test_pick_done")
     /** JSON array of test titles the user selected after login. */
     private val keyLoginTestPickTitles = stringPreferencesKey("login_test_pick_titles")
+    /** JSON array of subcategory interests (server-synced or picker). */
+    private val keyLoginPickedSubcategories = stringPreferencesKey("login_picked_subcategories")
+    /** 1 = user chose browse-all mode on Tests tab (Phase 4 UI). */
+    private val keyShowAllTestsCatalog = intPreferencesKey("show_all_tests_catalog")
     /** Daily Quiz only — not mock-test attempts. JSON object: date (yyyy-MM-dd) → result blob. */
     private val keyDailyQuizResultsByDayJson = stringPreferencesKey("daily_quiz_results_by_day_v1")
 
-    private const val DefaultStartSeriesLockMs = 20_000L
-    private const val DefaultStartSeriesActiveWindowMs = 30 * 60 * 1000L
+    private const val NO_TIMER_SERIES_TTL_MS = 90L * 24 * 60 * 60 * 1000
     private const val HourMs = 60 * 60 * 1000L
 
     /** Matches server `pickSixDigit()` in auth.js (100000–999999 inclusive). */
@@ -189,17 +193,142 @@ object AppPreferencesRepository {
     fun canStartTest(testName: String, pending: PendingResultState?): Boolean =
         !isTestBlockedByPendingResult(testName, pending)
 
+    /**
+     * User-facing block when starting quiz; prefers server [AppliedTestSeriesEntry.serverCanStart].
+     */
+    fun resolveStartBlockMessage(
+        appliedEntry: AppliedTestSeriesEntry?,
+        scheduleTimerEnabled: Boolean,
+        examDate: String?,
+        slotLabel: String?,
+        lateJoinMinutes: Int = 0,
+        nowMs: Long = System.currentTimeMillis(),
+    ): String? {
+        if (appliedEntry != null) {
+            when (appliedEntry.serverCanStart) {
+                true -> return null
+                false -> return appliedEntry.startBlockReason?.trim()?.takeIf { it.isNotBlank() }
+                    ?: "Cannot start this test yet"
+                null -> Unit
+            }
+        }
+        return TestScheduleUtils.examJoinBlockMessageWhenScheduleTimer(
+            scheduleTimerEnabled = scheduleTimerEnabled,
+            examDate = examDate,
+            slotLabel = slotLabel,
+            lateJoinMinutes = lateJoinMinutes,
+            nowMs = nowMs,
+        )
+    }
+
+    suspend fun findAppliedEntryNow(testName: String): AppliedTestSeriesEntry? {
+        if (!::appContext.isInitialized) return null
+        val safeName = testName.trim()
+        if (safeName.isBlank()) return null
+        val now = System.currentTimeMillis()
+        return runCatching {
+            val prefs = store().data.first()
+            parseAppliedTestSeries(prefs[keyAppliedTestSeries])
+                .firstOrNull { it.testName.equals(safeName, ignoreCase = true) && it.isActive(now) }
+        }.getOrNull()
+    }
+
+    suspend fun resolveStartBlockMessageNow(
+        testName: String,
+        scheduleTimerEnabled: Boolean,
+        examDate: String?,
+        slotLabel: String?,
+        lateJoinMinutes: Int = 0,
+    ): String? {
+        val entry = findAppliedEntryNow(testName)
+        return resolveStartBlockMessage(
+            appliedEntry = entry,
+            scheduleTimerEnabled = scheduleTimerEnabled,
+            examDate = examDate,
+            slotLabel = slotLabel,
+            lateJoinMinutes = lateJoinMinutes,
+        )
+    }
+
+    /**
+     * Replace local applied-test list from server (authoritative). Clears stale/expired ghosts.
+     */
+    suspend fun replaceAppliedTestSeriesFromServer(
+        items: List<ServerAppliedSyncItem>,
+        scheduleTimerEnabled: Boolean,
+    ): Boolean {
+        if (!::appContext.isInitialized) return false
+        val now = System.currentTimeMillis()
+        val entries = items.mapNotNull { item ->
+            buildAppliedEntryFromServerSyncItem(item, scheduleTimerEnabled, now)
+        }
+        return runCatching {
+            store().edit { prefs ->
+                prefs[keyAppliedTestSeries] = encodeAppliedTestSeries(entries)
+            }
+            true
+        }.onFailure { Log.e(TAG, "replaceAppliedTestSeriesFromServer failed", it) }
+            .getOrDefault(false)
+    }
+
     data class AppliedTestSeriesEntry(
         val testName: String,
         val unlockAtMillis: Long,
         val expiresAtMillis: Long,
         /** Future exam start from admin exam date + slot; 0 when not scheduled. */
         val scheduledStartAtMillis: Long = 0L,
+        /** Server GET /tests/my-applications — null = use local lock/join rules. */
+        val serverCanStart: Boolean? = null,
+        val startBlockReason: String? = null,
     ) {
         fun startUnlockAtMillis(nowMs: Long = System.currentTimeMillis()): Long {
             if (scheduledStartAtMillis > nowMs) return scheduledStartAtMillis
             return unlockAtMillis
         }
+
+        fun isActive(nowMs: Long = System.currentTimeMillis()): Boolean =
+            expiresAtMillis > nowMs || serverCanStart == true
+    }
+
+    /** One row from GET /tests/my-applications for atomic local replace. */
+    data class ServerAppliedSyncItem(
+        val testTitle: String,
+        val examDate: String? = null,
+        val slotLabel: String? = null,
+        val lateJoinMinutes: Int = 0,
+        val canStart: Boolean = false,
+        val startBlockReason: String? = null,
+        val joinClosesAtMillis: Long? = null,
+    )
+
+    fun buildAppliedEntryFromServerSyncItem(
+        item: ServerAppliedSyncItem,
+        scheduleTimerEnabled: Boolean,
+        nowMs: Long = System.currentTimeMillis(),
+    ): AppliedTestSeriesEntry? {
+        val title = item.testTitle.trim()
+        if (title.isBlank()) return null
+        val timing = TestScheduleUtils.resolveAppliedSeriesTiming(
+            nowMs = nowMs,
+            scheduleTimerEnabled = scheduleTimerEnabled,
+            examDate = item.examDate,
+            slotLabel = item.slotLabel,
+            lateJoinMinutes = item.lateJoinMinutes,
+        )
+        val unlockAt = when {
+            !scheduleTimerEnabled && item.canStart -> nowMs
+            else -> timing.unlockAtMillis
+        }
+        val expiresAt = item.joinClosesAtMillis?.takeIf { it > unlockAt }
+            ?: timing.expiresAtMillis
+        return AppliedTestSeriesEntry(
+            testName = title,
+            unlockAtMillis = unlockAt,
+            expiresAtMillis = expiresAt,
+            scheduledStartAtMillis = timing.scheduledStartAtMillis,
+            serverCanStart = item.canStart,
+            startBlockReason = item.startBlockReason?.trim()?.takeIf { it.isNotBlank() },
+        )
     }
 
     /**
@@ -609,6 +738,18 @@ object AppPreferencesRepository {
             }
         } ?: flowOf(emptyList())
 
+    /** Subcategory interests (local + server sync). Empty = legacy show-all catalog. */
+    val loginPickedSubcategories: Flow<List<String>>
+        get() = storeOrNull()?.data?.map { prefs ->
+            parseInterestSubcategoriesJson(prefs[keyLoginPickedSubcategories].orEmpty())
+        } ?: flowOf(emptyList())
+
+    /** When true, Tests tab shows full catalog instead of interest filter (Phase 4). */
+    val showAllTestsCatalog: Flow<Boolean>
+        get() = storeOrNull()?.data?.map { prefs ->
+            (prefs[keyShowAllTestsCatalog] ?: 0) == 1
+        } ?: flowOf(false)
+
     fun rememberTestOpened(testName: String) {
         if (!::appContext.isInitialized) return
         scope.launch {
@@ -673,75 +814,67 @@ object AppPreferencesRepository {
 
     fun addAppliedTestSeries(
         testName: String,
-        lockMs: Long = DefaultStartSeriesLockMs,
-        activeWindowMs: Long = DefaultStartSeriesActiveWindowMs,
+        scheduleTimerEnabled: Boolean = false,
+        examDate: String? = null,
+        slotLabel: String? = null,
+        lateJoinMinutes: Int = 0,
     ) {
         if (!::appContext.isInitialized) return
         scope.launch {
             runCatching {
-                addAppliedTestSeriesNow(testName, lockMs, activeWindowMs)
+                addAppliedTestSeriesNow(
+                    testName = testName,
+                    scheduleTimerEnabled = scheduleTimerEnabled,
+                    examDate = examDate,
+                    slotLabel = slotLabel,
+                    lateJoinMinutes = lateJoinMinutes,
+                )
             }.onFailure { Log.e(TAG, "addAppliedTestSeries failed", it) }
         }
     }
 
     /**
-     * Persist an applied test locally and await the DataStore write. Skips duplicate active entries
-     * for the same test title (case-insensitive).
+     * Persist an applied test locally and await the DataStore write.
+     * Replaces any active entry for the same test title (case-insensitive).
      */
     suspend fun addAppliedTestSeriesNow(
         testName: String,
-        lockMs: Long = DefaultStartSeriesLockMs,
-        activeWindowMs: Long = DefaultStartSeriesActiveWindowMs,
+        scheduleTimerEnabled: Boolean = false,
         examDate: String? = null,
         slotLabel: String? = null,
+        lateJoinMinutes: Int = 0,
+        joinClosesAtMillis: Long? = null,
+        serverCanStart: Boolean? = null,
+        startBlockReason: String? = null,
     ): Boolean {
         if (!::appContext.isInitialized) return false
         val safeName = testName.trim()
         if (safeName.isBlank()) return false
         val now = System.currentTimeMillis()
-        val safeLockMs = lockMs.coerceAtLeast(0L)
-        val safeActiveWindowMs = activeWindowMs.coerceAtLeast(60_000L)
         return runCatching {
             store().edit { prefs ->
                 val existing = parseAppliedTestSeries(prefs[keyAppliedTestSeries])
-                    .filter { it.expiresAtMillis > now }
-                val nextUnlockBase = existing
-                    .filterNot { it.testName.equals(safeName, ignoreCase = true) }
-                    .maxOfOrNull { it.expiresAtMillis } ?: now
-                val applyLockAt = maxOf(now + safeLockMs, nextUnlockBase)
-                val prior = existing.firstOrNull { it.testName.equals(safeName, ignoreCase = true) }
-                val scheduledFromInput = TestScheduleUtils.parseExamStartMillis(examDate, slotLabel)
-                val (unlockAt, scheduledStored) = when {
-                    scheduledFromInput != null -> {
-                        TestScheduleUtils.resolveUnlockAtMillis(
-                            nowMs = now,
-                            applyLockAtMillis = applyLockAt,
-                            examDate = examDate,
-                            slotLabel = slotLabel,
-                        )
-                    }
-                    prior != null && prior.scheduledStartAtMillis > now -> {
-                        prior.unlockAtMillis to prior.scheduledStartAtMillis
-                    }
-                    else -> {
-                        TestScheduleUtils.resolveUnlockAtMillis(
-                            nowMs = now,
-                            applyLockAtMillis = applyLockAt,
-                            examDate = null,
-                            slotLabel = null,
-                        )
-                    }
-                }
-                val expiresAt = TestScheduleUtils.resolveExpiresAtMillis(
-                    unlockAtMillis = unlockAt,
-                    activeWindowMs = safeActiveWindowMs,
-                    scheduledStartAtMillis = scheduledStored,
+                    .filter { it.expiresAtMillis > now || it.serverCanStart == true }
+                val timing = TestScheduleUtils.resolveAppliedSeriesTiming(
+                    nowMs = now,
+                    scheduleTimerEnabled = scheduleTimerEnabled,
+                    examDate = examDate,
+                    slotLabel = slotLabel,
+                    lateJoinMinutes = lateJoinMinutes,
                 )
+                val unlockAt = when {
+                    !scheduleTimerEnabled && serverCanStart == true -> now
+                    else -> timing.unlockAtMillis
+                }
+                val expiresAt = joinClosesAtMillis?.takeIf { it > unlockAt }
+                    ?: timing.expiresAtMillis
                 val nextEntry = AppliedTestSeriesEntry(
                     testName = safeName,
                     unlockAtMillis = unlockAt,
                     expiresAtMillis = expiresAt,
-                    scheduledStartAtMillis = scheduledStored,
+                    scheduledStartAtMillis = timing.scheduledStartAtMillis,
+                    serverCanStart = serverCanStart,
+                    startBlockReason = startBlockReason?.trim()?.takeIf { it.isNotBlank() },
                 )
                 val updated = existing
                     .filterNot { it.testName.equals(safeName, ignoreCase = true) } + nextEntry
@@ -750,6 +883,32 @@ object AppPreferencesRepository {
             true
         }.onFailure { Log.e(TAG, "addAppliedTestSeriesNow failed", it) }
             .getOrDefault(false)
+    }
+
+    /**
+     * Fix stale local entries after CMS turns schedule timer off (removes legacy 20s/30min locks).
+     */
+    suspend fun reconcileAppliedTestSeriesForTimerMode(scheduleTimerEnabled: Boolean) {
+        if (!::appContext.isInitialized || scheduleTimerEnabled) return
+        val now = System.currentTimeMillis()
+        val ttl = TestScheduleUtils.APPLIED_SERIES_NO_TIMER_TTL_MS
+        runCatching {
+            store().edit { prefs ->
+                val existing = parseAppliedTestSeries(prefs[keyAppliedTestSeries])
+                    .filter { it.expiresAtMillis > now }
+                if (existing.isEmpty()) return@edit
+                val updated = existing.map { entry ->
+                    entry.copy(
+                        unlockAtMillis = now,
+                        scheduledStartAtMillis = 0L,
+                        expiresAtMillis = now + ttl,
+                        serverCanStart = true,
+                        startBlockReason = null,
+                    )
+                }
+                prefs[keyAppliedTestSeries] = encodeAppliedTestSeries(updated)
+            }
+        }.onFailure { Log.e(TAG, "reconcileAppliedTestSeriesForTimerMode failed", it) }
     }
 
     suspend fun removeAppliedTestSeriesNow(testName: String) {
@@ -1262,6 +1421,14 @@ object AppPreferencesRepository {
                                 unlockAtMillis = unlockAt,
                                 expiresAtMillis = expiresAt,
                                 scheduledStartAtMillis = obj.optLong("scheduledStartAtMillis", 0L),
+                                serverCanStart = if (obj.has("serverCanStart")) {
+                                    obj.optBoolean("serverCanStart", false)
+                                } else {
+                                    null
+                                },
+                                startBlockReason = obj.optString("startBlockReason", "")
+                                    .trim()
+                                    .takeIf { it.isNotBlank() },
                             ),
                         )
                     }
@@ -1286,6 +1453,9 @@ object AppPreferencesRepository {
         }.getOrDefault(emptyList())
     }
 
+    private fun parseInterestSubcategoriesJson(raw: String): List<String> =
+        UserInterestUtils.normalizeInterestSubcategories(parseLoginPickedTestTitlesJson(raw))
+
     private fun encodeAppliedTestSeries(items: List<AppliedTestSeriesEntry>): String {
         val arr = JSONArray()
         items.forEach { item ->
@@ -1296,6 +1466,12 @@ object AppPreferencesRepository {
                     put("expiresAtMillis", item.expiresAtMillis)
                     if (item.scheduledStartAtMillis > 0L) {
                         put("scheduledStartAtMillis", item.scheduledStartAtMillis)
+                    }
+                    if (item.serverCanStart != null) {
+                        put("serverCanStart", item.serverCanStart)
+                    }
+                    if (!item.startBlockReason.isNullOrBlank()) {
+                        put("startBlockReason", item.startBlockReason)
                     }
                 },
             )
@@ -1640,6 +1816,8 @@ object AppPreferencesRepository {
                 prefs[keyAccountCreatedAtIso] = ""
                 prefs[keyLoginTestPickDone] = 0
                 prefs[keyLoginTestPickTitles] = "[]"
+                prefs[keyLoginPickedSubcategories] = "[]"
+                prefs[keyShowAllTestsCatalog] = 0
             }
         }.onFailure { Log.e(TAG, "clearAuthSessionPrefs failed", it) }
     }
@@ -1654,17 +1832,80 @@ object AppPreferencesRepository {
     }
 
     suspend fun saveLoginTestPick(selectedTitles: List<String>): Boolean {
+        return saveLoginInterestPick(
+            selectedSubcategories = emptyList(),
+            selectedTitles = selectedTitles,
+        )
+    }
+
+    /**
+     * Saves picker selections locally. [selectedSubcategories] is primary for interest filter.
+     * [selectedTitles] optional hints for legacy Start Test routing when subcategories empty.
+     */
+    suspend fun saveLoginInterestPick(
+        selectedSubcategories: List<String>,
+        selectedTitles: List<String> = emptyList(),
+    ): Boolean {
         if (!::appContext.isInitialized) return false
-        val arr = JSONArray()
-        selectedTitles.map { it.trim() }.filter { it.isNotBlank() }.distinct().forEach { arr.put(it) }
+        val subs = UserInterestUtils.normalizeInterestSubcategories(selectedSubcategories)
+        val subsArr = JSONArray()
+        subs.forEach { subsArr.put(it) }
+        val titlesArr = JSONArray()
+        selectedTitles.map { it.trim() }.filter { it.isNotBlank() }.distinct().forEach { titlesArr.put(it) }
         return runCatching {
             store().edit { prefs ->
-                prefs[keyLoginTestPickTitles] = arr.toString()
+                prefs[keyLoginPickedSubcategories] = subsArr.toString()
+                prefs[keyLoginTestPickTitles] = titlesArr.toString()
                 prefs[keyLoginTestPickDone] = 1
             }
             true
-        }.onFailure { Log.e(TAG, "saveLoginTestPick failed", it) }
+        }.onFailure { Log.e(TAG, "saveLoginInterestPick failed", it) }
             .getOrDefault(false)
+    }
+
+    suspend fun saveProfileUserInterests(subcategories: List<String>): Boolean {
+        val subs = UserInterestUtils.normalizeInterestSubcategories(subcategories)
+        val ok = saveLoginInterestPick(
+            selectedSubcategories = subs,
+            selectedTitles = emptyList(),
+        )
+        if (ok && subs.isNotEmpty()) {
+            setShowAllTestsCatalog(false)
+        }
+        return ok
+    }
+
+    suspend fun replaceLocalUserInterests(subcategories: List<String>) {
+        if (!::appContext.isInitialized) return
+        val subs = UserInterestUtils.normalizeInterestSubcategories(subcategories)
+        val arr = JSONArray()
+        subs.forEach { arr.put(it) }
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyLoginPickedSubcategories] = arr.toString()
+            }
+        }.onFailure { Log.e(TAG, "replaceLocalUserInterests failed", it) }
+    }
+
+    suspend fun peekLoginPickedSubcategories(): List<String> {
+        if (!::appContext.isInitialized) return emptyList()
+        val prefs = runCatching { store().data.first() }.getOrNull() ?: return emptyList()
+        return parseInterestSubcategoriesJson(prefs[keyLoginPickedSubcategories].orEmpty())
+    }
+
+    suspend fun setShowAllTestsCatalog(showAll: Boolean) {
+        if (!::appContext.isInitialized) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyShowAllTestsCatalog] = if (showAll) 1 else 0
+            }
+        }.onFailure { Log.e(TAG, "setShowAllTestsCatalog failed", it) }
+    }
+
+    suspend fun peekShowAllTestsCatalog(): Boolean {
+        if (!::appContext.isInitialized) return false
+        val prefs = runCatching { store().data.first() }.getOrNull() ?: return false
+        return (prefs[keyShowAllTestsCatalog] ?: 0) == 1
     }
 
     suspend fun peekLoginPickedTestTitles(): List<String> {

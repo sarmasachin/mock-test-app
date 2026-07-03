@@ -1,0 +1,74 @@
+Phase 2 — Android interest data + server sync
+===========================================
+Status: COMPLETE
+Last updated: 2026-07-01
+
+WHAT CHANGED (Android)
+----------------------
+- UserInterestUtils.kt — mirrors server userInterests.js
+- AppPreferencesRepository:
+    loginPickedSubcategories Flow
+    showAllTestsCatalog Flow (for Phase 4 UI; default false)
+    saveLoginInterestPick(), replaceLocalUserInterests()
+- AuthRepository:
+    syncUserInterestsFromServer() — GET /v1/me/interests after login
+    saveUserInterestsToServer() — PUT /v1/me/interests from picker
+    Background sync on login / register / Google / session refresh
+- ContentRepository:
+    TestCardNew.subcategory on API cards + disk cache
+    loadInterestSubcategoriesForPicker()
+    loadTestsForUserInterests()
+    deriveSubcategoriesFromTestTitles()
+    filterCatalogByInterests()
+- SelectLoginTestsScreenNew:
+    On Continue → derive subcategories from picked tests → local save → PUT server
+
+NOT CHANGED (safe / Phase 3+)
+-------------------------------
+- Tests tab / SeeAllCategories still show ALL categories (Phase 4 filter UI)
+- Start Test still uses loginPickedTestTitles for labels
+- show_to_users admin checkbox (Phase 1b)
+- Empty interests → show all catalog (legacy)
+
+BEHAVIOUR
+---------
+1. User picks tests on post-login screen.
+2. App derives subcategory from each test card (fallback: title).
+3. Saves locally + PUT /me/interests (best effort; local wins if offline).
+4. On next login / cold start, GET /me/interests restores interests.
+5. If server empty but old titles exist locally → migrate titles → subs once.
+
+API (requires Phase 1 server deployed)
+--------------------------------------
+GET  /v1/me/interests
+PUT  /v1/me/interests  { "subcategories": ["HP GK"] }
+GET  /v1/tests?subcategories=HP GK,SSC
+
+404 on interests endpoints → local-only mode (old server).
+
+FILES
+-----
+  app/.../util/UserInterestUtils.kt
+  app/.../data/AppPreferencesRepository.kt
+  app/.../data/AuthRepository.kt
+  app/.../data/ContentRepository.kt
+  app/.../data/remote/AppApiService.kt, ApiModels.kt, PublicApiService.kt
+  app/.../newui/tests/TestsScreenNew.kt (TestCardNew.subcategory)
+  app/.../newui/auth/SelectLoginTestsScreenNew.kt
+
+VERIFY
+------
+  cd server && npm run verify:interest-phase0 && npm run verify:interest-phase1
+
+MANUAL QA
+---------
+1. Deploy Phase 1 server
+2. Login → picker → select tests → Continue
+3. curl GET /v1/me/interests with token → subcategories match
+4. Logout → login same user → interests restored (picker skipped)
+5. Airplane mode on Continue → local save works, toast not blocking
+
+NEXT
+----
+  Phase 3 — subcategory-based picker UI
+  Phase 4 — Tests tab interest filter + browse all toggle

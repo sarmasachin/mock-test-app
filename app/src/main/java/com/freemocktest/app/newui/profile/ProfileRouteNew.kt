@@ -49,6 +49,7 @@ private object ProfileInnerRoutes {
     const val MOBILE = "profile_edit_mobile"
     const val DOB = "profile_edit_dob"
     const val GENDER = "profile_edit_gender"
+    const val INTERESTS = "profile_edit_interests"
     const val PASSWORD = "profile_edit_password"
     const val NOTIFICATIONS = "profile_notifications"
     const val HELP_SUPPORT = "profile_help_support"
@@ -130,6 +131,7 @@ fun ProfileRouteNew(
                         onEditMobile = { innerNav.navigate(ProfileInnerRoutes.MOBILE) },
                         onEditDob = { innerNav.navigate(ProfileInnerRoutes.DOB) },
                         onEditGender = { innerNav.navigate(ProfileInnerRoutes.GENDER) },
+                        onEditInterests = { innerNav.navigate(ProfileInnerRoutes.INTERESTS) },
                         onEditPassword = { innerNav.navigate(ProfileInnerRoutes.PASSWORD) },
                         onOpenNotifications = { innerNav.navigate(ProfileInnerRoutes.NOTIFICATIONS) },
                         onOpenHelpSupport = { innerNav.navigate(ProfileInnerRoutes.HELP_SUPPORT) },
@@ -215,6 +217,13 @@ fun ProfileRouteNew(
                 composable(ProfileInnerRoutes.GENDER) {
                     ProfileEditGenderScreen(
                         onBack = { innerNav.popBackStack() },
+                    )
+                }
+                composable(ProfileInnerRoutes.INTERESTS) {
+                    ProfileEditInterestsScreen(
+                        onBack = { innerNav.popBackStack() },
+                        onSaved = { msg -> onEditSuccess(msg) },
+                        onError = onEditError,
                     )
                 }
                 composable(ProfileInnerRoutes.PASSWORD) {

@@ -1,0 +1,39 @@
+Phase 4 — Tests tab interest filter + browse all (Android)
+============================================================
+Status: COMPLETE
+Last updated: 2026-07-01
+
+WHAT CHANGED
+------------
+- SeeAllCategoriesScreenNew (Tests tab):
+    Default: sirf user interests se match hone wale exam branches
+    Title "Mere exams" when filter active
+    Toggle: "Saare tests dekho" ↔ "Sirf mere tests"
+    Empty filter match → CTA to browse all
+- TestsScreenNew:
+    Home/deep link se non-interest subcategory → soft block + "Saare tests dekho"
+
+RULES (safe)
+------------
+- interests empty → saari categories (legacy)
+- showAllTestsCatalog = true → saari categories
+- Toggle persisted in DataStore (logout clears)
+
+NOT CHANGED
+-----------
+- Home → See All still uses same screen + toggle (global pref)
+- Apply / Start / cycle logic unchanged
+
+FILES
+-----
+  app/.../home/SeeAllCategoriesScreenNew.kt
+  app/.../tests/TestsScreenNew.kt
+
+MANUAL QA
+---------
+1. Login → pick HP GK → Tests tab → sirf HP GK branch dikhe
+2. "Saare tests dekho" → saari categories
+3. "Sirf mere tests" → wapas filter
+4. Home se dusra exam open → gate + browse all
+
+NEXT: Phase 5 — Profile interest edit + Start Test polish

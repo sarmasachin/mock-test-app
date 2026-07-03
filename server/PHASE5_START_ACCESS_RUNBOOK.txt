@@ -1,0 +1,27 @@
+Phase 5 — Start Test UI (server-aware)
+=======================================
+
+Goal
+----
+Correct screen when user is already applied but local list is empty/stale:
+never show "Apply Now" again; show Start card with server block reason.
+
+UI rules
+--------
+- showSpecificStart: single test route + server/local entry exists → Start card
+- showSpecificApply: only when NOT applied on server
+- Status line: full server startBlockReason
+- Button: short label ("Start Test (Locked)") — reason on status line only
+- Home Start Test quick action: subtitle from server canStart / startBlockReason
+
+Verify (offline)
+----------------
+  cd server
+  npm run verify:start-access-phase5
+
+Manual QA
+---------
+1. Apply → Start screen (single test deep link) → back → reopen same test
+   → must see Start card, NOT "Apply Now"
+2. Timer OFF → "Ready to start" + green Start button
+3. Timer ON before slot → status shows scheduled message, button locked

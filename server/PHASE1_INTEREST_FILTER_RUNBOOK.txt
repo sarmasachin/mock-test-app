@@ -1,0 +1,69 @@
+Phase 1 — User interests API (server)
+=====================================
+Status: COMPLETE
+Last updated: 2026-07-01
+
+WHAT CHANGED
+------------
+- New table: user_test_interests (auto-created on server boot + route first hit)
+- New API (auth required):
+    GET  /v1/me/interests   → { subcategories: string[] }
+    PUT  /v1/me/interests   → body { subcategories: string[] }
+- Extended public catalog (backward compatible):
+    GET /v1/tests?subcategories=HP GK,SSC
+    GET /v1/tests?subcategories=HP GK&subcategories=SSC
+
+NOT CHANGED (safe)
+------------------
+- GET /v1/tests without subcategories → same as before (all published visible)
+- GET /v1/tests?subcategory=X → unchanged (single filter wins if both sent)
+- show_to_users column → Phase 1b (not in this phase)
+- Android app → Phase 2 (old app ignores new endpoints)
+
+API RULES
+---------
+PUT /v1/me/interests
+  - subcategories: required array (may be empty = clear interests = legacy show-all)
+  - max 20 items, trim, case-insensitive dedupe
+  - replaces all previous rows atomically (transaction)
+
+GET /v1/me/interests
+  - returns sorted subcategories
+  - empty array if user never saved interests
+
+GET /v1/tests?subcategories=
+  - only used when subcategory (singular) query is absent
+  - OR match: subcategory ILIKE '%each%'
+  - still filtered by is_published + catalog visibility (publishAt etc.)
+
+FILES
+-----
+  server/src/lib/userInterests.js       (+ query/body helpers)
+  server/src/lib/userInterestsDb.js     (new)
+  server/src/routes/me.js               (GET/PUT /interests)
+  server/src/routes/tests.js            (optional subcategories filter)
+  server/src/index.js                   (CREATE TABLE on boot)
+
+VERIFY (offline)
+----------------
+  cd server
+  npm run verify:interest-phase0
+  npm run verify:interest-phase1
+
+MANUAL API QA (with token)
+--------------------------
+  curl -H "Authorization: Bearer $TOKEN" https://HOST/v1/me/interests
+  curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d '{"subcategories":["HP GK","SSC CGL"]}' https://HOST/v1/me/interests
+  curl "https://HOST/v1/tests?subcategories=HP%20GK,SSC"
+
+DEPLOY
+------
+1. Deploy server only (safe before app update)
+2. Table creates automatically — no manual migration step
+3. Phase 2: Android sync
+
+NEXT
+----
+  Phase 1b — tests.show_to_users admin checkbox + catalog filter
+  Phase 2  — Android AppPreferencesRepository + AuthRepository sync

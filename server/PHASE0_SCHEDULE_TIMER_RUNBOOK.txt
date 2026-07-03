@@ -1,0 +1,54 @@
+Phase 0 — Remove fixed 20s/30min start lock; admin schedule-timer checkbox
+============================================================================
+
+WHAT CHANGED
+------------
+- REMOVED: startSeriesLockSeconds (20 sec) and startSeriesActiveWindowMinutes (30 min)
+- ADDED: startSeriesScheduleTimerEnabled (boolean, default false)
+
+BEHAVIOUR
+---------
+Timer OFF (default):
+  - User applies → Start button available immediately
+  - Re-apply after test cycle is governed by server cycle/republish (unchanged)
+  - No artificial 20 sec countdown, no 30 min expiry window
+
+Timer ON:
+  - User applies → locked until exam date + slot (if set on test)
+  - Expiry uses lateJoinMinutes from test config, else 24h from scheduled start
+  - No fixed 20 sec / 30 min values
+
+ADMIN
+-----
+Home Content → checkbox: "Schedule timer (lock start until exam date/slot)"
+  - Unchecked = instant start after apply (recommended for practice/cycle tests)
+  - Checked = date-based lock for scheduled exams
+
+FILES TOUCHED
+-------------
+- server/src/routes/admin.js
+- admin-web/src/App.tsx
+- app/.../TestScheduleUtils.kt
+- app/.../AppPreferencesRepository.kt
+- app/.../ContentRepository.kt, ApiModels.kt, AuthRepository.kt
+- app/.../ApplyForTestScreenNew.kt, StartTestPreviewScreenNew.kt, HomeScreenNew.kt
+
+VERIFY (offline)
+----------------
+  cd server
+  node scripts/verifyScheduleTimerPhase0.js
+
+MANUAL QA
+---------
+1. Admin: Home Content → ensure checkbox unchecked → Save
+2. App: Apply for test → Start Test screen → "Ready to start" (no 00:00:20 countdown)
+3. Admin: Enable schedule timer → Save
+4. Create/publish test with exam date tomorrow + slot 10:00 AM
+5. App: Apply → shows "Locked until <date>" not 20 sec countdown
+6. Test cycle: after cycle ends, between_cycles blocks apply until republish (unchanged)
+
+DEPLOY ORDER
+------------
+1. Deploy server (API accepts new field; old fields ignored on save)
+2. Deploy admin-web (new checkbox)
+3. Ship Android app (reads new field; default false if missing)

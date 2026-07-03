@@ -201,6 +201,18 @@ async function ensureOptionalColumns() {
        )`,
     );
     await pool.query(
+      `CREATE TABLE IF NOT EXISTS user_test_interests (
+         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         subcategory VARCHAR(120) NOT NULL,
+         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+         PRIMARY KEY (user_id, subcategory)
+       )`,
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_user_test_interests_user
+       ON user_test_interests (user_id)`,
+    );
+    await pool.query(
       `ALTER TABLE test_attempts
        ADD COLUMN IF NOT EXISTS client_submission_id VARCHAR(120)`,
     );

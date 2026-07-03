@@ -1,0 +1,62 @@
+Phase 1 — Schedule timer hardening (public API + stale local entry migration)
+================================================================================
+
+DEPENDS ON
+----------
+Phase 0 (startSeriesScheduleTimerEnabled checkbox; 20s/30min removed)
+
+WHAT PHASE 1 ADDS
+-----------------
+1. Public GET /home/content sanitizes timer field and strips legacy keys:
+   - startSeriesLockSeconds
+   - startSeriesActiveWindowMinutes
+
+2. Android reconciles stale local applied-test entries when timer is OFF:
+   - Clears future unlockAt from old 20 sec locks
+   - Clears scheduledStartAtMillis
+   - Extends expiresAt to 90-day TTL (cycle/server still governs re-apply)
+
+3. UI respects scheduleTimerEnabled everywhere:
+   - Home start-series card: no countdown when timer off
+   - Start Test preview (specific apply path): no exam-date lock when timer off
+   - Applied list unlock uses nowMs when timer off (belt + suspenders)
+
+4. DB migration script normalizeHomeContent.js strips legacy keys from homeContent
+
+FILES
+-----
+- server/src/routes/home.js
+- server/scripts/normalizeHomeContent.js
+- app/.../AppPreferencesRepository.kt (reconcileAppliedTestSeriesForTimerMode)
+- app/.../AuthRepository.kt
+- app/.../HomeScreenNew.kt
+- app/.../StartTestPreviewScreenNew.kt
+- app/.../ApplyForTestScreenNew.kt
+- app/.../TestScheduleUtils.kt (APPLIED_SERIES_NO_TIMER_TTL_MS public)
+
+VERIFY (offline)
+----------------
+  cd server
+  npm run verify:schedule-timer-phase0
+  npm run verify:schedule-timer-phase1
+
+OPTIONAL DB MIGRATION (production once)
+---------------------------------------
+  cd server
+  node scripts/normalizeHomeContent.js
+
+MANUAL QA
+---------
+1. Install OLD app build OR manually have applied test with countdown
+2. Deploy Phase 1 server + admin (timer checkbox OFF) + new Android
+3. Open Home → start-series card shows no countdown / Ready
+4. Apply → Start Test → immediate start (timer off)
+5. Admin: enable schedule timer + test with tomorrow 10 AM
+6. Apply → locked until exam time (not 20 sec)
+
+DEPLOY ORDER
+------------
+1. Server (home.js sanitize)
+2. node scripts/normalizeHomeContent.js on VPS DB (optional, safe)
+3. Admin-web (unchanged from Phase 0 if already deployed)
+4. Android app Phase 1 build

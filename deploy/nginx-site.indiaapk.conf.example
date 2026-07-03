@@ -1,3 +1,5 @@
+# DEPRECATED — do not use. Use nginx-site.govmocktest.conf.example + deploy/DEPLOY.txt
+# Old domain indiaapk.com — production is admin-admin.govmocktest.com only.
 # Copy to VPS: /etc/nginx/sites-available/indiaapk.com
 # sudo cp nginx-site.indiaapk.conf.example /etc/nginx/sites-available/indiaapk.com
 # Adjust root paths and ssl cert names if needed.

@@ -14,6 +14,7 @@ import com.freemocktest.app.data.remote.PasswordResetRequestBody
 import com.freemocktest.app.data.remote.PasswordResetRequestResponse
 import com.freemocktest.app.data.remote.RefreshRequest
 import com.freemocktest.app.data.remote.GoogleSignInRequestBody
+import com.freemocktest.app.data.remote.PutUserInterestsRequest
 import com.freemocktest.app.data.remote.RegisterRequest
 import com.freemocktest.app.data.remote.AuthUserDto
 import com.freemocktest.app.data.remote.RetrofitProvider
@@ -21,6 +22,8 @@ import com.freemocktest.app.data.remote.TextMessageBody
 import com.freemocktest.app.data.remote.ApplyTestResponse
 import com.freemocktest.app.data.remote.MyTestApplicationDto
 import com.freemocktest.app.data.remote.TestWaitlistStatusResponse
+import com.freemocktest.app.util.TestScheduleUtils
+import com.freemocktest.app.util.UserInterestUtils
 import com.freemocktest.app.notifications.PushTokenRegistrar
 import com.google.gson.JsonParser
 import java.io.IOException
@@ -152,6 +155,7 @@ object AuthRepository {
             }
             AppPreferencesRepository.setAuthBootstrapState(status)
             PushTokenRegistrar.syncInBackground(appContext)
+            syncUserInterestsInBackground()
             status
         } catch (e: HttpException) {
             if (e.code() == 401) {
@@ -194,6 +198,7 @@ object AuthRepository {
                 }
                 AppPreferencesRepository.setAuthBootstrapState(status)
                 PushTokenRegistrar.syncInBackground(appContext)
+                syncUserInterestsInBackground()
             }.onFailure { e ->
                 if (e is HttpException && e.code() == 401) {
                     runCatching { clearSession() }
@@ -249,6 +254,7 @@ object AuthRepository {
                 },
             )
             PushTokenRegistrar.syncInBackground(appContext)
+            syncUserInterestsInBackground()
             Result.success(resp.user)
         } catch (e: HttpException) {
             Result.failure(Exception(parseHttpError(e)))
@@ -282,6 +288,7 @@ object AuthRepository {
                 },
             )
             PushTokenRegistrar.syncInBackground(appContext)
+            syncUserInterestsInBackground()
             Result.success(resp.user)
         } catch (e: HttpException) {
             Result.failure(Exception(parseHttpError(e)))
@@ -329,6 +336,7 @@ object AuthRepository {
                 },
             )
             PushTokenRegistrar.syncInBackground(appContext)
+            syncUserInterestsInBackground()
             Result.success(resp.user)
         } catch (e: HttpException) {
             Result.failure(Exception(parseHttpError(e)))
@@ -664,8 +672,7 @@ object AuthRepository {
     }
 
     suspend fun syncAppliedTestSeriesFromServer(
-        lockMs: Long = 20_000L,
-        activeWindowMs: Long = 30 * 60 * 1000L,
+        scheduleTimerEnabled: Boolean = false,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         loadStoredTokens()
         if (accessTokenMem.isNullOrBlank()) {
@@ -673,17 +680,20 @@ object AuthRepository {
         }
         try {
             val resp = RetrofitProvider.appApi.getMyTestApplications()
-            for (item in resp.items) {
-                val title = item.testTitle.trim()
-                if (title.isBlank()) continue
-                AppPreferencesRepository.addAppliedTestSeriesNow(
-                    testName = title,
-                    lockMs = lockMs,
-                    activeWindowMs = activeWindowMs,
+            val syncItems = resp.items.map { item ->
+                AppPreferencesRepository.ServerAppliedSyncItem(
+                    testTitle = item.testTitle,
                     examDate = item.examDate,
                     slotLabel = item.slotLabel,
+                    canStart = item.canStart,
+                    startBlockReason = item.startBlockReason,
+                    joinClosesAtMillis = TestScheduleUtils.parseIsoMillis(item.joinClosesAt),
                 )
             }
+            AppPreferencesRepository.replaceAppliedTestSeriesFromServer(
+                items = syncItems,
+                scheduleTimerEnabled = scheduleTimerEnabled,
+            )
             Result.success(Unit)
         } catch (e: HttpException) {
             Result.failure(Exception(parseHttpError(e)))
@@ -719,6 +729,71 @@ object AuthRepository {
             Result.success(resp)
         } catch (e: HttpException) {
             Result.failure(Exception(parseHttpError(e)))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun syncUserInterestsInBackground() {
+        backgroundScope.launch {
+            runCatching { syncUserInterestsFromServer() }
+                .onFailure { e -> Log.w(TAG, "syncUserInterestsFromServer failed", e) }
+        }
+    }
+
+    /** Pull interests from server into local prefs. Safe no-op when offline or endpoint missing. */
+    suspend fun syncUserInterestsFromServer(): Result<List<String>> = withContext(Dispatchers.IO) {
+        loadStoredTokens()
+        if (accessTokenMem.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("Sign in required"))
+        }
+        try {
+            val resp = RetrofitProvider.appApi.getUserInterests()
+            val serverSubs = UserInterestUtils.normalizeInterestSubcategories(resp.subcategories)
+            if (serverSubs.isNotEmpty()) {
+                AppPreferencesRepository.replaceLocalUserInterests(serverSubs)
+            } else {
+                val localSubs = AppPreferencesRepository.peekLoginPickedSubcategories()
+                if (localSubs.isEmpty()) {
+                    val migrated = ContentRepository.deriveSubcategoriesFromTestTitles(
+                        AppPreferencesRepository.peekLoginPickedTestTitles(),
+                    )
+                    if (migrated.isNotEmpty()) {
+                        AppPreferencesRepository.replaceLocalUserInterests(migrated)
+                    }
+                }
+            }
+            Result.success(AppPreferencesRepository.peekLoginPickedSubcategories())
+        } catch (e: HttpException) {
+            if (e.code() == 404) {
+                Result.success(AppPreferencesRepository.peekLoginPickedSubcategories())
+            } else {
+                Result.failure(Exception(parseHttpError(e)))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /** Save interests to server and mirror locally. Local picker can succeed even if this fails. */
+    suspend fun saveUserInterestsToServer(subcategories: List<String>): Result<List<String>> = withContext(Dispatchers.IO) {
+        loadStoredTokens()
+        if (accessTokenMem.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("Sign in required"))
+        }
+        val normalized = UserInterestUtils.normalizeInterestSubcategories(subcategories)
+        try {
+            val resp = RetrofitProvider.appApi.putUserInterests(PutUserInterestsRequest(normalized))
+            val saved = UserInterestUtils.normalizeInterestSubcategories(resp.subcategories)
+            AppPreferencesRepository.replaceLocalUserInterests(saved)
+            Result.success(saved)
+        } catch (e: HttpException) {
+            if (e.code() == 404) {
+                AppPreferencesRepository.replaceLocalUserInterests(normalized)
+                Result.success(normalized)
+            } else {
+                Result.failure(Exception(parseHttpError(e)))
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }

@@ -37,7 +37,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.collectAsState
+import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.ContentRepository
+import com.freemocktest.app.util.UserInterestUtils
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -92,6 +96,7 @@ data class TestCardNew(
     val attemptsAllowedCount: Int = 1,
     val questionCountValue: Int = 0,
     val totalMarksValue: Int = 0,
+    val subcategory: String = "",
 )
 
 private const val TESTS_LOAD_ERROR_MESSAGE = "Couldn't load tests. Check your connection and try again."
@@ -107,6 +112,13 @@ fun TestsScreenNew(
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val scope = rememberCoroutineScope()
+    val userInterests by AppPreferencesRepository.loginPickedSubcategories.collectAsState(initial = emptyList())
+    val showAllTests by AppPreferencesRepository.showAllTestsCatalog.collectAsState(initial = false)
+    val interestBlocked = remember(subcategory, userInterests, showAllTests) {
+        !showAllTests &&
+            UserInterestUtils.normalizeInterestSubcategories(userInterests).isNotEmpty() &&
+            !UserInterestUtils.subcategoryMatchesAnyInterest(subcategory, userInterests)
+    }
 
     var tests by remember(subcategory) { mutableStateOf<List<TestCardNew>>(emptyList()) }
     var testsLoading by remember(subcategory) { mutableStateOf(true) }
@@ -114,7 +126,13 @@ fun TestsScreenNew(
     var testsReloadKey by remember(subcategory) { mutableIntStateOf(0) }
     var navInFlight by remember(subcategory) { mutableStateOf(false) }
 
-    LaunchedEffect(subcategory, testsReloadKey) {
+    LaunchedEffect(subcategory, testsReloadKey, interestBlocked) {
+        if (interestBlocked) {
+            tests = emptyList()
+            testsLoadError = false
+            testsLoading = false
+            return@LaunchedEffect
+        }
         testsLoadError = false
         try {
             val cached = runCatching { ContentRepository.loadCachedTestsForSubcategory(subcategory) }
@@ -185,6 +203,37 @@ fun TestsScreenNew(
                     .weight(1f),
             ) {
                 when {
+                    interestBlocked -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 18.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Text(
+                                text = "\"$subcategory\" aapke chune exams me nahi hai.",
+                                color = p.textSecondary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            TextButton(
+                                onClick = {
+                                    scope.launch {
+                                        AppPreferencesRepository.setShowAllTestsCatalog(true)
+                                        testsReloadKey += 1
+                                    }
+                                },
+                            ) {
+                                Text(
+                                    text = "Saare tests dekho",
+                                    color = p.systemBlue,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                    }
                     testsLoading && tests.isEmpty() && !testsLoadError -> {
                         Box(
                             modifier = Modifier.fillMaxSize(),

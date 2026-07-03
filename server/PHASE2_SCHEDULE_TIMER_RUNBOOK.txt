@@ -1,0 +1,58 @@
+Phase 2 — Live E2E smoke (read-only API + optional DB cross-check)
+===============================================================
+
+DEPENDS ON
+----------
+Phase 0 + Phase 1 (schedule timer checkbox, sanitize, Android reconcile)
+
+WHAT PHASE 2 ADDS
+-----------------
+1. Shared lib server/src/lib/homeContentPublicSanitize.js
+   - Single source of truth for public home timer sanitization
+   - Used by: home route, normalizeHomeContent.js, offline verify, live E2E
+
+2. Live read-only E2E script (no DB writes, no admin mutations):
+   - GET /home/content → startSeriesScheduleTimerEnabled present; legacy keys absent
+   - GET /tests → catalog still works (apply flow unchanged)
+   - POST /auth/login + GET /tests/my-applications → examDate/slotLabel for Android sync
+   - --with-db: API timer flag matches DB homeContent after sanitize
+   - --with-db: counts published tests with examDate when timer ON
+
+VERIFY (offline, no API required)
+---------------------------------
+  cd server
+  npm run verify:schedule-timer-phase0
+  npm run verify:schedule-timer-phase1
+  npm run verify:schedule-timer-phase2
+
+LIVE E2E (API must be running)
+------------------------------
+  cd server
+  npm start
+  # new terminal:
+  npm run e2e:schedule-timer-phase2
+  npm run e2e:schedule-timer-phase2 -- --with-db
+
+  Production (read-only):
+  node scripts/e2eScheduleTimerPhase2.js --api https://admin-admin.govmocktest.com/v1 --with-db
+
+OPTIONAL DB CLEANUP (once per environment)
+------------------------------------------
+  node scripts/normalizeHomeContent.js
+
+MANUAL QA AFTER E2E PASS
+------------------------
+1. Timer OFF: Apply → Start Test → "Ready to start" (no 00:00:20)
+2. Timer ON + exam date tomorrow: Apply → locked until exam time
+3. Test cycle: between_cycles still blocks re-apply until republish
+
+DEPLOY ORDER
+------------
+1. Deploy server (includes homeContentPublicSanitize.js)
+2. npm run e2e:schedule-timer-phase2 -- --with-db on staging
+3. node scripts/normalizeHomeContent.js on production DB (optional)
+4. Deploy admin-web + Android (Phase 0–1 builds)
+
+REMAINING
+---------
+Phase 3 (optional): production deploy checklist + manual sign-off on VPS

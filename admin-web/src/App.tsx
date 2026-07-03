@@ -466,8 +466,8 @@ type HomeContentSettings = {
   quickActionSections: HomeQuickActionSection[];
   banners: HomeBannerItem[];
   newsSlides: HomeNewsSlideItem[];
-  startSeriesLockSeconds: number;
-  startSeriesActiveWindowMinutes: number;
+  /** When true, users wait until exam date/slot to start; when false, start right after apply. */
+  startSeriesScheduleTimerEnabled: boolean;
 };
 type AuditLogItem = {
   id: number;
@@ -5663,8 +5663,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
     ],
     banners: [],
     newsSlides: [],
-    startSeriesLockSeconds: 20,
-    startSeriesActiveWindowMinutes: 30,
+    startSeriesScheduleTimerEnabled: false,
   });
   const [newsItems, setNewsItems] = useState<ArticleItem[]>([]);
   const [newSectionTitle, setNewSectionTitle] = useState('');
@@ -5994,8 +5993,7 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
                 enabled: slide.enabled !== false,
               }))
             : [],
-          startSeriesLockSeconds: Number(home.startSeriesLockSeconds || 20),
-          startSeriesActiveWindowMinutes: Number(home.startSeriesActiveWindowMinutes || 30),
+          startSeriesScheduleTimerEnabled: home.startSeriesScheduleTimerEnabled === true,
         });
         setSectionItemsDraft({});
       }
@@ -6359,22 +6357,16 @@ function HomeContentTab({ apiClient }: { apiClient: typeof api }) {
         <button type="button" onClick={addJobCategoryMenuItem}>Add Job Menu Category</button>
         <input value={newExamCategoryMenuTitle} onChange={(e) => setNewExamCategoryMenuTitle(e.target.value)} placeholder="Exam menu category (e.g. Admit Card)" />
         <button type="button" onClick={addExamCategoryMenuItem}>Add Exam Menu Category</button>
-        <input
-          type="number"
-          min={0}
-          max={86400}
-          value={settings.startSeriesLockSeconds}
-          onChange={(e) => setSettings((p) => ({ ...p, startSeriesLockSeconds: Number(e.target.value || 0) }))}
-          placeholder="Start lock seconds"
-        />
-        <input
-          type="number"
-          min={1}
-          max={10080}
-          value={settings.startSeriesActiveWindowMinutes}
-          onChange={(e) => setSettings((p) => ({ ...p, startSeriesActiveWindowMinutes: Number(e.target.value || 1) }))}
-          placeholder="Active window minutes"
-        />
+        <label className="inline-check">
+          <input
+            type="checkbox"
+            checked={settings.startSeriesScheduleTimerEnabled}
+            onChange={(e) =>
+              setSettings((p) => ({ ...p, startSeriesScheduleTimerEnabled: e.target.checked }))
+            }
+          />
+          <span>Schedule timer (lock start until exam date/slot)</span>
+        </label>
       </div>
       <div className="inline-form">
         <input

@@ -15,6 +15,12 @@ const {
 } = require('../mail');
 const { checkEmailVerificationUser } = require('../lib/otpSendRateLimit');
 const { recordNotificationOpen } = require('../lib/pushCampaignAnalytics');
+const { validatePutInterestsBody } = require('../lib/userInterests');
+const {
+  ensureUserTestInterestsTable,
+  loadUserTestInterests,
+  replaceUserTestInterests,
+} = require('../lib/userInterestsDb');
 
 const router = express.Router();
 const { isProtectedSuperAdminDbEmail } = require('../constants/protectedSuperAdminEmails');
@@ -731,6 +737,34 @@ router.post('/notification-open', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to record notification open' });
+  }
+});
+
+/** GET /v1/me/interests — saved exam subcategory interests (empty = legacy show-all). */
+router.get('/interests', async (req, res) => {
+  try {
+    await ensureUserTestInterestsTable(pool);
+    const subcategories = await loadUserTestInterests(pool, req.userId);
+    return res.json({ subcategories });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load interests' });
+  }
+});
+
+/** PUT /v1/me/interests — replace interests (max 20, trim, dedupe). */
+router.put('/interests', async (req, res) => {
+  const validated = validatePutInterestsBody(req.body);
+  if (validated.error) {
+    return res.status(400).json({ error: validated.error });
+  }
+  try {
+    await ensureUserTestInterestsTable(pool);
+    const subcategories = await replaceUserTestInterests(pool, req.userId, validated.subcategories);
+    return res.json({ subcategories });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to save interests' });
   }
 });
 

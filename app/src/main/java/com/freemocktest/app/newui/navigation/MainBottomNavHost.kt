@@ -232,16 +232,25 @@ fun MainBottomNavHost(
             val card = runCatching {
                 ContentRepository.loadTestByTitle(safeName, allowDefaultFallback = false)
             }.getOrNull()
-            if (card != null) {
-                val blockMsg = TestScheduleUtils.examJoinBlockMessage(
-                    card.examDate,
-                    card.slotLabel,
-                    card.lateJoinMinutes,
-                )
-                if (blockMsg != null) {
-                    Toast.makeText(context, blockMsg, Toast.LENGTH_LONG).show()
-                    return@launch
+            val home = runCatching { ContentRepository.loadHomeContent() }.getOrNull()
+            val scheduleTimerEnabled = home?.startSeriesScheduleTimerEnabled == true
+            if (AppPreferencesRepository.findAppliedEntryNow(safeName) == null) {
+                runCatching {
+                    AuthRepository.syncAppliedTestSeriesFromServer(
+                        scheduleTimerEnabled = scheduleTimerEnabled,
+                    )
                 }
+            }
+            val blockMsg = AppPreferencesRepository.resolveStartBlockMessageNow(
+                testName = safeName,
+                scheduleTimerEnabled = scheduleTimerEnabled,
+                examDate = card?.examDate,
+                slotLabel = card?.slotLabel,
+                lateJoinMinutes = card?.lateJoinMinutes ?: 0,
+            )
+            if (blockMsg != null) {
+                Toast.makeText(context, blockMsg, Toast.LENGTH_LONG).show()
+                return@launch
             }
             val attemptsUsed = TestHistoryRepository.countAttempts(attemptsUserKey, safeName)
             val lastAttemptAt = TestHistoryRepository.lastAttemptAtMillis(attemptsUserKey, safeName)
@@ -583,16 +592,18 @@ fun MainBottomNavHost(
                             val card = runCatching {
                                 ContentRepository.loadTestByTitle(test.trim(), allowDefaultFallback = false)
                             }.getOrNull()
-                            if (card != null) {
-                                val blockMsg = TestScheduleUtils.examJoinBlockMessage(
-                                    card.examDate,
-                                    card.slotLabel,
-                                    card.lateJoinMinutes,
-                                )
-                                if (blockMsg != null) {
-                                    Toast.makeText(context, blockMsg, Toast.LENGTH_LONG).show()
-                                    return@launch
-                                }
+                            val home = runCatching { ContentRepository.loadHomeContent() }.getOrNull()
+                            val scheduleTimerEnabled = home?.startSeriesScheduleTimerEnabled == true
+                            val blockMsg = AppPreferencesRepository.resolveStartBlockMessageNow(
+                                testName = test.trim(),
+                                scheduleTimerEnabled = scheduleTimerEnabled,
+                                examDate = card?.examDate,
+                                slotLabel = card?.slotLabel,
+                                lateJoinMinutes = card?.lateJoinMinutes ?: 0,
+                            )
+                            if (blockMsg != null) {
+                                Toast.makeText(context, blockMsg, Toast.LENGTH_LONG).show()
+                                return@launch
                             }
                             mainNavController.navigateToStartTestPreview(test)
                         }
@@ -616,7 +627,12 @@ fun MainBottomNavHost(
                         val safeSelectedName = selectedTestName.ifBlank { name.ifBlank { "applied" } }
                         mainNavController.navigate("${RoutesNew.APPLY}/$safeSelectedName")
                     },
-                    onBrowseTests = { mainNavController.navigateMainTab(MainTabRoutes.Tests) },
+                    onBrowseTests = {
+                        scope.launch {
+                            AppPreferencesRepository.setShowAllTestsCatalog(true)
+                            mainNavController.navigateMainTab(MainTabRoutes.Tests)
+                        }
+                    },
                 )
             }
 
@@ -652,17 +668,26 @@ fun MainBottomNavHost(
                     val card = runCatching {
                         ContentRepository.loadTestByTitle(decodedQuizName, allowDefaultFallback = false)
                     }.getOrNull()
-                    if (card != null) {
-                        val blockMsg = TestScheduleUtils.examJoinBlockMessage(
-                            card.examDate,
-                            card.slotLabel,
-                            card.lateJoinMinutes,
-                        )
-                        if (blockMsg != null) {
-                            Toast.makeText(context, blockMsg, Toast.LENGTH_LONG).show()
-                            mainNavController.goToHomeTab()
-                            return@LaunchedEffect
+                    val home = runCatching { ContentRepository.loadHomeContent() }.getOrNull()
+                    val scheduleTimerEnabled = home?.startSeriesScheduleTimerEnabled == true
+                    if (AppPreferencesRepository.findAppliedEntryNow(decodedQuizName) == null) {
+                        runCatching {
+                            AuthRepository.syncAppliedTestSeriesFromServer(
+                                scheduleTimerEnabled = scheduleTimerEnabled,
+                            )
                         }
+                    }
+                    val blockMsg = AppPreferencesRepository.resolveStartBlockMessageNow(
+                        testName = decodedQuizName,
+                        scheduleTimerEnabled = scheduleTimerEnabled,
+                        examDate = card?.examDate,
+                        slotLabel = card?.slotLabel,
+                        lateJoinMinutes = card?.lateJoinMinutes ?: 0,
+                    )
+                    if (blockMsg != null) {
+                        Toast.makeText(context, blockMsg, Toast.LENGTH_LONG).show()
+                        mainNavController.goToHomeTab()
+                        return@LaunchedEffect
                     }
                     val attemptsUsed = TestHistoryRepository.countAttempts(attemptsUserKey, decodedQuizName)
                     val lastAttemptAt = TestHistoryRepository.lastAttemptAtMillis(attemptsUserKey, decodedQuizName)

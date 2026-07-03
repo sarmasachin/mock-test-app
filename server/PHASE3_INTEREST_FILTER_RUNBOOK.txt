@@ -1,0 +1,39 @@
+Phase 3 — Subcategory interest picker UI (Android)
+==================================================
+Status: COMPLETE
+Last updated: 2026-07-01
+
+WHAT CHANGED
+------------
+- SelectLoginTestsScreenNew redesigned:
+    Title: "Apne exams chunein"
+    Lists exam subcategories (examCategories level3), NOT individual test titles
+    Shows published test count per category (e.g. "3 tests")
+    Min 1 selection when categories exist
+    Continue → save subcategories + PUT /v1/me/interests
+- ContentRepository.loadInterestSubcategoriesForPicker():
+    Counts from published catalog
+    Fallback: catalog subcategories when examCategories empty
+- ContentRepository.sampleTitlesForSubcategories():
+    One hint title per sub for Start Test display
+- StartTestPreviewScreenNew:
+    Shows subcategory names when titles empty ("Aapke exams")
+
+NOT CHANGED (safe)
+------------------
+- Tests tab still shows ALL categories (Phase 4)
+- Empty categories → Continue without selection (legacy show-all)
+- Phase 1 server required for sync; local save works offline
+
+ADMIN REQUIREMENT
+-----------------
+examCategories.level3 should match test.subcategory for counts and filtering.
+
+VERIFY
+------
+1. Login → picker shows exam names (HP GK, SSC CGL, …) not 100 test titles
+2. Select 1+ → Continue → Home
+3. Start Test → "Aapke exams" with selected names
+4. GET /v1/me/interests → same subcategories
+
+NEXT: Phase 4 — Tests tab filter + "Saare tests dekho" toggle

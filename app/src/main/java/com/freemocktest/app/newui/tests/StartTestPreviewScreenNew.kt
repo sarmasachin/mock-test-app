@@ -62,9 +62,11 @@ import androidx.compose.ui.unit.sp
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
+import com.freemocktest.app.data.remote.MyTestApplicationDto
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import com.freemocktest.app.util.TestScheduleUtils
+import com.freemocktest.app.util.UserInterestUtils
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -95,11 +97,34 @@ fun StartTestPreviewScreenNew(
     val appliedSeries by AppPreferencesRepository.appliedTestSeries.collectAsState(initial = emptyList())
     val pendingResult by AppPreferencesRepository.pendingResultState.collectAsState(initial = null)
     val loginPickedTitles by AppPreferencesRepository.loginPickedTestTitles.collectAsState(initial = emptyList())
-    val pickedTitlesForApply = remember(loginPickedTitles) {
-        loginPickedTitles
+    val loginPickedSubcategories by AppPreferencesRepository.loginPickedSubcategories.collectAsState(initial = emptyList())
+    val showAllTests by AppPreferencesRepository.showAllTestsCatalog.collectAsState(initial = false)
+    val normalizedSubs = remember(loginPickedSubcategories) {
+        UserInterestUtils.normalizeInterestSubcategories(loginPickedSubcategories)
+    }
+    val interestDisplayLabels = remember(normalizedSubs, loginPickedTitles) {
+        if (normalizedSubs.isNotEmpty()) {
+            normalizedSubs
+        } else {
+            loginPickedTitles
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinctBy { it.lowercase(Locale.US) }
+        }
+    }
+    val pickedTitlesForApply = remember(loginPickedTitles, loginPickedSubcategories) {
+        val titles = loginPickedTitles
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .distinctBy { it.lowercase(Locale.US) }
+        if (titles.isNotEmpty()) {
+            titles
+        } else {
+            loginPickedSubcategories
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinctBy { it.lowercase(Locale.US) }
+        }
     }
     val isListRoute = remember(testName) { isGenericStartTestRoute(testName) }
     /** Specific catalog title when opening a single test (Apply flow); null on the applied-tests list route. */
@@ -111,6 +136,9 @@ fun StartTestPreviewScreenNew(
         }
     }
     var testSnapshot by remember(specificTestName) { mutableStateOf<TestCardNew?>(null) }
+    var resolveAlreadyApplied by remember(specificTestName) { mutableStateOf(false) }
+    var resolveSnapshot by remember(specificTestName) { mutableStateOf<ContentRepository.TestApplyResolveSnapshot?>(null) }
+    var matchedServerApplication by remember(specificTestName) { mutableStateOf<MyTestApplicationDto?>(null) }
     /** True until applied-tests sync from server finishes on first load / resume refresh. */
     var appliedSyncLoading by remember { mutableStateOf(true) }
     /** True until a specific (non-list) test card load settles. */
@@ -119,6 +147,7 @@ fun StartTestPreviewScreenNew(
     var lastPrimaryNavAt by remember { mutableLongStateOf(0L) }
     /** Bumped by Retry / ON_RESUME to force enrollment refresh after apply or background return. */
     var reloadKey by remember(testName) { mutableIntStateOf(0) }
+    var scheduleTimerEnabled by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -135,12 +164,11 @@ fun StartTestPreviewScreenNew(
         appliedSyncLoading = true
         try {
             val home = runCatching { ContentRepository.loadHomeContent() }.getOrNull()
-            val lockMs = (home?.startSeriesLockSeconds ?: 20).coerceAtLeast(0).toLong() * 1000L
-            val activeWindowMs = (home?.startSeriesActiveWindowMinutes ?: 30).coerceAtLeast(1).toLong() * 60_000L
+            scheduleTimerEnabled = home?.startSeriesScheduleTimerEnabled == true
+            AppPreferencesRepository.reconcileAppliedTestSeriesForTimerMode(scheduleTimerEnabled)
             runCatching {
                 AuthRepository.syncAppliedTestSeriesFromServer(
-                    lockMs = lockMs,
-                    activeWindowMs = activeWindowMs,
+                    scheduleTimerEnabled = scheduleTimerEnabled,
                 )
             }
         } catch (e: CancellationException) {
@@ -166,6 +194,23 @@ fun StartTestPreviewScreenNew(
                 ContentRepository.loadTestForApplyScreen(target, forceRefresh = true)
             }.getOrNull()
             testSnapshot = loadResult?.effectiveCard ?: testSnapshot
+            resolveSnapshot = loadResult?.resolveSnapshot
+            resolveAlreadyApplied =
+                loadResult?.resolveSnapshot?.alreadyAppliedInCurrentCycle == true ||
+                    loadResult?.resolveSnapshot?.canStart == true
+            matchedServerApplication = null
+            if (!resolveAlreadyApplied) {
+                val apps = runCatching { AuthRepository.loadMyTestApplications() }.getOrNull()?.getOrNull()
+                matchedServerApplication = apps?.firstOrNull { app ->
+                    app.testTitle.equals(target, ignoreCase = true)
+                }
+                resolveAlreadyApplied = matchedServerApplication != null
+            } else {
+                val apps = runCatching { AuthRepository.loadMyTestApplications() }.getOrNull()?.getOrNull()
+                matchedServerApplication = apps?.firstOrNull { app ->
+                    app.testTitle.equals(target, ignoreCase = true)
+                }
+            }
         } catch (e: CancellationException) {
             throw e
         } finally {
@@ -208,21 +253,45 @@ fun StartTestPreviewScreenNew(
 
     val activeAppliedEntries = remember(appliedSeries, nowMs) {
         appliedSeries
-            .filter { it.expiresAtMillis > nowMs }
+            .filter { it.expiresAtMillis > nowMs || it.serverCanStart == true }
             .sortedBy { (it.startUnlockAtMillis(nowMs) - nowMs).coerceAtLeast(0L) }
     }
-    val hiddenExpiredCount = remember(appliedSeries, activeAppliedEntries) {
-        (appliedSeries.size - activeAppliedEntries.size).coerceAtLeast(0)
+    val hiddenExpiredCount = remember(appliedSeries, nowMs) {
+        appliedSeries.count { !it.isActive(nowMs) }
     }
     val specificTest = testSnapshot
+    val specificStartEntry = remember(
+        appliedSeries,
+        matchedServerApplication,
+        resolveSnapshot,
+        specificTestName,
+        scheduleTimerEnabled,
+        nowMs,
+    ) {
+        val name = specificTestName?.trim().orEmpty()
+        if (name.isBlank()) return@remember null
+        appliedSeries.firstOrNull { it.testName.equals(name, ignoreCase = true) && it.isActive(nowMs) }
+            ?: matchedServerApplication?.let { app ->
+                appliedEntryFromServerApplication(app, scheduleTimerEnabled, nowMs)
+            }
+            ?: resolveSnapshot?.let { snap ->
+                appliedEntryFromResolveSnapshot(name, snap, scheduleTimerEnabled, nowMs)
+            }
+    }
     val unlockAt = remember(specificTest?.examDate, specificTest?.slotLabel) {
         TestScheduleUtils.parseExamStartMillis(specificTest?.examDate, specificTest?.slotLabel)
     }
-    val fallbackRemainingMs = unlockAt?.let { (it - nowMs).coerceAtLeast(0L) } ?: 0L
+    val fallbackRemainingMs = if (scheduleTimerEnabled) {
+        unlockAt?.let { (it - nowMs).coerceAtLeast(0L) } ?: 0L
+    } else {
+        0L
+    }
     val fallbackLocked = fallbackRemainingMs > 0L
     val showAppliedList = activeAppliedEntries.isNotEmpty()
     val showLoading = appliedSyncLoading || (specificTestName != null && primaryLoading && !showAppliedList)
-    val showSpecificApply = !showAppliedList && !showLoading && specificTest != null
+    val showSpecificStart = !showAppliedList && !showLoading && specificTest != null && specificStartEntry != null
+    val showSpecificApply = !showAppliedList && !showLoading && specificTest != null &&
+        !showSpecificStart && !resolveAlreadyApplied
     val showEmptyList = isListRoute && !showAppliedList && !showLoading
     val showSpecificLoadError = !isListRoute && !showAppliedList && !showLoading && specificTest == null && specificTestName != null
 
@@ -258,11 +327,13 @@ fun StartTestPreviewScreenNew(
             }
             Spacer(Modifier.height(12.dp))
 
-            if (pickedTitlesForApply.isNotEmpty()) {
-                val label = if (pickedTitlesForApply.size == 1) {
-                    "Your selected test"
-                } else {
-                    "Your selected tests"
+            if (interestDisplayLabels.isNotEmpty()) {
+                val fromSubs = normalizedSubs.isNotEmpty()
+                val label = when {
+                    fromSubs && interestDisplayLabels.size == 1 -> "Aapka exam"
+                    fromSubs -> "Aapke exams"
+                    interestDisplayLabels.size == 1 -> "Your selected test"
+                    else -> "Your selected tests"
                 }
                 Text(
                     text = label,
@@ -272,11 +343,22 @@ fun StartTestPreviewScreenNew(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = pickedTitlesForApply.joinToString(separator = " · "),
+                    text = interestDisplayLabels.joinToString(separator = " · "),
                     color = p.textSecondary,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
+                if (fromSubs && !showAllTests) {
+                    Spacer(Modifier.height(6.dp))
+                    TextButton(onClick = onBrowseTests) {
+                        Text(
+                            text = "Saare tests browse karein",
+                            color = p.systemBlue,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                        )
+                    }
+                }
                 Spacer(Modifier.height(12.dp))
             }
 
@@ -312,109 +394,19 @@ fun StartTestPreviewScreenNew(
                         Spacer(Modifier.height(14.dp))
                         return@forEach
                     }
-                    val card = snapshot
-                    val cardScheduledMs = TestScheduleUtils.parseExamStartMillis(card.examDate, card.slotLabel)
-                    val effectiveUnlockMs = when {
-                        cardScheduledMs != null && cardScheduledMs > nowMs -> cardScheduledMs
-                        entry.scheduledStartAtMillis > nowMs -> entry.scheduledStartAtMillis
-                        else -> entry.startUnlockAtMillis(nowMs)
-                    }
-                    val remainingMs = (effectiveUnlockMs - nowMs).coerceAtLeast(0L)
-                    val totalLockMs = (entry.expiresAtMillis - effectiveUnlockMs).coerceAtLeast(1L)
-                    val hours = (remainingMs / 3_600_000L).toInt()
-                    val mins = ((remainingMs % 3_600_000L) / 60_000L).toInt()
-                    val secs = ((remainingMs % 60_000L) / 1_000L).toInt()
-                    val countdown = String.format(Locale.US, "%02d:%02d:%02d", hours, mins, secs)
-                    val isLocked = remainingMs > 0L
-                    val joinAllowed = TestScheduleUtils.isExamJoinAllowed(
-                        card.examDate,
-                        card.slotLabel,
-                        card.lateJoinMinutes,
-                        nowMs,
-                    )
-                    val lateJoinClosed = !isLocked && !joinAllowed &&
-                        TestScheduleUtils.isExamStartAllowed(card.examDate, card.slotLabel, nowMs)
-                    val isPendingResult = AppPreferencesRepository.isTestBlockedByPendingResult(name, pendingResult)
-                    val progress = if (isLocked) {
-                        1f - (remainingMs.toFloat() / totalLockMs.toFloat()).coerceIn(0f, 1f)
-                    } else {
-                        1f
-                    }
-                    PreviewCard(test = card)
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CountdownProgressRing(
-                            progress = progress,
-                            locked = isLocked,
-                            countdown = countdown,
-                        )
-                        TestStatusChip(
-                            locked = isLocked,
-                            countdown = countdown,
-                        )
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = when {
-                            isPendingResult -> "Result will be available soon"
-                            lateJoinClosed ->
-                                "Late join closed at ${TestScheduleUtils.formatLateJoinClosedLabel(card.examDate, card.slotLabel, card.lateJoinMinutes)}"
-                            isLocked && cardScheduledMs != null && cardScheduledMs > nowMs ->
-                                "Locked until ${TestScheduleUtils.formatExamStartLabel(card.examDate, card.slotLabel)}"
-                            isLocked -> "Starts in $countdown"
-                            else -> "Ready to start"
-                        },
-                        color = p.textSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = {
-                            if (card.title.isBlank() || isPendingResult || isLocked || !joinAllowed) return@Button
+                    AppliedTestStartCardSection(
+                        entry = entry,
+                        card = snapshot,
+                        scheduleTimerEnabled = scheduleTimerEnabled,
+                        nowMs = nowMs,
+                        pendingResult = pendingResult,
+                        onRequestStart = { title ->
                             val now = System.currentTimeMillis()
-                            if (now - lastPrimaryNavAt < 600L) return@Button
+                            if (now - lastPrimaryNavAt < 600L) return@AppliedTestStartCardSection
                             lastPrimaryNavAt = now
-                            onStartTest(card.title)
+                            onStartTest(title)
                         },
-                        enabled = !isLocked && !isPendingResult && card.title.isNotBlank() && joinAllowed,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp),
-                        shape = RoundedCornerShape(999.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isLocked) p.border else Color(0xFF10B65A),
-                            contentColor = Color.White,
-                            disabledContainerColor = p.border,
-                            disabledContentColor = Color.White.copy(alpha = 0.9f),
-                        ),
-                    ) {
-                        Icon(
-                            imageVector = when {
-                                isPendingResult -> Icons.Outlined.Lock
-                                isLocked || lateJoinClosed -> Icons.Outlined.Lock
-                                else -> Icons.Outlined.PlayArrow
-                            },
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(Modifier.size(8.dp))
-                        Text(
-                            text = when {
-                                isPendingResult -> "Result Pending"
-                                lateJoinClosed -> "Late Join Closed"
-                                isLocked -> "Start Test (Locked)"
-                                else -> "Start Test"
-                            },
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    Spacer(Modifier.height(14.dp))
+                    )
                 }
             } else if (showLoading) {
                 Box(
@@ -459,7 +451,7 @@ fun StartTestPreviewScreenNew(
                             ),
                         ) {
                             Text(
-                                text = "Browse Tests",
+                                text = "Saare tests browse karein",
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
                             )
@@ -500,6 +492,22 @@ fun StartTestPreviewScreenNew(
                         }
                     }
                 }
+            } else if (showSpecificStart) {
+                val test = specificTest!!
+                val entry = specificStartEntry!!
+                AppliedTestStartCardSection(
+                    entry = entry,
+                    card = test,
+                    scheduleTimerEnabled = scheduleTimerEnabled,
+                    nowMs = nowMs,
+                    pendingResult = pendingResult,
+                    onRequestStart = { title ->
+                        val now = System.currentTimeMillis()
+                        if (now - lastPrimaryNavAt < 600L) return@AppliedTestStartCardSection
+                        lastPrimaryNavAt = now
+                        onStartTest(title)
+                    },
+                )
             } else if (showSpecificApply) {
                 val test = specificTest!!
                 PreviewCard(test = test)
@@ -764,4 +772,174 @@ private fun CountdownProgressRing(
             fontWeight = FontWeight.SemiBold,
         )
     }
+}
+
+private fun appliedEntryFromServerApplication(
+    app: MyTestApplicationDto,
+    scheduleTimerEnabled: Boolean,
+    nowMs: Long,
+): AppPreferencesRepository.AppliedTestSeriesEntry? {
+    return AppPreferencesRepository.buildAppliedEntryFromServerSyncItem(
+        AppPreferencesRepository.ServerAppliedSyncItem(
+            testTitle = app.testTitle,
+            examDate = app.examDate,
+            slotLabel = app.slotLabel,
+            canStart = app.canStart,
+            startBlockReason = app.startBlockReason,
+            joinClosesAtMillis = TestScheduleUtils.parseIsoMillis(app.joinClosesAt),
+        ),
+        scheduleTimerEnabled = scheduleTimerEnabled,
+        nowMs = nowMs,
+    )
+}
+
+private fun appliedEntryFromResolveSnapshot(
+    testName: String,
+    snap: ContentRepository.TestApplyResolveSnapshot,
+    scheduleTimerEnabled: Boolean,
+    nowMs: Long,
+): AppPreferencesRepository.AppliedTestSeriesEntry? {
+    if (!snap.alreadyAppliedInCurrentCycle && !snap.canStart) return null
+    val card = snap.card
+    return AppPreferencesRepository.buildAppliedEntryFromServerSyncItem(
+        AppPreferencesRepository.ServerAppliedSyncItem(
+            testTitle = testName,
+            examDate = card.examDate,
+            slotLabel = card.slotLabel,
+            lateJoinMinutes = card.lateJoinMinutes,
+            canStart = snap.canStart,
+            startBlockReason = snap.startBlockReason,
+            joinClosesAtMillis = TestScheduleUtils.parseIsoMillis(snap.joinClosesAt),
+        ),
+        scheduleTimerEnabled = scheduleTimerEnabled,
+        nowMs = nowMs,
+    )
+}
+
+@Composable
+private fun AppliedTestStartCardSection(
+    entry: AppPreferencesRepository.AppliedTestSeriesEntry,
+    card: TestCardNew,
+    scheduleTimerEnabled: Boolean,
+    nowMs: Long,
+    pendingResult: AppPreferencesRepository.PendingResultState?,
+    onRequestStart: (String) -> Unit,
+) {
+    val p = mockTestPalette()
+    val name = entry.testName.trim()
+    val cardScheduledMs = TestScheduleUtils.parseExamStartMillis(card.examDate, card.slotLabel)
+    val serverAuthoritative = entry.serverCanStart != null
+    val effectiveUnlockMs = when {
+        serverAuthoritative && entry.serverCanStart == true && !scheduleTimerEnabled -> nowMs
+        scheduleTimerEnabled && cardScheduledMs != null && cardScheduledMs > nowMs -> cardScheduledMs
+        scheduleTimerEnabled && entry.scheduledStartAtMillis > nowMs -> entry.scheduledStartAtMillis
+        else -> if (scheduleTimerEnabled) entry.startUnlockAtMillis(nowMs) else nowMs
+    }
+    val remainingMs = (effectiveUnlockMs - nowMs).coerceAtLeast(0L)
+    val totalLockMs = (entry.expiresAtMillis - effectiveUnlockMs).coerceAtLeast(1L)
+    val hours = (remainingMs / 3_600_000L).toInt()
+    val mins = ((remainingMs % 3_600_000L) / 60_000L).toInt()
+    val secs = ((remainingMs % 60_000L) / 1_000L).toInt()
+    val countdown = String.format(Locale.US, "%02d:%02d:%02d", hours, mins, secs)
+    val isLocked = when {
+        serverAuthoritative && entry.serverCanStart == true -> false
+        serverAuthoritative && entry.serverCanStart == false -> true
+        else -> remainingMs > 0L
+    }
+    val joinAllowed = when {
+        serverAuthoritative -> entry.serverCanStart == true
+        else -> TestScheduleUtils.isExamJoinAllowedWhenScheduleTimer(
+            scheduleTimerEnabled = scheduleTimerEnabled,
+            examDate = card.examDate,
+            slotLabel = card.slotLabel,
+            lateJoinMinutes = card.lateJoinMinutes,
+            nowMs = nowMs,
+        )
+    }
+    val lateJoinClosed = !serverAuthoritative && scheduleTimerEnabled && !isLocked && !joinAllowed &&
+        TestScheduleUtils.isExamStartAllowed(card.examDate, card.slotLabel, nowMs)
+    val isPendingResult = AppPreferencesRepository.isTestBlockedByPendingResult(name, pendingResult)
+    val canStartNow = !isPendingResult && joinAllowed && !isLocked && card.title.isNotBlank()
+    val progress = if (isLocked) {
+        1f - (remainingMs.toFloat() / totalLockMs.toFloat()).coerceIn(0f, 1f)
+    } else {
+        1f
+    }
+    val statusMessage = when {
+        isPendingResult -> "Result will be available soon"
+        serverAuthoritative && !entry.startBlockReason.isNullOrBlank() && !canStartNow ->
+            entry.startBlockReason!!
+        lateJoinClosed ->
+            "Late join closed at ${TestScheduleUtils.formatLateJoinClosedLabel(card.examDate, card.slotLabel, card.lateJoinMinutes)}"
+        isLocked && scheduleTimerEnabled && cardScheduledMs != null && cardScheduledMs > nowMs ->
+            "Locked until ${TestScheduleUtils.formatExamStartLabel(card.examDate, card.slotLabel)}"
+        isLocked -> "Starts in $countdown"
+        else -> "Ready to start"
+    }
+    val buttonLabel = when {
+        isPendingResult -> "Result Pending"
+        lateJoinClosed -> "Late Join Closed"
+        isLocked -> "Start Test (Locked)"
+        else -> "Start Test"
+    }
+
+    PreviewCard(test = card)
+    Spacer(Modifier.height(8.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CountdownProgressRing(
+            progress = progress,
+            locked = isLocked,
+            countdown = countdown,
+        )
+        TestStatusChip(
+            locked = isLocked,
+            countdown = countdown,
+        )
+    }
+    Spacer(Modifier.height(6.dp))
+    Text(
+        text = statusMessage,
+        color = p.textSecondary,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Medium,
+    )
+    Spacer(Modifier.height(8.dp))
+    Button(
+        onClick = {
+            if (!canStartNow) return@Button
+            onRequestStart(card.title)
+        },
+        enabled = canStartNow,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp),
+        shape = RoundedCornerShape(999.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (isLocked) p.border else Color(0xFF10B65A),
+            contentColor = Color.White,
+            disabledContainerColor = p.border,
+            disabledContentColor = Color.White.copy(alpha = 0.9f),
+        ),
+    ) {
+        Icon(
+            imageVector = when {
+                isPendingResult -> Icons.Outlined.Lock
+                isLocked || lateJoinClosed -> Icons.Outlined.Lock
+                else -> Icons.Outlined.PlayArrow
+            },
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.size(8.dp))
+        Text(
+            text = buttonLabel,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+    Spacer(Modifier.height(14.dp))
 }

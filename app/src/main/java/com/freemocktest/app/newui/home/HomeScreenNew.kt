@@ -162,6 +162,7 @@ private data class StartSeriesCardState(
     val isLocked: Boolean,
     val countdownText: String,
     val activeTestName: String?,
+    val statusSubtitle: String = "",
 )
 
 @Composable
@@ -285,9 +286,10 @@ fun HomeScreenNew(
     val appliedSeries by AppPreferencesRepository.appliedTestSeries.collectAsState(initial = emptyList())
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var hiddenSessionAt by remember { mutableStateOf(0L) }
-    val startSeriesState = remember(appliedSeries, nowMs, pendingResult) {
+    var scheduleTimerEnabled by remember { mutableStateOf(false) }
+    val startSeriesState = remember(appliedSeries, nowMs, pendingResult, scheduleTimerEnabled) {
         val eligible = appliedSeries
-            .filter { nowMs < it.expiresAtMillis }
+            .filter { nowMs < it.expiresAtMillis || it.serverCanStart == true }
             .sortedBy { it.startUnlockAtMillis(nowMs) }
             .firstOrNull { entry ->
                 !AppPreferencesRepository.isTestBlockedByPendingResult(entry.testName, pendingResult)
@@ -297,17 +299,38 @@ fun HomeScreenNew(
                 isLocked = false,
                 countdownText = "",
                 activeTestName = null,
+                statusSubtitle = "",
             )
         } else {
-            val remainingMs = (eligible.startUnlockAtMillis(nowMs) - nowMs).coerceAtLeast(0L)
+            val serverAuthoritative = eligible.serverCanStart != null
+            val remainingMs = when {
+                eligible.serverCanStart == true -> 0L
+                !scheduleTimerEnabled -> 0L
+                serverAuthoritative && eligible.serverCanStart == false -> 0L
+                else -> (eligible.startUnlockAtMillis(nowMs) - nowMs).coerceAtLeast(0L)
+            }
             val hours = (remainingMs / 3_600_000L).toInt()
             val mins = ((remainingMs % 3_600_000L) / 60_000L).toInt()
             val secs = ((remainingMs % 60_000L) / 1_000L).toInt()
             val countdown = String.format("%02d:%02d:%02d", hours, mins, secs)
+            val isLocked = when {
+                eligible.serverCanStart == true -> false
+                eligible.serverCanStart == false -> true
+                !scheduleTimerEnabled -> false
+                else -> remainingMs > 0L
+            }
+            val statusSubtitle = when {
+                eligible.serverCanStart == false ->
+                    eligible.startBlockReason?.trim()?.takeIf { it.isNotBlank() } ?: "Cannot start yet"
+                isLocked -> "Starts in $countdown"
+                eligible.testName.isNotBlank() -> "Ready to start"
+                else -> ""
+            }
             StartSeriesCardState(
-                isLocked = remainingMs > 0L,
+                isLocked = isLocked,
                 countdownText = countdown,
                 activeTestName = eligible.testName,
+                statusSubtitle = statusSubtitle,
             )
         }
     }
@@ -534,9 +557,9 @@ fun HomeScreenNew(
         refreshUnreadCounts()
         runCatching {
             val home = ContentRepository.loadHomeContent()
-            val lockMs = (home?.startSeriesLockSeconds ?: 20).coerceAtLeast(0).toLong() * 1000L
-            val activeWindowMs = (home?.startSeriesActiveWindowMinutes ?: 30).coerceAtLeast(1).toLong() * 60_000L
-            AuthRepository.syncAppliedTestSeriesFromServer(lockMs = lockMs, activeWindowMs = activeWindowMs)
+            scheduleTimerEnabled = home?.startSeriesScheduleTimerEnabled == true
+            AppPreferencesRepository.reconcileAppliedTestSeriesForTimerMode(scheduleTimerEnabled)
+            AuthRepository.syncAppliedTestSeriesFromServer(scheduleTimerEnabled = scheduleTimerEnabled)
         }
     }
 
@@ -588,13 +611,12 @@ fun HomeScreenNew(
                             homeRemoteRefreshFailed = true
                         }
                         val homeForSync = remote ?: runCatching { ContentRepository.loadHomeContent() }.getOrNull()
-                        val lockMs = (homeForSync?.startSeriesLockSeconds ?: 20).coerceAtLeast(0).toLong() * 1000L
-                        val activeWindowMs = (homeForSync?.startSeriesActiveWindowMinutes ?: 30)
-                            .coerceAtLeast(1).toLong() * 60_000L
+                        val timerEnabled = homeForSync?.startSeriesScheduleTimerEnabled == true
+                        scheduleTimerEnabled = timerEnabled
+                        AppPreferencesRepository.reconcileAppliedTestSeriesForTimerMode(timerEnabled)
                         runCatching {
                             AuthRepository.syncAppliedTestSeriesFromServer(
-                                lockMs = lockMs,
-                                activeWindowMs = activeWindowMs,
+                                scheduleTimerEnabled = timerEnabled,
                             )
                         }
                     } catch (e: CancellationException) {
@@ -1829,10 +1851,12 @@ private fun ActionsGrid(
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 rowItems.forEach { item ->
                     val isStartSeries = item.actionKey == "startTest"
-                    val subtitle = if (isStartSeries && startSeriesState.isLocked) {
-                        "Starts in ${startSeriesState.countdownText}"
-                    } else {
-                        ""
+                    val subtitle = when {
+                        isStartSeries && startSeriesState.statusSubtitle.isNotBlank() ->
+                            startSeriesState.statusSubtitle
+                        isStartSeries && startSeriesState.isLocked ->
+                            "Starts in ${startSeriesState.countdownText}"
+                        else -> ""
                     }
                     ActionCard(
                         title = item.title,

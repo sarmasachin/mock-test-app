@@ -91,37 +91,79 @@ object TestScheduleUtils {
         return formatter.format(java.time.Instant.ofEpochMilli(startMs).atZone(EXAM_ZONE))
     }
 
-    /**
-     * When a future exam is scheduled, unlock at that time; otherwise use the post-apply CMS lock.
-     */
-    fun resolveUnlockAtMillis(
-        nowMs: Long,
-        applyLockAtMillis: Long,
+    fun isExamJoinAllowedWhenScheduleTimer(
+        scheduleTimerEnabled: Boolean,
         examDate: String?,
         slotLabel: String?,
-    ): Pair<Long, Long> {
-        val scheduledStart = parseExamStartMillis(examDate, slotLabel)
-        val unlockAt = when {
-            scheduledStart != null && scheduledStart > nowMs -> scheduledStart
-            else -> applyLockAtMillis
-        }
-        val scheduledStored = scheduledStart?.takeIf { it > 0L } ?: 0L
-        return unlockAt to scheduledStored
+        lateJoinMinutes: Int = 0,
+        nowMs: Long = System.currentTimeMillis(),
+    ): Boolean {
+        if (!scheduleTimerEnabled) return true
+        return isExamJoinAllowed(examDate, slotLabel, lateJoinMinutes, nowMs)
     }
 
-    /** Active window starts at unlock; for scheduled exams keep visible through the take window. */
-    fun resolveExpiresAtMillis(
-        unlockAtMillis: Long,
-        activeWindowMs: Long,
-        scheduledStartAtMillis: Long = 0L,
-    ): Long {
-        val safeWindow = activeWindowMs.coerceAtLeast(60_000L)
-        val base = unlockAtMillis + safeWindow
-        return if (scheduledStartAtMillis > 0L) {
-            maxOf(base, scheduledStartAtMillis + safeWindow)
-        } else {
-            base
+    fun examJoinBlockMessageWhenScheduleTimer(
+        scheduleTimerEnabled: Boolean,
+        examDate: String?,
+        slotLabel: String?,
+        lateJoinMinutes: Int = 0,
+        nowMs: Long = System.currentTimeMillis(),
+    ): String? {
+        if (!scheduleTimerEnabled) return null
+        return examJoinBlockMessage(examDate, slotLabel, lateJoinMinutes, nowMs)
+    }
+
+    /**
+     * Resolve unlock/expiry for a locally stored applied test entry.
+     * - Timer OFF: immediate start; long TTL (cycle/server governs re-apply).
+     * - Timer ON: lock until exam date/slot; expiry uses late-join window from scheduled start.
+     */
+    data class AppliedSeriesTiming(
+        val unlockAtMillis: Long,
+        val expiresAtMillis: Long,
+        val scheduledStartAtMillis: Long,
+    )
+
+    /** Keep applied entries visible when schedule timer is off (also used for local reconcile). */
+    const val APPLIED_SERIES_NO_TIMER_TTL_MS = 90L * 24 * 60 * 60 * 1000
+
+    /** Default join window for scheduled tests when admin omitted lateJoinMinutes. */
+    private const val DEFAULT_SCHEDULED_JOIN_WINDOW_MS = 24L * 60 * 60 * 1000
+
+    fun resolveAppliedSeriesTiming(
+        nowMs: Long,
+        scheduleTimerEnabled: Boolean,
+        examDate: String?,
+        slotLabel: String?,
+        lateJoinMinutes: Int = 0,
+    ): AppliedSeriesTiming {
+        if (!scheduleTimerEnabled) {
+            return AppliedSeriesTiming(
+                unlockAtMillis = nowMs,
+                expiresAtMillis = nowMs + APPLIED_SERIES_NO_TIMER_TTL_MS,
+                scheduledStartAtMillis = 0L,
+            )
         }
+        val scheduledStart = parseExamStartMillis(examDate, slotLabel)
+        if (scheduledStart == null) {
+            return AppliedSeriesTiming(
+                unlockAtMillis = nowMs,
+                expiresAtMillis = nowMs + APPLIED_SERIES_NO_TIMER_TTL_MS,
+                scheduledStartAtMillis = 0L,
+            )
+        }
+        val unlockAt = if (scheduledStart > nowMs) scheduledStart else nowMs
+        val joinWindowMs = if (lateJoinMinutes > 0) {
+            lateJoinMinutes.coerceAtLeast(0) * 60_000L
+        } else {
+            DEFAULT_SCHEDULED_JOIN_WINDOW_MS
+        }
+        val expiresAt = maxOf(scheduledStart + joinWindowMs, unlockAt + 60_000L)
+        return AppliedSeriesTiming(
+            unlockAtMillis = unlockAt,
+            expiresAtMillis = expiresAt,
+            scheduledStartAtMillis = scheduledStart,
+        )
     }
 
     fun isTestListingVisible(

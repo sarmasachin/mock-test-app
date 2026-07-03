@@ -77,6 +77,14 @@ data class MeResponse(
     val user: AuthUserDto,
 )
 
+data class UserInterestsResponse(
+    val subcategories: List<String> = emptyList(),
+)
+
+data class PutUserInterestsRequest(
+    val subcategories: List<String>,
+)
+
 data class PatchProfileRequest(
     val displayName: String? = null,
     val email: String? = null,
@@ -393,8 +401,7 @@ data class HomeContentDto(
     @SerializedName("quickActionSections") val quickActionSections: List<HomeQuickActionSectionDto> = emptyList(),
     val banners: List<HomeBannerDto> = emptyList(),
     @SerializedName("newsSlides") val newsSlides: List<HomeNewsSlideDto> = emptyList(),
-    @SerializedName("startSeriesLockSeconds") val startSeriesLockSeconds: Int? = null,
-    @SerializedName("startSeriesActiveWindowMinutes") val startSeriesActiveWindowMinutes: Int? = null,
+    @SerializedName("startSeriesScheduleTimerEnabled") val startSeriesScheduleTimerEnabled: Boolean? = null,
 )
 
 data class SubmitApplicationContentDto(
@@ -569,6 +576,9 @@ data class MyTestApplicationDto(
     @SerializedName("remainingSeats") val remainingSeats: Int = 0,
     @SerializedName("slotLabel") val slotLabel: String? = null,
     @SerializedName("examDate") val examDate: String? = null,
+    @SerializedName("canStart") val canStart: Boolean = false,
+    @SerializedName("startBlockReason") val startBlockReason: String? = null,
+    @SerializedName("joinClosesAt") val joinClosesAt: String? = null,
 )
 
 data class MyTestApplicationsResponse(
@@ -590,6 +600,9 @@ data class TestResolveResponse(
     @SerializedName("alreadyAppliedInCurrentCycle") val alreadyAppliedInCurrentCycle: Boolean = false,
     @SerializedName("mayReapplyForNewCycle") val mayReapplyForNewCycle: Boolean = false,
     @SerializedName("blockReason") val blockReason: String? = null,
+    @SerializedName("canStart") val canStart: Boolean = false,
+    @SerializedName("startBlockReason") val startBlockReason: String? = null,
+    @SerializedName("joinClosesAt") val joinClosesAt: String? = null,
 )
 
 data class LeaderboardFilterTestDto(

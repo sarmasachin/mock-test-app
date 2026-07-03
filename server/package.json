@@ -25,6 +25,15 @@
     "verify:scheduler-hardening-phase6": "node scripts/verifySchedulerHardeningPhase6.js",
     "phase6:publish-diag": "node scripts/diagPublishSchedulingPhase6.js",
     "verify:apply-cycle-phase7": "node scripts/verifyApplyCyclePhase7.js",
+    "verify:schedule-timer-phase0": "node scripts/verifyScheduleTimerPhase0.js",
+    "verify:schedule-timer-phase1": "node scripts/verifyScheduleTimerPhase1.js",
+    "verify:schedule-timer-phase2": "node scripts/verifyScheduleTimerPhase2.js",
+    "verify:start-access-phase3": "node scripts/verifyStartAccessPhase3.js",
+    "verify:start-access-phase4": "node scripts/verifyStartAccessPhase4.js",
+    "verify:start-access-phase5": "node scripts/verifyStartAccessPhase5.js",
+    "verify:interest-phase0": "node scripts/verifyInterestPhase0.js",
+    "verify:interest-phase1": "node scripts/verifyInterestPhase1.js",
+    "e2e:schedule-timer-phase2": "node scripts/e2eScheduleTimerPhase2.js",
     "e2e:apply-cycle": "node scripts/e2eTestApplyCycle.js"
   },
   "engines": {

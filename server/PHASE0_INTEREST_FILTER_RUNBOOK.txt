@@ -1,0 +1,104 @@
+Phase 0 — Interest filter spec (SAFE: no runtime / API / app changes)
+======================================================================
+Status: COMPLETE (foundation for Phase 1+)
+Last updated: 2026-07-01
+
+WHAT PHASE 0 DID
+----------------
+- Locked product rules and safe defaults (this file).
+- Added pure library: server/src/lib/userInterests.js
+- Added offline verify: npm run verify:interest-phase0
+- NO database migration yet.
+- NO API route changes yet.
+- NO admin-web / Android changes yet.
+  → Existing app behaviour is 100% unchanged.
+
+PRODUCT RULES (LOCKED)
+----------------------
+1. Interest unit = test.subcategory (same text as examCategories.level3).
+2. Login ke baad user subcategories choose karega (Phase 3 picker).
+3. Default app view = sirf interest-matching tests/categories.
+4. Hamesha “Saare tests dekho” option (Phase 4 toggle).
+5. Applied tests HAMESHA dikhein — chahe show_to_users OFF ho.
+6. is_published ≠ show_to_users:
+   - Published = live test (apply/cycle)
+   - show_to_users = user lists / interest picker me dikhe (Phase 1b)
+
+LOCKED DECISIONS (were open in working plan)
+--------------------------------------------
+[x] Purane users (no interests saved):
+    → Saare tests dikhao jab tak interests empty (backward compatible).
+    → Picker dubara tab dikhao jab login_test_pick_done = 0 (existing flow).
+
+[x] show_to_users OFF + published ON:
+    → Public GET /tests lists me HIDE (Phase 1b).
+    → Auth GET /tests/resolve + already-applied flows OK (unchanged access).
+
+[x] Interest marketing email (future):
+    → user_test_interests table use karo (attempt inference ki jagah).
+
+ADMIN — TEST ADD / EDIT (Phase 1b — NOT YET IN UI)
+--------------------------------------------------
+Checkbox (Hindi label):
+  [ ] User ko dikhao (interest / test list me)
+
+DB column (Phase 1 migration):
+  tests.show_to_users BOOLEAN NOT NULL DEFAULT true
+
+Default true → existing tests par koi asar nahi.
+
+ADMIN — SUBCATEGORY ALIGNMENT (IMPORTANT)
+-----------------------------------------
+Har published test ka subcategory examCategories ke kisi enabled level3 se match hona chahiye.
+
+Example:
+  examCategories.level3 = "HP GK"
+  test.subcategory      = "HP GK"     ✓
+
+Mismatch → test interest picker / filtered Tests tab me nahi dikhega.
+
+Audit (optional, when DB up):
+  node scripts/auditInterestAlignment.js
+
+FILTER LOGIC (shared library)
+-----------------------------
+File: server/src/lib/userInterests.js
+
+Key functions:
+  normalizeInterestSubcategories()   max 20, trim, dedupe
+  subcategoryMatchesSqlFilter()      mirrors ILIKE '%filter%'
+  shouldIncludeInUserCatalog()       interest + show_to_users + applied override
+  auditSubcategoryAlignment()        admin health check
+
+Legacy fallback:
+  userInterests empty → catalog shows ALL (no breakage for old users).
+
+VERIFY (offline — run before Phase 1)
+-------------------------------------
+  cd server
+  npm run verify:interest-phase0
+
+Expected: Phase 0 interest filter verify: PASS
+
+FILES ADDED (Phase 0)
+---------------------
+  server/src/lib/userInterests.js
+  server/scripts/verifyInterestPhase0.js
+  server/scripts/auditInterestAlignment.js
+  server/PHASE0_INTEREST_FILTER_RUNBOOK.txt
+  server/INTEREST_FILTER_WORKING_PLAN.txt (status updated)
+
+NEXT: PHASE 1 (when approved)
+-----------------------------
+1. CREATE TABLE user_test_interests
+2. GET/PUT /v1/me/interests
+3. Optional GET /tests?subcategories=a,b
+4. verifyInterestPhase1.js
+
+Deploy order unchanged: server → admin checkbox (1b) → Android.
+
+DO NOT (until Phase 1+)
+-----------------------
+- Do not change GET /tests behaviour yet.
+- Do not add show_to_users column without migration + default true.
+- Do not remove loginPickedTestTitles until Android Phase 2 migration.

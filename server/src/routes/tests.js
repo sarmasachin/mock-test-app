@@ -22,12 +22,26 @@ const {
   isTestCatalogVisible,
   catalogVisibilityError,
 } = require('../lib/testVisibility');
-const { assertUserCanStartAttempt } = require('../lib/testAttempts');
+const {
+  parseSubcategoriesQueryParam,
+  buildSubcategoryOrSqlClause,
+} = require('../lib/userInterests');
+const {
+  assertUserCanStartAttempt,
+  evaluateAttemptAccess,
+  countUserTestAttempts,
+  lastUserTestAttemptAt,
+} = require('../lib/testAttempts');
 const {
   buildTestResolvePayload,
   lookupTestForResolve,
   loadPublishScheduleItemsSafe,
+  resolveTestCyclePhase,
 } = require('../lib/testResolve');
+const {
+  evaluateTestStartAccess,
+  loadScheduleTimerEnabled,
+} = require('../lib/testStartAccess');
 
 const PUBLISHED_QUESTION_COUNT_SQL = `(SELECT COUNT(*)::int FROM questions q WHERE q.test_id = tests.id AND q.is_published = true) AS published_question_count`;
 
@@ -341,16 +355,18 @@ async function readWaitlistPosition(client, testId, waitlistId) {
 
 router.get('/', async (req, res) => {
   const sub = String(req.query.subcategory || '').trim();
+  const multiSubs = !sub ? parseSubcategoriesQueryParam(req.query.subcategories) : [];
   const kind = String(req.query.testKind || '').trim().toLowerCase();
   const limit = Math.min(Math.max(parseInt(String(req.query.limit || '40'), 10) || 40, 1), 100);
+  const catalogSelect = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, ${PUBLISHED_QUESTION_COUNT_SQL}, test_kind,
+                  exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
+                  language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
+                  dynamic_date_enabled, date_cycle_days`;
   try {
     let q;
     let params;
     if (sub && kind && ['mock', 'quiz'].includes(kind)) {
-      q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, ${PUBLISHED_QUESTION_COUNT_SQL}, test_kind,
-                  exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
-                  language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
-                  dynamic_date_enabled, date_cycle_days
+      q = `${catalogSelect}
            FROM tests
            WHERE is_published = true AND test_kind = $1
              AND subcategory ILIKE $2
@@ -358,30 +374,39 @@ router.get('/', async (req, res) => {
            LIMIT $3`;
       params = [kind, `%${sub}%`, limit];
     } else if (sub) {
-      q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, ${PUBLISHED_QUESTION_COUNT_SQL}, test_kind,
-                  exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
-                  language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
-                  dynamic_date_enabled, date_cycle_days
+      q = `${catalogSelect}
            FROM tests
            WHERE is_published = true AND subcategory ILIKE $1
            ORDER BY title ASC
            LIMIT $2`;
       params = [`%${sub}%`, limit];
+    } else if (multiSubs.length > 0) {
+      const hasKind = kind && ['mock', 'quiz'].includes(kind);
+      const subClause = buildSubcategoryOrSqlClause(multiSubs, hasKind ? 2 : 1);
+      if (hasKind) {
+        q = `${catalogSelect}
+             FROM tests
+             WHERE is_published = true AND test_kind = $1 AND ${subClause.sql}
+             ORDER BY title ASC
+             LIMIT $${subClause.nextIndex}`;
+        params = [kind, ...subClause.params, limit];
+      } else {
+        q = `${catalogSelect}
+             FROM tests
+             WHERE is_published = true AND ${subClause.sql}
+             ORDER BY title ASC
+             LIMIT $${subClause.nextIndex}`;
+        params = [...subClause.params, limit];
+      }
     } else if (kind && ['mock', 'quiz'].includes(kind)) {
-      q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, ${PUBLISHED_QUESTION_COUNT_SQL}, test_kind,
-                  exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
-                  language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
-                  dynamic_date_enabled, date_cycle_days
+      q = `${catalogSelect}
            FROM tests
            WHERE is_published = true AND test_kind = $1
            ORDER BY title ASC
            LIMIT $2`;
       params = [kind, limit];
     } else {
-      q = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, ${PUBLISHED_QUESTION_COUNT_SQL}, test_kind,
-                  exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
-                  language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
-                  dynamic_date_enabled, date_cycle_days
+      q = `${catalogSelect}
            FROM tests
            WHERE is_published = true
            ORDER BY title ASC
@@ -432,20 +457,23 @@ router.get('/resolve', requireAuth, async (req, res) => {
     }
 
     const row = lookup.row;
-    const [advancedMap, publishScheduleItems, applicationRes] = await Promise.all([
-      loadAdvancedConfigMap(),
-      loadPublishScheduleItemsSafe(pool),
-      pool.query(
-        `SELECT applied_at
-         FROM test_applications
-         WHERE user_id = $1::uuid AND test_id = $2::uuid
-         LIMIT 1`,
-        [req.userId, row.id],
-      ).catch((e) => {
-        if (e && e.code === '42P01') return { rows: [] };
-        throw e;
-      }),
-    ]);
+    const nowMs = Date.now();
+    const [advancedMap, publishScheduleItems, applicationRes, scheduleTimerEnabled] =
+      await Promise.all([
+        loadAdvancedConfigMap(),
+        loadPublishScheduleItemsSafe(pool),
+        pool.query(
+          `SELECT applied_at
+           FROM test_applications
+           WHERE user_id = $1::uuid AND test_id = $2::uuid
+           LIMIT 1`,
+          [req.userId, row.id],
+        ).catch((e) => {
+          if (e && e.code === '42P01') return { rows: [] };
+          throw e;
+        }),
+        loadScheduleTimerEnabled(pool),
+      ]);
 
     const advancedConfig = normalizeTestAdvancedConfig(
       resolveAdvancedConfigForTest(advancedMap, row.id),
@@ -463,6 +491,12 @@ router.get('/resolve', requireAuth, async (req, res) => {
       publishScheduleItems,
       alreadyAppliedInCurrentCycle,
       mayReapplyForNewCycle,
+      scheduleTimerEnabled,
+      examDate: resolveExamDate(row),
+      slotLabel: String(row.slot_label || ''),
+      attemptAccess: alreadyAppliedInCurrentCycle
+        ? await assertUserCanStartAttempt(pool, req.userId, row, advancedConfig, nowMs)
+        : null,
     });
 
     return res.json(payload);
@@ -474,33 +508,76 @@ router.get('/resolve', requireAuth, async (req, res) => {
 
 router.get('/my-applications', requireAuth, async (req, res) => {
   try {
-    const rowsRes = await pool.query(
-      `SELECT t.id, t.title, t.is_published, ta.applied_at,
-              t.exam_date, t.dynamic_date_enabled, t.date_cycle_days, t.last_cycle_started_at,
-              t.capacity_total, t.enrolled_count, t.slot_label
-       FROM test_applications ta
-       INNER JOIN tests t ON t.id = ta.test_id
-       WHERE ta.user_id = $1::uuid
-       ORDER BY ta.applied_at DESC`,
-      [req.userId],
-    );
-    const items = rowsRes.rows
-      .filter((row) => !isApplicationFromOlderCycle(row, row.applied_at))
-      .map((row) => {
-        const capacityTotal = Math.max(0, Number(row.capacity_total || 0));
-        const enrolledCount = Math.max(0, Number(row.enrolled_count || 0));
-        return {
-          testId: String(row.id),
-          testTitle: String(row.title || 'Test'),
-          appliedAt: row.applied_at ? new Date(row.applied_at).toISOString() : null,
-          isPublished: row.is_published === true,
-          enrolledCount,
-          capacityTotal,
-          remainingSeats: Math.max(0, capacityTotal - enrolledCount),
-          slotLabel: String(row.slot_label || ''),
-          examDate: resolveExamDate(row),
-        };
+    const nowMs = Date.now();
+    const [rowsRes, scheduleTimerEnabled, advancedMap, publishScheduleItems] = await Promise.all([
+      pool.query(
+        `SELECT t.id, t.title, t.is_published, ta.applied_at,
+                t.exam_date, t.dynamic_date_enabled, t.date_cycle_days, t.last_cycle_started_at,
+                t.capacity_total, t.enrolled_count, t.slot_label, t.duration_minutes,
+                t.valid_until, t.attempts_allowed
+         FROM test_applications ta
+         INNER JOIN tests t ON t.id = ta.test_id
+         WHERE ta.user_id = $1::uuid
+         ORDER BY ta.applied_at DESC`,
+        [req.userId],
+      ),
+      loadScheduleTimerEnabled(pool),
+      loadAdvancedConfigMap(),
+      loadPublishScheduleItemsSafe(pool),
+    ]);
+
+    const items = [];
+    for (const row of rowsRes.rows) {
+      if (isApplicationFromOlderCycle(row, row.applied_at)) continue;
+
+      const advancedConfig = normalizeTestAdvancedConfig(
+        resolveAdvancedConfigForTest(advancedMap, row.id),
+      );
+      const examDate = resolveExamDate(row);
+      const cyclePhase = resolveTestCyclePhase(row, advancedConfig, nowMs, publishScheduleItems);
+      const catalogError = catalogVisibilityError(row, advancedConfig, nowMs);
+      const [attemptCount, lastAttemptAtMs] = await Promise.all([
+        countUserTestAttempts(pool, req.userId, row.id),
+        lastUserTestAttemptAt(pool, req.userId, row.id),
+      ]);
+      const attemptAccess = evaluateAttemptAccess({
+        attemptsAllowed: row.attempts_allowed,
+        reattemptCooldownMinutes: advancedConfig.reattemptCooldownMinutes,
+        attemptCount,
+        lastAttemptAtMs,
+        nowMs,
       });
+      const startAccess = evaluateTestStartAccess({
+        alreadyAppliedInCurrentCycle: true,
+        scheduleTimerEnabled,
+        cyclePhase,
+        catalogError,
+        examDate,
+        slotLabel: String(row.slot_label || ''),
+        lateJoinMinutes: advancedConfig.lateJoinMinutes,
+        attemptAccess,
+        nowMs,
+        row,
+        advancedConfig,
+      });
+
+      const capacityTotal = Math.max(0, Number(row.capacity_total || 0));
+      const enrolledCount = Math.max(0, Number(row.enrolled_count || 0));
+      items.push({
+        testId: String(row.id),
+        testTitle: String(row.title || 'Test'),
+        appliedAt: row.applied_at ? new Date(row.applied_at).toISOString() : null,
+        isPublished: row.is_published === true,
+        enrolledCount,
+        capacityTotal,
+        remainingSeats: Math.max(0, capacityTotal - enrolledCount),
+        slotLabel: String(row.slot_label || ''),
+        examDate,
+        canStart: startAccess.canStart,
+        startBlockReason: startAccess.startBlockReason,
+        joinClosesAt: startAccess.joinClosesAt,
+      });
+    }
     return res.json({ items });
   } catch (e) {
     if (e.code === '42P01') {

@@ -10,19 +10,12 @@ const {
   isPublishScheduleItemPending,
 } = require('./testVisibility');
 const { cycleRepublishAtMs } = require('./cycleRepublishGap');
+const { parseCycleEndMs } = require('./testCycleTiming');
+const { evaluateTestStartAccess } = require('./testStartAccess');
 
 /**
  * @typedef {'live'|'between_cycles'|'unpublished'|'scheduled'|'closed'|'not_found'} TestCyclePhase
  */
-
-function parseCycleEndMs(row) {
-  if (!row) return Number.NaN;
-  const startedMs = Date.parse(String(row.last_cycle_started_at || ''));
-  if (!Number.isFinite(startedMs)) return Number.NaN;
-  const durationMinutes = Math.max(0, Number(row.duration_minutes || 0));
-  if (durationMinutes <= 0) return Number.NaN;
-  return startedMs + durationMinutes * 60 * 1000;
-}
 
 function findEarliestPendingRepublishSchedule(publishScheduleItems, testId) {
   const id = String(testId || '').trim();
@@ -135,6 +128,10 @@ function buildTestResolvePayload({
   publishScheduleItems = [],
   alreadyAppliedInCurrentCycle = false,
   mayReapplyForNewCycle = false,
+  scheduleTimerEnabled = false,
+  examDate = null,
+  slotLabel = '',
+  attemptAccess = null,
 }) {
   if (!row) {
     return {
@@ -143,6 +140,9 @@ function buildTestResolvePayload({
       catalogVisible: false,
       canApply: false,
       blockReason: 'Test not found',
+      canStart: false,
+      startBlockReason: null,
+      joinClosesAt: null,
     };
   }
 
@@ -171,6 +171,23 @@ function buildTestResolvePayload({
           alreadyAppliedInCurrentCycle,
         });
 
+  const lateJoinMinutes = Math.max(0, Number(adv.lateJoinMinutes || 0));
+  const resolvedExamDate = examDate != null ? examDate : null;
+  const resolvedSlot = slotLabel != null ? String(slotLabel || '') : String(row.slot_label || '');
+  const startAccess = evaluateTestStartAccess({
+    alreadyAppliedInCurrentCycle,
+    scheduleTimerEnabled,
+    cyclePhase,
+    catalogError,
+    examDate: resolvedExamDate,
+    slotLabel: resolvedSlot,
+    lateJoinMinutes,
+    attemptAccess,
+    nowMs,
+    row,
+    advancedConfig: adv,
+  });
+
   return {
     found: true,
     id: String(row.id),
@@ -185,6 +202,9 @@ function buildTestResolvePayload({
     alreadyAppliedInCurrentCycle,
     mayReapplyForNewCycle: canReapplyForNewCycle,
     blockReason,
+    canStart: startAccess.canStart,
+    startBlockReason: startAccess.startBlockReason,
+    joinClosesAt: startAccess.joinClosesAt,
   };
 }
 
