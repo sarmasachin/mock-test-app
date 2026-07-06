@@ -4,9 +4,11 @@ async function syncTestQuestionCount(clientOrPool, testId) {
   const db = clientOrPool;
   const id = String(testId || '').trim();
   if (!id || !db?.query) return 0;
+  // Only overwrite question_count when at least one published question exists.
+  // Writing 0 violates tests_question_count_positive (CHECK question_count > 0).
   const { rows } = await db.query(
     `UPDATE tests
-     SET question_count = sub.c,
+     SET question_count = CASE WHEN sub.c > 0 THEN sub.c ELSE tests.question_count END,
          updated_at = now()
      FROM (
        SELECT COUNT(*)::int AS c

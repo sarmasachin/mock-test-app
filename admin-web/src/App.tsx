@@ -670,6 +670,20 @@ function normalizeQuestionSubjectKeyInput(raw: unknown): { value: string; error?
   return { value: s };
 }
 
+/** API/Postgres date (ISO or YYYY-MM-DD) → HTML `<input type="date">` value. */
+function toDateInputValue(value?: string | null): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const ymd = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (ymd) return ymd[1];
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return '';
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function toDateTimeLocal(value?: string | null) {
   if (!value) return '';
   const date = new Date(value);
@@ -734,7 +748,7 @@ function mapApiTestItem(x: any): TestItem {
   return {
     ...x,
     dynamic_fluctuation_on_publish: normalizeBoolean(x.dynamic_fluctuation_on_publish, true),
-    exam_date: x.exam_date || '',
+    exam_date: toDateInputValue(x.exam_date),
     total_marks: Number(x.total_marks || 0),
     slot_label: String(x.slot_label || ''),
     capacity_total: Number(x.capacity_total || 0),
@@ -746,7 +760,7 @@ function mapApiTestItem(x: any): TestItem {
     test_type_label: String(x.test_type_label || 'Full Mock'),
     badge_enabled: normalizeBoolean(x.badge_enabled, false),
     badge_text: String(x.badge_text || 'Live'),
-    valid_until: x.valid_until || '',
+    valid_until: toDateInputValue(x.valid_until),
     answer_key_release_at: x.answer_key_release_at || '',
     result_release_at: x.result_release_at || '',
     dynamic_date_enabled: normalizeBoolean(x.dynamic_date_enabled, false),
@@ -1796,7 +1810,7 @@ function TestsTab({
     const durationValue = Number(input.durationMinutes);
     const questionCountValue = Number(input.questionCount);
     const totalMarksValue = Number(input.totalMarks || 0);
-    const examDateValue = String(input.examDate || '').trim();
+    const examDateValue = toDateInputValue(input.examDate);
     const slotTimeValue = String(input.slotTime ?? '').trim();
     const slotLabelFromTime = slotTimeValue ? timeInputToSlotLabel(slotTimeValue) : '';
     const slotLabelValue = (slotLabelFromTime || String(input.slotLabel || '').trim()).slice(0, 80);
@@ -1810,7 +1824,7 @@ function TestsTab({
     const badgeTextRaw = String(input.badgeText || '').trim().slice(0, 40);
     const badgeEnabledValue = input.badgeEnabled === true;
     const badgeTextValue = badgeEnabledValue ? (badgeTextRaw || 'Live') : badgeTextRaw;
-    const validUntilValue = String(input.validUntil || '').trim();
+    const validUntilValue = toDateInputValue(input.validUntil);
     const answerKeyValue = String(input.answerKeyReleaseAt || '').trim();
     const resultReleaseValue = String(input.resultReleaseAt || '').trim();
     const dateCycleDaysValue = Number(input.dateCycleDays || 0);
@@ -1986,7 +2000,7 @@ function TestsTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedQuestionTestId, items.length]);
 
-  async function load() {
+  async function load(): Promise<TestItem[]> {
     try {
       setIsRefreshingTests(true);
       const res = await apiClient.get('/admin/tests');
@@ -2000,8 +2014,10 @@ function TestsTab({
         return next ?? prev;
       });
       setTestsPage(1);
+      return mapped;
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to load tests');
+      return [];
     } finally {
       setIsRefreshingTests(false);
     }
@@ -2194,11 +2210,13 @@ function TestsTab({
     const editingId = editingTestId;
     try {
       if (editingId) {
-        const res = await apiClient.patch(`/admin/tests/${editingId}`, data);
-        const saved = mapApiTestItem(res.data?.item || {});
+        await apiClient.patch(`/admin/tests/${editingId}`, data);
         pushToast('success', `Test "${data.title}" updated successfully.`);
-        await load();
-        applyTestToForm(saved);
+        const freshItems = await load();
+        const refreshed = freshItems.find((x) => x.id === editingId);
+        if (refreshed) {
+          applyTestToForm(refreshed);
+        }
         setEditingTestId(editingId);
         setAdvancedOpen(true);
       } else {

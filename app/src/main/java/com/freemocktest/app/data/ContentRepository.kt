@@ -2341,8 +2341,12 @@ object ContentRepository {
             examMode = examMode,
             negativeMarkingText = negativeMarkingText,
             testTypeLabel = testTypeLabel,
-            badgeEnabled = badgeEnabled == true || !badgeText.isNullOrBlank(),
-            badgeText = badgeText?.trim().takeUnless { it.isNullOrBlank() } ?: "Live",
+            badgeEnabled = badgeEnabled == true,
+            badgeText = if (badgeEnabled == true) {
+                badgeText?.trim().takeUnless { it.isNullOrBlank() } ?: "Live"
+            } else {
+                ""
+            },
             validUntil = validUntil?.let { "Available till $it" },
             validUntilIso = validUntil,
             answerKeyReleaseAt = answerKeyReleaseAt,

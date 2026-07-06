@@ -1624,6 +1624,20 @@ function normalizeTestAdvancedConfig(rawValue) {
   };
 }
 
+function normalizeDateOnlyField(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const ymd = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (ymd) return ymd[1];
+  const ms = Date.parse(s);
+  if (!Number.isFinite(ms)) return s;
+  const d = new Date(ms);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function normalizeTestPayload(body, options = {}) {
   const payload = body || {};
   const skipEnrolledCapacityCheck = options.skipEnrolledCapacityCheck === true;
@@ -1645,9 +1659,9 @@ function normalizeTestPayload(body, options = {}) {
   const testTypeLabel = String(payload.testTypeLabel || 'Full Mock').trim().slice(0, 40) || 'Full Mock';
   const badgeTextRaw = String(payload.badgeText || '').trim().slice(0, 40);
   const badgeEnabled = payload.badgeEnabled === true;
-  const badgeText = badgeEnabled ? (badgeTextRaw || 'Live') : badgeTextRaw;
-  const examDate = String(payload.examDate || '').trim();
-  const validUntil = String(payload.validUntil || '').trim();
+  const badgeText = badgeEnabled ? (badgeTextRaw || 'Live') : '';
+  const examDate = normalizeDateOnlyField(payload.examDate);
+  const validUntil = normalizeDateOnlyField(payload.validUntil);
   const answerKeyReleaseAt = String(payload.answerKeyReleaseAt || '').trim();
   const resultReleaseAt = String(payload.resultReleaseAt || '').trim();
   const dynamicDateEnabled = payload.dynamicDateEnabled === true;

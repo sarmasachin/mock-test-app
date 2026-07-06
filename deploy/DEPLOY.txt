@@ -74,26 +74,10 @@ Deploy admin static from Windows
 Redeploy after git push
 -----------------------
   cd /var/www/mocktestapp && git pull origin main
-  cd server && npm install && node scripts/verifyFcmEnv.js && pm2 restart mocktest-api --update-env
+  cd server && npm install && pm2 restart mocktest-api
   cd ../admin-web && npm install && npm run build
   cp -r dist/* /var/www/admin-admin.govmocktest.com/site/admin/
   systemctl reload nginx
-
-FCM first-time setup on VPS (run once, or when push stops working)
-------------------------------------------------------------------
-  1) Upload Firebase service account JSON to VPS (never commit this file to git):
-       scp /path/to/mock-86f57-firebase-adminsdk-*.json root@YOUR_VPS:/var/www/mocktestapp/server/fcm-key.json
-  2) Write FCM vars into server/.env (sets FCM_PROJECT_ID from JSON automatically):
-       cd /var/www/mocktestapp/server
-       node scripts/applyFcmEnv.js fcm-key.json
-       rm -f fcm-key.json
-  3) Verify + restart with fresh env (PM2 must use --update-env after .env changes):
-       node scripts/verifyFcmEnv.js
-       pm2 restart mocktest-api --update-env
-  4) Confirm: verify prints "OK: FCM env is valid" and android project_id match: mock-86f57
-  5) Phone: login -> logcat PushTokenRegistrar -> Admin Send push -> tray notification
-
-  Windows helper (optional): deploy-fcm-vps.ps1 from repo root (edit VPS IP + key path first)
 
 Default admin login (after SQL migration 009)
 -------------------------------------------

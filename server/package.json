@@ -34,6 +34,7 @@
     "verify:publish-email-fix": "node scripts/verifyPublishEmailFix.js",
     "verify:fcm-env": "node scripts/verifyFcmEnv.js",
     "verify:publish-push-phase5": "node scripts/verifyPublishPushPhase5.js",
+    "verify:test-edit-phase5": "node scripts/verifyTestEditPhase5.js",
     "verify:schedule-timer-phase0": "node scripts/verifyScheduleTimerPhase0.js",
     "verify:schedule-timer-phase1": "node scripts/verifyScheduleTimerPhase1.js",
     "verify:schedule-timer-phase2": "node scripts/verifyScheduleTimerPhase2.js",
