@@ -307,8 +307,9 @@ fun StartTestPreviewScreenNew(
     val showSpecificStart = !showAppliedList && !showLoading && specificTest != null && specificStartEntry != null
     val showSpecificApply = !showAppliedList && !showLoading && specificTest != null &&
         !showSpecificStart && !resolveAlreadyApplied
-    val showEmptyList = isListRoute && !showAppliedList && !showLoading
-    val showSpecificLoadError = !isListRoute && !showAppliedList && !showLoading && specificTest == null && specificTestName != null
+    val showSpecificLoadError = !showAppliedList && !showLoading && specificTest == null && specificTestName != null
+    val showEmptyList = isListRoute && !showAppliedList && !showLoading && !showSpecificLoadError &&
+        specificTestName == null && !showSpecificStart && !showSpecificApply
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -432,81 +433,6 @@ fun StartTestPreviewScreenNew(
                 ) {
                     CircularProgressIndicator(color = p.accent)
                 }
-            } else if (showEmptyList) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = p.surface),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
-                        Text(
-                            text = "No applied tests yet",
-                            color = p.textPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "Apply for a test from the Tests tab. After you apply, your tests will appear here ready to start.",
-                            color = p.textSecondary,
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp,
-                        )
-                        Spacer(Modifier.height(14.dp))
-                        Button(
-                            onClick = onBrowseTests,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp),
-                            shape = RoundedCornerShape(999.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = p.systemBlue,
-                                contentColor = Color.White,
-                            ),
-                        ) {
-                            Text(
-                                text = "Saare tests browse karein",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
-                    }
-                }
-            } else if (showSpecificLoadError) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = p.surface),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
-                        Text(
-                            text = "Couldn't load test",
-                            color = p.textPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "This test may be unpublished or unavailable. Try again or apply from the Tests tab.",
-                            color = p.textSecondary,
-                            fontSize = 13.sp,
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            TextButton(onClick = { reloadKey += 1 }) {
-                                Text(text = "Retry", color = p.systemBlue, fontWeight = FontWeight.Bold)
-                            }
-                            TextButton(onClick = onBrowseTests) {
-                                Text(text = "Browse Tests", color = p.systemBlue, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
             } else if (showSpecificStart) {
                 val test = specificTest!!
                 val entry = specificStartEntry!!
@@ -528,17 +454,17 @@ fun StartTestPreviewScreenNew(
                 PreviewCard(test = test)
                 Spacer(Modifier.height(10.dp))
                 if (fallbackLocked) {
-                    val hours = (fallbackRemainingMs / 3_600_000L).toInt()
-                    val mins = ((fallbackRemainingMs % 3_600_000L) / 60_000L).toInt()
-                    val secs = ((fallbackRemainingMs % 60_000L) / 1_000L).toInt()
-                    val countdown = String.format(Locale.US, "%02d:%02d:%02d", hours, mins, secs)
                     Text(
-                        text = "Test locked till scheduled time (${test.examDate ?: "upcoming"})",
+                        text = "Apply now — test starts on ${TestScheduleUtils.formatExamStartLabel(test.examDate, test.slotLabel)}",
                         color = p.textSecondary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                     )
                     Spacer(Modifier.height(8.dp))
+                    val hours = (fallbackRemainingMs / 3_600_000L).toInt()
+                    val mins = ((fallbackRemainingMs % 3_600_000L) / 60_000L).toInt()
+                    val secs = ((fallbackRemainingMs % 60_000L) / 1_000L).toInt()
+                    val countdown = String.format(Locale.US, "%02d:%02d:%02d", hours, mins, secs)
                     Text(
                         text = countdown,
                         color = p.textPrimary,
@@ -584,6 +510,81 @@ fun StartTestPreviewScreenNew(
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
                     )
+                }
+            } else if (showSpecificLoadError) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Text(
+                            text = "Couldn't load test",
+                            color = p.textPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "This test may be unpublished or unavailable. Try again or apply from the Tests tab.",
+                            color = p.textSecondary,
+                            fontSize = 13.sp,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            TextButton(onClick = { reloadKey += 1 }) {
+                                Text(text = "Retry", color = p.systemBlue, fontWeight = FontWeight.Bold)
+                            }
+                            TextButton(onClick = onBrowseTests) {
+                                Text(text = "Browse Tests", color = p.systemBlue, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            } else if (showEmptyList) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = p.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, p.border.copy(alpha = 0.18f)),
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Text(
+                            text = "No applied tests yet",
+                            color = p.textPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "Apply for a test from the Tests tab. After you apply, your tests will appear here ready to start.",
+                            color = p.textSecondary,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                        )
+                        Spacer(Modifier.height(14.dp))
+                        Button(
+                            onClick = onBrowseTests,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp),
+                            shape = RoundedCornerShape(999.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.systemBlue,
+                                contentColor = Color.White,
+                            ),
+                        ) {
+                            Text(
+                                text = "Saare tests browse karein",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
                 }
             }
 

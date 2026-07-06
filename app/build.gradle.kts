@@ -21,8 +21,8 @@ android {
         applicationId = "com.freemocktest.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 4
+        versionName = "1.0.3"
         // Release: prod URL only unless mocktest.releaseApiBaseUrl is set (staging).
         // Do NOT use mocktest.apiBaseUrl here — that key is for local dev and would ship bad URLs in APKs.
         val apiBase = (

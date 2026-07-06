@@ -212,6 +212,9 @@ object AppPreferencesRepository {
                     ?: "Cannot start this test yet"
                 null -> Unit
             }
+        } else {
+            // Schedule lock applies only after apply; unapplied users should reach Apply flow first.
+            return null
         }
         return TestScheduleUtils.examJoinBlockMessageWhenScheduleTimer(
             scheduleTimerEnabled = scheduleTimerEnabled,

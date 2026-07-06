@@ -242,13 +242,21 @@ fun MainBottomNavHost(
                     )
                 }
             }
-            val blockMsg = AppPreferencesRepository.resolveStartBlockMessageNow(
-                testName = safeName,
+            val appliedEntry = AppPreferencesRepository.findAppliedEntryForTestLookup(safeName, card)
+            if (appliedEntry == null) {
+                Toast.makeText(
+                    context,
+                    "Please apply for this test first.",
+                    Toast.LENGTH_LONG,
+                ).show()
+                return@launch
+            }
+            val blockMsg = AppPreferencesRepository.resolveStartBlockMessage(
+                appliedEntry = appliedEntry,
                 scheduleTimerEnabled = scheduleTimerEnabled,
                 examDate = card?.examDate,
                 slotLabel = card?.slotLabel,
                 lateJoinMinutes = card?.lateJoinMinutes ?: 0,
-                catalogCard = card,
             )
             if (blockMsg != null) {
                 Toast.makeText(context, blockMsg, Toast.LENGTH_LONG).show()
@@ -598,25 +606,7 @@ fun MainBottomNavHost(
                             showTestPendingBlockMessage(test)
                             return@TestsScreenNew
                         }
-                        scope.launch {
-                            val card = runCatching {
-                                ContentRepository.loadTestByTitle(test.trim(), allowDefaultFallback = false)
-                            }.getOrNull()
-                            val home = runCatching { ContentRepository.loadHomeContent() }.getOrNull()
-                            val scheduleTimerEnabled = home?.startSeriesScheduleTimerEnabled == true
-                            val blockMsg = AppPreferencesRepository.resolveStartBlockMessageNow(
-                                testName = test.trim(),
-                                scheduleTimerEnabled = scheduleTimerEnabled,
-                                examDate = card?.examDate,
-                                slotLabel = card?.slotLabel,
-                                lateJoinMinutes = card?.lateJoinMinutes ?: 0,
-                            )
-                            if (blockMsg != null) {
-                                Toast.makeText(context, blockMsg, Toast.LENGTH_LONG).show()
-                                return@launch
-                            }
-                            mainNavController.navigateToStartTestPreview(test)
-                        }
+                        mainNavController.navigateToStartTestPreview(test)
                     },
                 )
             }
