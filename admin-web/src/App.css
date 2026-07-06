@@ -1237,6 +1237,19 @@ button:active {
   letter-spacing: 0.01em;
 }
 
+.field-required-star {
+  color: #dc2626;
+  font-weight: 800;
+  margin-left: 2px;
+}
+
+.all-tests-required-legend {
+  margin: 0 0 12px;
+  font-size: 0.78rem;
+  color: #64748b;
+  line-height: 1.4;
+}
+
 .all-tests-advanced-grid {
   align-items: start;
   gap: 12px;
@@ -1270,8 +1283,10 @@ button:active {
 }
 
 .all-tests-grid input[type='date'],
+.all-tests-grid input[type='time'],
 .all-tests-grid input[type='datetime-local'],
 .all-tests-actions input[type='date'],
+.all-tests-actions input[type='time'],
 .all-tests-actions input[type='datetime-local'] {
   appearance: none;
   -webkit-appearance: none;

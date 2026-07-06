@@ -2,6 +2,9 @@ package com.freemocktest.app.notifications
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -38,6 +41,7 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
             message = body,
             deepLink = deepLink,
         )
+        if (!canShowTrayNotification()) return
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             if (deepLink.isNotBlank()) putExtra("push_deep_link", deepLink)
@@ -61,6 +65,33 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(pendingIntent)
             .build()
-        NotificationManagerCompat.from(this).notify(Random.nextInt(1, Int.MAX_VALUE), notification)
+        try {
+            NotificationManagerCompat.from(this).notify(Random.nextInt(1, Int.MAX_VALUE), notification)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "tray notify blocked: missing POST_NOTIFICATIONS", e)
+        }
+    }
+
+    private fun canShowTrayNotification(): Boolean {
+        val manager = NotificationManagerCompat.from(this)
+        if (!manager.areNotificationsEnabled()) {
+            Log.w(TAG, "tray skipped: notifications disabled in system settings")
+            return false
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                Log.w(TAG, "tray skipped: POST_NOTIFICATIONS not granted")
+                return false
+            }
+        }
+        return true
+    }
+
+    private companion object {
+        private const val TAG = "MockTestFcmService"
     }
 }

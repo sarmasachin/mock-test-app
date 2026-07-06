@@ -23,6 +23,26 @@ interface TestAttemptDao {
     @Query("SELECT COUNT(*) FROM test_attempts WHERE user_key = :userKey AND LOWER(test_name) = LOWER(:testName)")
     suspend fun countByUserAndTest(userKey: String, testName: String): Int
 
+    @Query(
+        """
+        SELECT COUNT(*) FROM test_attempts
+        WHERE user_key = :userKey
+          AND LOWER(test_name) = LOWER(:testName)
+          AND completed_at_millis >= :sinceMillis
+        """,
+    )
+    suspend fun countByUserAndTestSince(userKey: String, testName: String, sinceMillis: Long): Int
+
     @Query("SELECT MAX(completed_at_millis) FROM test_attempts WHERE user_key = :userKey AND LOWER(test_name) = LOWER(:testName)")
     suspend fun lastCompletedAtMillis(userKey: String, testName: String): Long?
+
+    @Query(
+        """
+        SELECT MAX(completed_at_millis) FROM test_attempts
+        WHERE user_key = :userKey
+          AND LOWER(test_name) = LOWER(:testName)
+          AND completed_at_millis >= :sinceMillis
+        """,
+    )
+    suspend fun lastCompletedAtMillisSince(userKey: String, testName: String, sinceMillis: Long): Long?
 }

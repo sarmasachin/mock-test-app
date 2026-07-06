@@ -79,6 +79,13 @@ object ContentRepository {
                 ?: resolveSnapshot?.card?.takeIf { it.id.isNotBlank() }
     }
 
+    /** True when card has enough catalog fields for Apply / Start Test preview (not resolve-only stub). */
+    fun hasCatalogDisplayFields(card: TestCardNew): Boolean {
+        return card.id.isNotBlank() &&
+            !card.questionsMarks.isNullOrBlank() &&
+            !card.durationLabel.isNullOrBlank()
+    }
+
     @Volatile
     private var profileMenuItemsMemory: List<ProfileMenuItemRemote>? = null
     @Volatile
@@ -557,6 +564,18 @@ object ContentRepository {
             else -> o.optInt(key)
         }
 
+    private fun jsonOptLongOrNull(o: JSONObject, key: String): Long? =
+        when {
+            !o.has(key) || o.isNull(key) -> null
+            else -> o.optLong(key)
+        }
+
+    private fun parseIsoToEpochMillis(iso: String?): Long? {
+        val raw = iso?.trim().orEmpty()
+        if (raw.isBlank()) return null
+        return runCatching { java.time.Instant.parse(raw).toEpochMilli() }.getOrNull()
+    }
+
     private fun linkedTestCardCacheFromJson(raw: String): LinkedHashMap<String, JSONObject> {
         val out = LinkedHashMap<String, JSONObject>()
         val root = runCatching { JSONObject(raw.trim()) }.getOrNull() ?: return out
@@ -622,6 +641,7 @@ object ContentRepository {
         put("copyPasteBlocked", c.copyPasteBlocked)
         put("notifyOnPublish", c.notifyOnPublish)
         put("attemptsAllowedCount", c.attemptsAllowedCount)
+        c.lastCycleStartedAtMillis?.let { put("lastCycleStartedAtMillis", it) }
         put("questionCountValue", c.questionCountValue)
         put("totalMarksValue", c.totalMarksValue)
     }
@@ -668,6 +688,7 @@ object ContentRepository {
             copyPasteBlocked = o.optBoolean("copyPasteBlocked", false),
             notifyOnPublish = o.optBoolean("notifyOnPublish", true),
             attemptsAllowedCount = o.optInt("attemptsAllowedCount", 1).coerceAtLeast(1),
+            lastCycleStartedAtMillis = jsonOptLongOrNull(o, "lastCycleStartedAtMillis"),
             questionCountValue = o.optInt("questionCountValue", 0).coerceAtLeast(0),
             totalMarksValue = o.optInt("totalMarksValue", 0).coerceAtLeast(0),
         )
@@ -745,8 +766,41 @@ object ContentRepository {
         val map = linkedTestCardCacheFromJson(blob)
         val json = map[key] ?: return@withContext null
         val card = decodeTestCardNew(json) ?: return@withContext null
+        if (!hasCatalogDisplayFields(card)) return@withContext null
         testCardMemory[key] = card
         card
+    }
+
+    private suspend fun cacheTestCardForLookupKey(lookupKey: String, card: TestCardNew) {
+        val key = lookupKey.trim().lowercase(Locale.US)
+        if (key.isBlank() || card.id.isBlank()) return
+        testCardMemory[key] = card
+        runCatching { persistTestCardDiskCache(key, card) }
+            .onFailure { Log.w(TAG, "persistTestCardDiskCache $key", it) }
+    }
+
+    /** Full catalog row by test UUID (from GET /tests list). */
+    private suspend fun loadTestCardFromCatalogById(
+        testId: String,
+        forceRefresh: Boolean = false,
+    ): TestCardNew? = withContext(Dispatchers.IO) {
+        val id = testId.trim()
+        if (id.isBlank()) return@withContext null
+        if (!forceRefresh) {
+            testCardMemory.values.firstOrNull { it.id == id }?.let { return@withContext it }
+        }
+        try {
+            val resp = RetrofitProvider.publicApi.listTests(limit = 100)
+            val mapped = resp.items.map { it.toTestCard() }
+            mapped.forEach { card ->
+                val k = card.title.trim().lowercase(Locale.US)
+                if (k.isNotBlank()) testCardMemory[k] = card
+            }
+            mapped.firstOrNull { it.id == id }
+        } catch (e: Exception) {
+            Log.w(TAG, "loadTestCardFromCatalogById $id", e)
+            testCardMemory.values.firstOrNull { it.id == id }
+        }
     }
 
     suspend fun loadTestByTitle(
@@ -821,17 +875,26 @@ object ContentRepository {
                 "closed" -> "Registration closed"
                 else -> resp.blockReason?.trim().orEmpty().ifBlank { "Test status" }
             }
-            val card = TestCardNew(
-                id = resp.id.trim(),
-                slug = resp.slug?.trim().orEmpty(),
-                title = displayTitle,
-                meta = meta,
-            )
+            val catalogCard = loadTestCardFromCatalogById(resp.id.trim(), forceRefresh = true)
+            val card = if (catalogCard != null) {
+                catalogCard.copy(
+                    title = displayTitle.ifBlank { catalogCard.title },
+                    meta = meta.ifBlank { catalogCard.meta },
+                )
+            } else {
+                TestCardNew(
+                    id = resp.id.trim(),
+                    slug = resp.slug?.trim().orEmpty(),
+                    title = displayTitle,
+                    meta = meta,
+                )
+            }
             val key = displayTitle.lowercase(Locale.US)
             if (key.isNotBlank()) {
-                testCardMemory[key] = card
-                runCatching { persistTestCardDiskCache(key, card) }
-                    .onFailure { Log.w(TAG, "persistTestCardDiskCache resolve $key", it) }
+                cacheTestCardForLookupKey(displayTitle, card)
+            }
+            resp.subcategory?.trim()?.takeIf { it.isNotBlank() }?.let { sub ->
+                cacheTestCardForLookupKey(sub, card)
             }
             TestApplyResolveSnapshot(
                 card = card,
@@ -872,10 +935,51 @@ object ContentRepository {
             loadTestByTitle(target, forceRefresh = forceRefresh, allowDefaultFallback = false)
         }.getOrNull()?.takeIf { it.id.isNotBlank() }
         if (catalog != null) {
+            cacheTestCardForLookupKey(target, catalog)
             return@withContext TestApplyLoadResult(catalog, null)
         }
+        // Login interest may store subcategory name (e.g. "Patwari"), not catalog title.
+        val bySubcategory = runCatching {
+            loadTestsForSubcategory(target, forceRefresh = forceRefresh)
+                .firstOrNull { it.id.isNotBlank() && hasCatalogDisplayFields(it) }
+        }.getOrNull()
+        if (bySubcategory != null) {
+            cacheTestCardForLookupKey(target, bySubcategory)
+            return@withContext TestApplyLoadResult(bySubcategory, null)
+        }
         val resolve = resolveTestForApply(target)
-        TestApplyLoadResult(null, resolve)
+        if (resolve != null) {
+            val enriched = loadTestCardFromCatalogById(resolve.card.id, forceRefresh = forceRefresh)
+                ?: resolve.card
+            val card = enriched.takeIf { it.id.isNotBlank() } ?: return@withContext TestApplyLoadResult(null, resolve)
+            cacheTestCardForLookupKey(target, card)
+            if (card.title.isNotBlank()) {
+                cacheTestCardForLookupKey(card.title, card)
+            }
+            if (card.subcategory.isNotBlank()) {
+                cacheTestCardForLookupKey(card.subcategory, card)
+            }
+            return@withContext TestApplyLoadResult(
+                card,
+                resolve.copy(card = card),
+            )
+        }
+        TestApplyLoadResult(null, null)
+    }
+
+    /** Resolve catalog card for navigation keys (test title or subcategory interest). */
+    suspend fun resolveTestCardForNavigation(
+        lookupKey: String,
+        forceRefresh: Boolean = false,
+    ): TestCardNew? = loadTestForApplyScreen(lookupKey, forceRefresh = forceRefresh).effectiveCard
+
+    /**
+     * Canonical quiz/history title — prefer catalog title over subcategory lookup key.
+     */
+    fun canonicalTestTitle(lookupKey: String, card: TestCardNew?): String {
+        val fromCard = card?.title?.trim().orEmpty()
+        if (fromCard.isNotBlank()) return fromCard
+        return lookupKey.trim()
     }
 
     /**
@@ -1230,13 +1334,16 @@ object ContentRepository {
     }
 
     private suspend fun resolveTestForQuizQuestions(safeName: String, forceRefresh: Boolean): TestCardNew? {
-        return when {
-            forceRefresh -> loadTestByTitle(safeName, forceRefresh = true) ?: loadCachedTestByTitle(safeName)
-            else -> {
-                val key = safeName.lowercase(Locale.US)
-                testCardMemory[key] ?: loadCachedTestByTitle(safeName) ?: loadTestByTitle(safeName, forceRefresh = false)
-            }
+        if (forceRefresh) {
+            return resolveTestCardForNavigation(safeName, forceRefresh = true)
+                ?: loadTestByTitle(safeName, forceRefresh = true)
+                ?: loadCachedTestByTitle(safeName)
         }
+        val key = safeName.lowercase(Locale.US)
+        testCardMemory[key]?.takeIf { hasCatalogDisplayFields(it) }?.let { return it }
+        loadCachedTestByTitle(safeName)?.takeIf { hasCatalogDisplayFields(it) }?.let { return it }
+        return resolveTestCardForNavigation(safeName, forceRefresh = false)
+            ?: loadTestByTitle(safeName, forceRefresh = false)
     }
 
     /**
@@ -2256,6 +2363,7 @@ object ContentRepository {
             copyPasteBlocked = advancedConfig?.copyPasteBlocked == true,
             notifyOnPublish = advancedConfig?.notifyOnPublish != false,
             attemptsAllowedCount = (attemptsAllowed ?: 1).coerceAtLeast(1),
+            lastCycleStartedAtMillis = parseIsoToEpochMillis(lastCycleStartedAt),
             questionCountValue = questionCount.coerceAtLeast(0),
             totalMarksValue = (totalMarks ?: 0).coerceAtLeast(0),
         )

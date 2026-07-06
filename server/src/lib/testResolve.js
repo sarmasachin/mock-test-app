@@ -209,7 +209,7 @@ function buildTestResolvePayload({
 }
 
 /**
- * Lookup test by id, exact title, or slug (case-insensitive for title/slug).
+ * Lookup test by id, exact title, slug, or unique subcategory (case-insensitive).
  * @returns {Promise<{ row: object|null, ambiguous: boolean }>}
  */
 async function lookupTestForResolve(db, { testId, title, slug }) {
@@ -242,6 +242,7 @@ async function lookupTestForResolve(db, { testId, title, slug }) {
      FROM tests
      WHERE lower(trim(title)) = lower(trim($1))
         OR lower(trim(slug)) = lower(trim($1))
+        OR lower(trim(subcategory)) = lower(trim($1))
      ORDER BY updated_at DESC
      LIMIT 2`,
     [lookup],

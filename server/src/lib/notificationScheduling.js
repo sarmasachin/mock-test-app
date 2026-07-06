@@ -53,6 +53,30 @@ function createNotificationScheduleItem(payload = {}) {
 /**
  * @returns {{ current: object, enqueued: boolean, skipped: boolean, dedupeKey: string, newItem?: object, existingItem?: object }}
  */
+/**
+ * Decide whether a scheduler run succeeded and why it failed.
+ * Partial delivery (some tokens failed) still counts as success when sent > 0.
+ *
+ * @param {{ sent?: number, failed?: number, total?: number }} result
+ * @returns {{ succeeded: boolean, lastError: string }}
+ */
+function resolveNotificationDeliveryOutcome(result) {
+  const sent = Number(result?.sent || 0);
+  const failed = Number(result?.failed || 0);
+  const totalRaw = result?.total;
+  const total = Number.isFinite(Number(totalRaw)) ? Number(totalRaw) : sent + failed;
+  if (sent > 0) {
+    return {
+      succeeded: true,
+      lastError: failed > 0 ? 'partial_delivery' : '',
+    };
+  }
+  if (total <= 0) {
+    return { succeeded: false, lastError: 'no_device_tokens' };
+  }
+  return { succeeded: false, lastError: 'all_tokens_failed' };
+}
+
 function prependNotificationIfNotDuplicate(current, payload, nowMs = Date.now()) {
   const base = current && typeof current === 'object' ? current : { items: [] };
   const items = Array.isArray(base.items) ? base.items : [];
@@ -85,5 +109,6 @@ module.exports = {
   isActiveDedupeStatus,
   findRecentDedupeMatch,
   createNotificationScheduleItem,
+  resolveNotificationDeliveryOutcome,
   prependNotificationIfNotDuplicate,
 };

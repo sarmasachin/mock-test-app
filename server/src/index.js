@@ -51,7 +51,12 @@ const { buildPublishSchedulingDiagnostics } = require('./lib/publishScheduleDiag
 const {
   buildTestPublishDedupeKey,
   prependNotificationIfNotDuplicate,
+  resolveNotificationDeliveryOutcome,
 } = require('./lib/notificationScheduling');
+const {
+  triggerTestPublishAnnouncementEmail,
+  mergePublishEmailDedupeKey,
+} = require('./lib/publishAnnouncementEmail');
 const { trimNotificationSchedulingPayload } = require('./lib/schedulingQueueLimits');
 const { sendPushToToken } = require('./notificationDispatch');
 const {
@@ -252,6 +257,13 @@ async function ensureOptionalColumns() {
     await pool.query(
       `ALTER TABLE questions
        ADD COLUMN IF NOT EXISTS subject_key VARCHAR(64) NOT NULL DEFAULT ''`,
+    );
+    await pool.query(
+      `ALTER TABLE questions
+       ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_questions_created_at ON questions (created_at DESC)`,
     );
     await pool.query(
       `ALTER TABLE users
@@ -564,10 +576,10 @@ async function runPublishScheduleItemWork(item) {
         await promoteWaitlistForTest(pool, testId);
       }
 
-      if (!notifySentAt && scheduleItem.notifyOnPublish !== false && !alreadyPublishedForSchedule) {
+      if (!alreadyPublishedForSchedule) {
         const advancedMap = await getSettingJson('testAdvancedConfigs', {});
         const adv = resolveAdvancedConfigForTest(advancedMap, testId);
-        if (adv?.notifyOnPublish !== false) {
+        if (!notifySentAt && scheduleItem.notifyOnPublish !== false && adv?.notifyOnPublish !== false) {
           const metaRes = await pool.query(
             `SELECT title, last_cycle_started_at
              FROM tests
@@ -589,6 +601,30 @@ async function runPublishScheduleItemWork(item) {
             notifySentAt = new Date().toISOString();
             await markPublishScheduleNotifySent(scheduleItem.id, notifySentAt);
           }
+        }
+        const metaRes = await pool.query(
+          `SELECT title, last_cycle_started_at, is_published
+           FROM tests
+           WHERE id = $1::uuid
+           LIMIT 1`,
+          [testId],
+        );
+        const meta = metaRes.rows[0] || {};
+        const emailResult = triggerTestPublishAnnouncementEmail({
+          testId,
+          testTitle: meta.title,
+          isPublished: meta.is_published === true,
+          lastCycleStartedAt: meta.last_cycle_started_at,
+          advancedConfig: adv || {},
+          previousAdvancedConfig: adv || {},
+          justPublished: false,
+          cycleRenewed: true,
+        });
+        if (emailResult.updateDedupeKey) {
+          const nextAdvancedMap = advancedMap && typeof advancedMap === 'object' ? { ...advancedMap } : {};
+          const mapKey = String(testId || '').trim();
+          nextAdvancedMap[mapKey] = mergePublishEmailDedupeKey(adv || {}, emailResult.updateDedupeKey);
+          await setSettingJson('testAdvancedConfigs', nextAdvancedMap);
         }
       }
     }
@@ -1402,7 +1438,8 @@ async function processNotificationSchedules() {
       }
       const result = await sendPushToAudience({ title, message, target, deepLink });
       processedThisRun += 1;
-      const runSucceeded = result.sent > 0 && result.failed === 0;
+      const delivery = resolveNotificationDeliveryOutcome(result);
+      const runSucceeded = delivery.succeeded;
       const nextScheduleAt = computeNextNotificationSchedule(item, scheduleAt);
       const repeatUntilMs = Date.parse(String(item.repeatUntil || '').trim());
       const hasValidRepeatUntil = Number.isFinite(repeatUntilMs);
@@ -1417,6 +1454,7 @@ async function processNotificationSchedules() {
           lastRunAt: new Date().toISOString(),
           lastRunSent: result.sent,
           lastRunFailed: result.failed,
+          lastError: runSucceeded ? '' : delivery.lastError,
         });
       } else {
         nextItems.push({
@@ -1426,6 +1464,7 @@ async function processNotificationSchedules() {
           failedAt: runSucceeded ? String(item.failedAt || '') : new Date().toISOString(),
           lastRunSent: result.sent,
           lastRunFailed: result.failed,
+          lastError: runSucceeded ? '' : delivery.lastError,
         });
       }
       changed = true;

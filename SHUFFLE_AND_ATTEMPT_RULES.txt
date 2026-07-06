@@ -73,8 +73,9 @@ TEST CYCLE (catalog round)
   - New cycle ⇒ new shuffle seed ⇒ new question/option order for that user.
 
 ATTEMPT (within a cycle)
-  - tests.attempts_allowed = max scored submissions per user per test catalog id.
+  - tests.attempts_allowed = max scored submissions per user per test catalog id **per cycle**.
   - Default attempts_allowed = 1 (one scored try per cycle in typical config).
+  - Cycle boundary = tests.last_cycle_started_at; new cycle ⇒ attempt count resets.
   - reattemptCooldownMinutes = minimum wait between attempts when attempts_allowed > 1.
   - Same cycle + second allowed attempt: seed unchanged ⇒ same shuffle order (by design).
 

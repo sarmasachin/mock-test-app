@@ -1,38 +1,68 @@
 'use strict';
 
 /**
- * Attempt limits within a single test catalog id (all cycles share attempt count today).
+ * Attempt limits within the current test catalog cycle.
  *
- * - attempts_allowed: max scored submissions per user per test id (default 1).
- * - reattemptCooldownMinutes: wait between tries when attempts_allowed > 1.
- * - New catalog cycle (last_cycle_started_at) does NOT reset attempt count here — it only
- *   changes shuffle seed via questions-attempt (see SHUFFLE_AND_ATTEMPT_RULES.txt §5).
+ * - attempts_allowed: max scored submissions per user per test id per cycle (default 1).
+ * - reattemptCooldownMinutes: wait between tries when attempts_allowed > 1 (same cycle).
+ * - Cycle boundary: tests.last_cycle_started_at — new cycle ⇒ attempt count resets.
  */
 
-async function countUserTestAttempts(pool, userId, testCatalogId) {
+function parseCycleStartedAtMs(testRow) {
+  const raw = String(testRow?.last_cycle_started_at || '').trim();
+  if (!raw) return null;
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * Pure helper for offline verify — filters attempt timestamps to the active cycle.
+ * When [cycleStartedAtMs] is null, all attempts count (legacy tests without cycle metadata).
+ */
+function filterAttemptTimestampsForCycle(attemptTimestampsMs, cycleStartedAtMs) {
+  const list = Array.isArray(attemptTimestampsMs) ? attemptTimestampsMs : [];
+  if (!Number.isFinite(cycleStartedAtMs)) {
+    return list.filter((ms) => Number.isFinite(ms));
+  }
+  return list.filter((ms) => Number.isFinite(ms) && ms >= cycleStartedAtMs);
+}
+
+async function countUserTestAttempts(pool, userId, testCatalogId, cycleStartedAtMs = null) {
   const uid = String(userId || '').trim();
   const tid = String(testCatalogId || '').trim();
   if (!uid || !tid) return 0;
+  const params = [uid, tid];
+  let cycleSql = '';
+  if (Number.isFinite(cycleStartedAtMs)) {
+    params.push(new Date(cycleStartedAtMs).toISOString());
+    cycleSql = ' AND completed_at >= $3::timestamptz';
+  }
   const { rows } = await pool.query(
     `SELECT COUNT(*)::int AS count
      FROM test_attempts
-     WHERE user_id = $1::uuid AND test_catalog_id = $2::uuid`,
-    [uid, tid],
+     WHERE user_id = $1::uuid AND test_catalog_id = $2::uuid${cycleSql}`,
+    params,
   );
   return Math.max(0, Number(rows[0]?.count || 0));
 }
 
-async function lastUserTestAttemptAt(pool, userId, testCatalogId) {
+async function lastUserTestAttemptAt(pool, userId, testCatalogId, cycleStartedAtMs = null) {
   const uid = String(userId || '').trim();
   const tid = String(testCatalogId || '').trim();
   if (!uid || !tid) return null;
+  const params = [uid, tid];
+  let cycleSql = '';
+  if (Number.isFinite(cycleStartedAtMs)) {
+    params.push(new Date(cycleStartedAtMs).toISOString());
+    cycleSql = ' AND completed_at >= $3::timestamptz';
+  }
   const { rows } = await pool.query(
     `SELECT completed_at
      FROM test_attempts
-     WHERE user_id = $1::uuid AND test_catalog_id = $2::uuid
+     WHERE user_id = $1::uuid AND test_catalog_id = $2::uuid${cycleSql}
      ORDER BY completed_at DESC
      LIMIT 1`,
-    [uid, tid],
+    params,
   );
   const raw = rows[0]?.completed_at;
   if (!raw) return null;
@@ -83,9 +113,10 @@ async function assertUserCanStartAttempt(pool, userId, testRow, advancedConfig, 
   if (!testId) {
     return { allowed: false, error: 'Test not found' };
   }
+  const cycleStartedAtMs = parseCycleStartedAtMs(testRow);
   const [attemptCount, lastAttemptAtMs] = await Promise.all([
-    countUserTestAttempts(pool, userId, testId),
-    lastUserTestAttemptAt(pool, userId, testId),
+    countUserTestAttempts(pool, userId, testId, cycleStartedAtMs),
+    lastUserTestAttemptAt(pool, userId, testId, cycleStartedAtMs),
   ]);
   return evaluateAttemptAccess({
     attemptsAllowed: testRow?.attempts_allowed,
@@ -97,6 +128,8 @@ async function assertUserCanStartAttempt(pool, userId, testRow, advancedConfig, 
 }
 
 module.exports = {
+  parseCycleStartedAtMs,
+  filterAttemptTimestampsForCycle,
   countUserTestAttempts,
   lastUserTestAttemptAt,
   evaluateAttemptAccess,

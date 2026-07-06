@@ -169,6 +169,7 @@ data class CatalogTestDto(
     @SerializedName("enrolledCount") val enrolledCount: Int? = null,
     @SerializedName("remainingSeats") val remainingSeats: Int? = null,
     @SerializedName("attemptsAllowed") val attemptsAllowed: Int? = null,
+    @SerializedName("lastCycleStartedAt") val lastCycleStartedAt: String? = null,
     @SerializedName("languageMode") val languageMode: String? = null,
     @SerializedName("examMode") val examMode: String? = null,
     @SerializedName("negativeMarkingText") val negativeMarkingText: String? = null,

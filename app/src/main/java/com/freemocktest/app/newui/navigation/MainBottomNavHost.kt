@@ -230,11 +230,12 @@ fun MainBottomNavHost(
                 return@launch
             }
             val card = runCatching {
-                ContentRepository.loadTestByTitle(safeName, allowDefaultFallback = false)
+                ContentRepository.resolveTestCardForNavigation(safeName, forceRefresh = false)
             }.getOrNull()
+            val canonicalTitle = ContentRepository.canonicalTestTitle(safeName, card)
             val home = runCatching { ContentRepository.loadHomeContent() }.getOrNull()
             val scheduleTimerEnabled = home?.startSeriesScheduleTimerEnabled == true
-            if (AppPreferencesRepository.findAppliedEntryNow(safeName) == null) {
+            if (AppPreferencesRepository.findAppliedEntryForTestLookup(safeName, card) == null) {
                 runCatching {
                     AuthRepository.syncAppliedTestSeriesFromServer(
                         scheduleTimerEnabled = scheduleTimerEnabled,
@@ -247,13 +248,22 @@ fun MainBottomNavHost(
                 examDate = card?.examDate,
                 slotLabel = card?.slotLabel,
                 lateJoinMinutes = card?.lateJoinMinutes ?: 0,
+                catalogCard = card,
             )
             if (blockMsg != null) {
                 Toast.makeText(context, blockMsg, Toast.LENGTH_LONG).show()
                 return@launch
             }
-            val attemptsUsed = TestHistoryRepository.countAttempts(attemptsUserKey, safeName)
-            val lastAttemptAt = TestHistoryRepository.lastAttemptAtMillis(attemptsUserKey, safeName)
+            val attemptsUsed = TestHistoryRepository.countAttemptsForCycle(
+                attemptsUserKey,
+                canonicalTitle,
+                card?.lastCycleStartedAtMillis,
+            )
+            val lastAttemptAt = TestHistoryRepository.lastAttemptAtMillisForCycle(
+                attemptsUserKey,
+                canonicalTitle,
+                card?.lastCycleStartedAtMillis,
+            )
             val attemptAccess = TestAttemptPolicy.evaluate(
                 attemptsAllowed = card?.attemptsAllowedCount ?: 1,
                 reattemptCooldownMinutes = card?.reattemptCooldownMinutes ?: 0,
@@ -268,7 +278,7 @@ fun MainBottomNavHost(
                 ).show()
                 return@launch
             }
-            mainNavController.navigate("${RoutesNew.QUIZ}/$safeName")
+            mainNavController.navigate("${RoutesNew.QUIZ}/$canonicalTitle")
         }
     }
 
@@ -666,11 +676,12 @@ fun MainBottomNavHost(
                 }
                 LaunchedEffect(decodedQuizName, attemptsUserKey) {
                     val card = runCatching {
-                        ContentRepository.loadTestByTitle(decodedQuizName, allowDefaultFallback = false)
+                        ContentRepository.resolveTestCardForNavigation(decodedQuizName, forceRefresh = false)
                     }.getOrNull()
+                    val canonicalTitle = ContentRepository.canonicalTestTitle(decodedQuizName, card)
                     val home = runCatching { ContentRepository.loadHomeContent() }.getOrNull()
                     val scheduleTimerEnabled = home?.startSeriesScheduleTimerEnabled == true
-                    if (AppPreferencesRepository.findAppliedEntryNow(decodedQuizName) == null) {
+                    if (AppPreferencesRepository.findAppliedEntryForTestLookup(decodedQuizName, card) == null) {
                         runCatching {
                             AuthRepository.syncAppliedTestSeriesFromServer(
                                 scheduleTimerEnabled = scheduleTimerEnabled,
@@ -683,14 +694,23 @@ fun MainBottomNavHost(
                         examDate = card?.examDate,
                         slotLabel = card?.slotLabel,
                         lateJoinMinutes = card?.lateJoinMinutes ?: 0,
+                        catalogCard = card,
                     )
                     if (blockMsg != null) {
                         Toast.makeText(context, blockMsg, Toast.LENGTH_LONG).show()
                         mainNavController.goToHomeTab()
                         return@LaunchedEffect
                     }
-                    val attemptsUsed = TestHistoryRepository.countAttempts(attemptsUserKey, decodedQuizName)
-                    val lastAttemptAt = TestHistoryRepository.lastAttemptAtMillis(attemptsUserKey, decodedQuizName)
+                    val attemptsUsed = TestHistoryRepository.countAttemptsForCycle(
+                        attemptsUserKey,
+                        canonicalTitle,
+                        card?.lastCycleStartedAtMillis,
+                    )
+                    val lastAttemptAt = TestHistoryRepository.lastAttemptAtMillisForCycle(
+                        attemptsUserKey,
+                        canonicalTitle,
+                        card?.lastCycleStartedAtMillis,
+                    )
                     val attemptAccess = TestAttemptPolicy.evaluate(
                         attemptsAllowed = card?.attemptsAllowedCount ?: 1,
                         reattemptCooldownMinutes = card?.reattemptCooldownMinutes ?: 0,

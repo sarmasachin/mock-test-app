@@ -13,9 +13,9 @@ data class AttemptAccessResult(
 /**
  * Client-side attempt limit checks (mirrors server [evaluateAttemptAccess]).
  *
- * - [attemptsAllowed]: max scored submissions per test catalog id (typical default 1).
+ * - [attemptsAllowed]: max scored submissions per test catalog id per cycle (typical default 1).
  * - [reattemptCooldownMinutes]: minimum gap before another try in the same cycle.
- * - Does **not** control shuffle; new shuffle order comes from a new catalog cycle + re-apply.
+ * - Cycle boundary mirrors server tests.last_cycle_started_at (see [TestCardNew.lastCycleStartedAtMillis]).
  *
  * @see com.freemocktest.app.util.ShuffleAttemptRules
  */

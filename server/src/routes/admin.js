@@ -19,7 +19,6 @@ const {
 } = require('../lib/pushCampaignAnalytics');
 const {
   isMailConfigured,
-  sendAdminContentAlertEmail,
   sendSupportJourneyEmail,
   sendAdminRoleGrantedEmail,
 } = require('../mail');
@@ -31,6 +30,12 @@ const {
   buildTestPublishDedupeKey,
   prependNotificationIfNotDuplicate,
 } = require('../lib/notificationScheduling');
+const {
+  triggerTestPublishAnnouncementEmail,
+  mergePublishEmailDedupeKey,
+  preserveServerAdvancedFields,
+  queueContentAnnouncementEmails,
+} = require('../lib/publishAnnouncementEmail');
 const {
   trimNotificationSchedulingPayload,
   trimPublishSchedulingItems,
@@ -987,54 +992,6 @@ async function appendPushNotificationItem(userId, payload) {
   );
 }
 
-async function sendContentAnnouncementEmails({
-  kind,
-  title,
-  message,
-  ctaUrl,
-  ctaLabel,
-}) {
-  if (!isMailConfigured()) return;
-  const { rows } = await pool.query(
-    `SELECT id::text AS user_id, email, display_name
-     FROM users
-     WHERE is_banned = false
-       AND trim(COALESCE(email, '')) <> ''
-       AND marketing_emails_unsubscribed_at IS NULL
-     ORDER BY created_at DESC
-     LIMIT 2000`,
-  );
-  for (const row of rows || []) {
-    const to = String(row.email || '').trim();
-    if (!to) continue;
-    try {
-      await sendAdminContentAlertEmail({
-        userId: String(row.user_id || '').trim(),
-        to,
-        displayName: String(row.display_name || '').trim(),
-        kind,
-        title,
-        message,
-        ctaUrl,
-        ctaLabel,
-      });
-    } catch (mailErr) {
-      console.error('content_alert_email_failed', kind, to, mailErr && (mailErr.message || mailErr));
-    }
-  }
-}
-
-/** Bulk user emails are slow; admin-web uses a 15s axios timeout. Schedule mail after this delay (ms) so INSERT + JSON saves complete before HTTP responds. */
-const CONTENT_ANNOUNCEMENT_EMAIL_DELAY_MS = 5 * 60 * 1000;
-
-function scheduleContentAnnouncementEmails(payload) {
-  setTimeout(() => {
-    sendContentAnnouncementEmails(payload).catch((err) => {
-      console.error('content_announcement_emails_failed', err && (err.message || err));
-    });
-  }, CONTENT_ANNOUNCEMENT_EMAIL_DELAY_MS);
-}
-
 function shuffleArray(arr) {
   const list = [...arr];
   for (let i = list.length - 1; i > 0; i -= 1) {
@@ -1094,13 +1051,32 @@ function shuffleQuestionOptions(row) {
   return out;
 }
 
+async function withPgTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 /**
  * Rebuilds a published test's question rows from the subcategory pool.
  * Deletes existing rows for this test_id, then inserts pool picks with shuffleQuestionOptions.
  * Runs on first publish (justPublished). See SHUFFLE_AND_ATTEMPT_RULES.txt §3A.
+ *
+ * When [options.client] is provided, runs inside the caller's transaction (no nested BEGIN/COMMIT).
  */
-async function regenerateTestFromSubcategoryPool(testId) {
-  const baseRes = await pool.query(
+async function regenerateTestFromSubcategoryPool(testId, options = {}) {
+  const db = options.client || pool;
+  const manageTransaction = !options.client;
+  const baseRes = await db.query(
     `SELECT id, subcategory, question_count, dynamic_fluctuation_on_publish
      FROM tests
      WHERE id = $1::uuid
@@ -1113,7 +1089,7 @@ async function regenerateTestFromSubcategoryPool(testId) {
   }
   if (!base || !String(base.subcategory || '').trim()) return { regenerated: false, reason: 'missing_subcategory' };
   const needed = Math.max(1, Number(base.question_count || 0));
-  const poolRes = await pool.query(
+  const poolRes = await db.query(
     `SELECT q.id, q.stem, q.choice_a, q.choice_b, q.choice_c, q.choice_d, q.correct_index, q.explanation, q.created_at,
             COALESCE(q.subject_key, '') AS subject_key
      FROM questions q
@@ -1131,17 +1107,18 @@ async function regenerateTestFromSubcategoryPool(testId) {
   });
 
   if (!selected.length) return { regenerated: false, reason: 'no_selection' };
-  const client = await pool.connect();
+  const ownClient = manageTransaction ? await pool.connect() : null;
+  const writeClient = options.client || ownClient;
   try {
-    await client.query('BEGIN');
-    await client.query(`DELETE FROM questions WHERE test_id = $1::uuid`, [testId]);
+    if (manageTransaction) await writeClient.query('BEGIN');
+    await writeClient.query(`DELETE FROM questions WHERE test_id = $1::uuid`, [testId]);
     let position = 1;
     for (const row of selected) {
       const randomized = shuffleQuestionOptions(row);
       const subjectKey = String(row.subject_key || '')
         .trim()
         .slice(0, 64);
-      await client.query(
+      await writeClient.query(
         `INSERT INTO questions (
            test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published, subject_key
          ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
@@ -1161,13 +1138,13 @@ async function regenerateTestFromSubcategoryPool(testId) {
       );
       position += 1;
     }
-    await client.query('COMMIT');
+    if (manageTransaction) await writeClient.query('COMMIT');
     return { regenerated: true, count: selected.length };
   } catch (e) {
-    await client.query('ROLLBACK').catch(() => {});
+    if (manageTransaction) await writeClient.query('ROLLBACK').catch(() => {});
     throw e;
   } finally {
-    client.release();
+    if (ownClient) ownClient.release();
   }
 }
 
@@ -2821,6 +2798,26 @@ router.post('/tests/:id/republish-now', async (req, res) => {
       Date.now(),
     );
 
+    const emailResult = triggerTestPublishAnnouncementEmail({
+      testId: id,
+      testTitle: savedRow.title,
+      isPublished: savedRow.is_published === true,
+      lastCycleStartedAt: savedRow.last_cycle_started_at,
+      advancedConfig: advanced_config || {},
+      previousAdvancedConfig: advanced_config || {},
+      justPublished: false,
+      cycleRenewed: true,
+    });
+    if (emailResult.updateDedupeKey) {
+      const nextAdvancedMap =
+        advancedMap && typeof advancedMap === 'object' ? { ...advancedMap } : {};
+      nextAdvancedMap[testSettingKey(id)] = mergePublishEmailDedupeKey(
+        advanced_config || {},
+        emailResult.updateDedupeKey,
+      );
+      await setJsonSetting('testAdvancedConfigs', nextAdvancedMap, req.userId);
+    }
+
     return res.json({
       ok: true,
       item: {
@@ -2872,63 +2869,69 @@ router.post('/tests', async (req, res) => {
   const advancedConfig = advancedParsed.value;
   const storedPublished = data.isPublished !== false;
   try {
-    const { rows } = await pool.query(
-      `INSERT INTO tests (
-         slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
-         dynamic_fluctuation_on_publish, exam_date, total_marks, slot_label, capacity_total, enrolled_count,
-         attempts_allowed, language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until,
-         answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::date, $23::timestamptz, $24::timestamptz, $25, $26)
-       RETURNING id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
-                 exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed, language_mode,
-                 exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days,
-                 COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish`,
-      [
-        data.slug,
-        data.title,
-        data.subcategory,
-        data.metaLine,
-        data.durationMinutes,
-        data.questionCount,
-        data.testKind,
-        storedPublished,
-        data.dynamicFluctuationOnPublish,
-        data.examDate || null,
-        data.totalMarks,
-        data.slotLabel,
-        data.capacityTotal,
-        data.enrolledCount,
-        data.attemptsAllowed,
-        data.languageMode,
-        data.examMode,
-        data.negativeMarkingText,
-        data.testTypeLabel,
-        data.badgeEnabled,
-        data.badgeText,
-        data.validUntil || null,
-        data.answerKeyReleaseAt || null,
-        data.resultReleaseAt || null,
-        data.dynamicDateEnabled,
-        data.dateCycleDays,
-      ],
-    );
-    if (storedPublished) {
-      await pool.query(
-        `UPDATE tests
-         SET last_cycle_started_at = now(), updated_at = now()
-         WHERE id = $1::uuid`,
-        [rows[0].id],
+    const { createdRow } = await withPgTransaction(async (client) => {
+      const { rows } = await client.query(
+        `INSERT INTO tests (
+           slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
+           dynamic_fluctuation_on_publish, exam_date, total_marks, slot_label, capacity_total, enrolled_count,
+           attempts_allowed, language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until,
+           answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::date, $23::timestamptz, $24::timestamptz, $25, $26)
+         RETURNING id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
+                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed, language_mode,
+                   exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days,
+                   COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish`,
+        [
+          data.slug,
+          data.title,
+          data.subcategory,
+          data.metaLine,
+          data.durationMinutes,
+          data.questionCount,
+          data.testKind,
+          storedPublished,
+          data.dynamicFluctuationOnPublish,
+          data.examDate || null,
+          data.totalMarks,
+          data.slotLabel,
+          data.capacityTotal,
+          data.enrolledCount,
+          data.attemptsAllowed,
+          data.languageMode,
+          data.examMode,
+          data.negativeMarkingText,
+          data.testTypeLabel,
+          data.badgeEnabled,
+          data.badgeText,
+          data.validUntil || null,
+          data.answerKeyReleaseAt || null,
+          data.resultReleaseAt || null,
+          data.dynamicDateEnabled,
+          data.dateCycleDays,
+        ],
       );
-      await regenerateTestFromSubcategoryPool(rows[0].id);
+      const createdRow = rows[0];
+      if (storedPublished) {
+        await client.query(
+          `UPDATE tests
+           SET last_cycle_started_at = now(), updated_at = now()
+           WHERE id = $1::uuid`,
+          [createdRow.id],
+        );
+        await regenerateTestFromSubcategoryPool(createdRow.id, { client });
+      }
+      return { createdRow };
+    });
+
+    let advancedConfigToSave = advancedConfig;
+    if (storedPublished) {
+      const cycleRes = await pool.query(
+        `SELECT last_cycle_started_at FROM tests WHERE id = $1::uuid LIMIT 1`,
+        [createdRow.id],
+      );
+      const cycleIso = cycleRes.rows[0]?.last_cycle_started_at;
       if (advancedConfig.notifyOnPublish !== false) {
-        const cycleRes = await pool.query(
-          `SELECT last_cycle_started_at FROM tests WHERE id = $1::uuid LIMIT 1`,
-          [rows[0].id],
-        );
-        const dedupeKey = buildTestPublishDedupeKey(
-          rows[0].id,
-          cycleRes.rows[0]?.last_cycle_started_at,
-        );
+        const dedupeKey = buildTestPublishDedupeKey(createdRow.id, cycleIso);
         await enqueueNotification(req.userId, {
           title: 'New Test Published',
           message: `${data.title} is now available.`,
@@ -2938,26 +2941,28 @@ router.post('/tests', async (req, res) => {
           dedupeKey,
         });
       }
-      if (advancedConfig.sendEmailOnPublish === true) {
-        scheduleContentAnnouncementEmails({
-          kind: 'mocktest',
-          title: data.title,
-          message: `${data.title} is now available. Open app and attempt it now.`,
-          ctaUrl: String(process.env.MAIL_APP_URL || '').trim(),
-          ctaLabel: 'Open Mock Test',
-        });
-      }
+      const emailResult = triggerTestPublishAnnouncementEmail({
+        testId: createdRow.id,
+        testTitle: data.title,
+        isPublished: true,
+        lastCycleStartedAt: cycleIso,
+        advancedConfig,
+        previousAdvancedConfig: {},
+        justPublished: true,
+        cycleRenewed: false,
+      });
+      advancedConfigToSave = mergePublishEmailDedupeKey(advancedConfig, emailResult.updateDedupeKey);
     }
     const currentAdvancedMap = await getJsonSetting('testAdvancedConfigs', {});
     const nextAdvancedMap =
       currentAdvancedMap && typeof currentAdvancedMap === 'object' ? { ...currentAdvancedMap } : {};
-    nextAdvancedMap[testSettingKey(rows[0].id)] = advancedConfig;
+    nextAdvancedMap[testSettingKey(createdRow.id)] = advancedConfigToSave;
     await setJsonSetting('testAdvancedConfigs', nextAdvancedMap, req.userId);
-    await syncTestPublishScheduleFromAdvancedConfig(rows[0].id, advancedConfig, req.userId);
-    return res.status(201).json({ item: { ...rows[0], advanced_config: advancedConfig } });
+    await syncTestPublishScheduleFromAdvancedConfig(createdRow.id, advancedConfigToSave, req.userId);
+    return res.status(201).json({ item: { ...createdRow, advanced_config: advancedConfigToSave } });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'Slug already exists' });
-    console.error(e);
+    console.error('admin_create_test_error', e);
     return res.status(500).json({ error: 'Failed to create test' });
   }
 });
@@ -2970,109 +2975,130 @@ router.patch('/tests/:id', async (req, res) => {
   const data = parsed.value;
   const advancedParsed = normalizeTestAdvancedConfig((req.body || {}).advancedConfig);
   if (advancedParsed.error) return res.status(400).json({ error: advancedParsed.error });
-  const advancedConfig = advancedParsed.value;
+  const advancedMapBefore = await getJsonSetting('testAdvancedConfigs', {});
+  const previousAdvancedConfig = resolveAdvancedConfigForTest(advancedMapBefore, id) || {};
+  let advancedConfig = preserveServerAdvancedFields(advancedParsed.value, previousAdvancedConfig);
   const storedPublished = data.isPublished !== false;
   const body = req.body || {};
   const hasDynamicFluctuationValue = Object.prototype.hasOwnProperty.call(body, 'dynamicFluctuationOnPublish');
   try {
-    const before = await pool.query(
-      `SELECT id, title, is_published, last_cycle_started_at, enrolled_count,
-              COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
-       FROM tests
-       WHERE id = $1::uuid
-       LIMIT 1`,
+    const txResult = await withPgTransaction(async (client) => {
+      const before = await client.query(
+        `SELECT id, title, is_published, last_cycle_started_at, enrolled_count,
+                COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
+         FROM tests
+         WHERE id = $1::uuid
+         LIMIT 1
+         FOR UPDATE`,
+        [id],
+      );
+      const beforeRow = before.rows[0];
+      if (!beforeRow) {
+        const err = new Error('Test not found');
+        err.statusCode = 404;
+        throw err;
+      }
+      const dynamicFluctuationOnPublish = hasDynamicFluctuationValue
+        ? data.dynamicFluctuationOnPublish
+        : beforeRow.dynamic_fluctuation_on_publish !== false;
+      const { rows } = await client.query(
+        `UPDATE tests
+         SET slug = $1, title = $2, subcategory = $3, meta_line = $4, duration_minutes = $5,
+             question_count = $6, test_kind = $7, is_published = $8, dynamic_fluctuation_on_publish = $9,
+             exam_date = $10::date, total_marks = $11, slot_label = $12, capacity_total = $13, enrolled_count = $14,
+             attempts_allowed = $15, language_mode = $16, exam_mode = $17, negative_marking_text = $18,
+             test_type_label = $19, badge_enabled = $20, badge_text = $21, valid_until = $22::date, answer_key_release_at = $23::timestamptz, result_release_at = $24::timestamptz, dynamic_date_enabled = $25, date_cycle_days = $26
+         WHERE id = $27::uuid
+         RETURNING id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
+                   exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed, language_mode,
+                   exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days,
+                   COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish`,
+        [
+          data.slug,
+          data.title,
+          data.subcategory,
+          data.metaLine,
+          data.durationMinutes,
+          data.questionCount,
+          data.testKind,
+          storedPublished,
+          dynamicFluctuationOnPublish,
+          data.examDate || null,
+          data.totalMarks,
+          data.slotLabel,
+          data.capacityTotal,
+          Math.max(0, Number(beforeRow.enrolled_count || 0)),
+          data.attemptsAllowed,
+          data.languageMode,
+          data.examMode,
+          data.negativeMarkingText,
+          data.testTypeLabel,
+          data.badgeEnabled,
+          data.badgeText,
+          data.validUntil || null,
+          data.answerKeyReleaseAt || null,
+          data.resultReleaseAt || null,
+          data.dynamicDateEnabled,
+          data.dateCycleDays,
+          id,
+        ],
+      );
+      if (!rows[0]) {
+        const err = new Error('Test not found');
+        err.statusCode = 404;
+        throw err;
+      }
+      const justPublished = !beforeRow.is_published && rows[0].is_published;
+      let cycleRenewed = false;
+      if (rows[0].is_published) {
+        const startedMs = Date.parse(String(beforeRow.last_cycle_started_at || ''));
+        const durationMinutes = Math.max(1, Number(rows[0].duration_minutes || 0));
+        const cycleEndMs = Number.isFinite(startedMs) ? startedMs + durationMinutes * 60 * 1000 : Number.NaN;
+        const cycleExpired = Number.isFinite(cycleEndMs) && Date.now() >= cycleEndMs;
+        if (justPublished || cycleExpired) {
+          await client.query(
+            `UPDATE tests
+             SET last_cycle_started_at = now(), updated_at = now()
+             WHERE id = $1::uuid`,
+            [id],
+          );
+          cycleRenewed = cycleExpired && !justPublished;
+        }
+      }
+      if (justPublished) {
+        await regenerateTestFromSubcategoryPool(rows[0].id, { client });
+      }
+      return { savedRow: rows[0], justPublished, cycleRenewed };
+    });
+
+    const { savedRow, justPublished, cycleRenewed } = txResult;
+    const cycleRes = await pool.query(
+      `SELECT last_cycle_started_at FROM tests WHERE id = $1::uuid LIMIT 1`,
       [id],
     );
-    const beforeRow = before.rows[0];
-    if (!beforeRow) return res.status(404).json({ error: 'Test not found' });
-    const dynamicFluctuationOnPublish = hasDynamicFluctuationValue
-      ? data.dynamicFluctuationOnPublish
-      : beforeRow.dynamic_fluctuation_on_publish !== false;
-    const { rows } = await pool.query(
-      `UPDATE tests
-       SET slug = $1, title = $2, subcategory = $3, meta_line = $4, duration_minutes = $5,
-           question_count = $6, test_kind = $7, is_published = $8, dynamic_fluctuation_on_publish = $9,
-           exam_date = $10::date, total_marks = $11, slot_label = $12, capacity_total = $13, enrolled_count = $14,
-           attempts_allowed = $15, language_mode = $16, exam_mode = $17, negative_marking_text = $18,
-           test_type_label = $19, badge_enabled = $20, badge_text = $21, valid_until = $22::date, answer_key_release_at = $23::timestamptz, result_release_at = $24::timestamptz, dynamic_date_enabled = $25, date_cycle_days = $26
-       WHERE id = $27::uuid
-       RETURNING id, slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
-                 exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed, language_mode,
-                 exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at, dynamic_date_enabled, date_cycle_days,
-                 COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish`,
-      [
-        data.slug,
-        data.title,
-        data.subcategory,
-        data.metaLine,
-        data.durationMinutes,
-        data.questionCount,
-        data.testKind,
-        storedPublished,
-        dynamicFluctuationOnPublish,
-        data.examDate || null,
-        data.totalMarks,
-        data.slotLabel,
-        data.capacityTotal,
-        Math.max(0, Number(beforeRow.enrolled_count || 0)),
-        data.attemptsAllowed,
-        data.languageMode,
-        data.examMode,
-        data.negativeMarkingText,
-        data.testTypeLabel,
-        data.badgeEnabled,
-        data.badgeText,
-        data.validUntil || null,
-        data.answerKeyReleaseAt || null,
-        data.resultReleaseAt || null,
-        data.dynamicDateEnabled,
-        data.dateCycleDays,
-        id,
-      ],
-    );
-    if (!rows[0]) return res.status(404).json({ error: 'Test not found' });
-    const justPublished = !beforeRow.is_published && rows[0].is_published;
-    if (rows[0].is_published) {
-      const startedMs = Date.parse(String(beforeRow.last_cycle_started_at || ''));
-      const durationMinutes = Math.max(1, Number(rows[0].duration_minutes || 0));
-      const cycleEndMs = Number.isFinite(startedMs) ? startedMs + durationMinutes * 60 * 1000 : Number.NaN;
-      const cycleExpired = Number.isFinite(cycleEndMs) && Date.now() >= cycleEndMs;
-      if (justPublished || cycleExpired) {
-        await pool.query(
-          `UPDATE tests
-           SET last_cycle_started_at = now(), updated_at = now()
-           WHERE id = $1::uuid`,
-          [id],
-        );
-      }
+    const cycleIso = cycleRes.rows[0]?.last_cycle_started_at;
+    if (justPublished && advancedConfig.notifyOnPublish !== false) {
+      const dedupeKey = buildTestPublishDedupeKey(id, cycleIso);
+      await enqueueNotification(req.userId, {
+        title: 'Test Published',
+        message: `${savedRow.title} is now live.`,
+        target: 'all',
+        deepLink: 'main/tests',
+        scheduleAt: new Date().toISOString(),
+        dedupeKey,
+      });
     }
-    if (justPublished) {
-      await regenerateTestFromSubcategoryPool(rows[0].id);
-      if (advancedConfig.notifyOnPublish !== false) {
-        const cycleRes = await pool.query(
-          `SELECT last_cycle_started_at FROM tests WHERE id = $1::uuid LIMIT 1`,
-          [id],
-        );
-        const dedupeKey = buildTestPublishDedupeKey(id, cycleRes.rows[0]?.last_cycle_started_at);
-        await enqueueNotification(req.userId, {
-          title: 'Test Published',
-          message: `${rows[0].title} is now live.`,
-          target: 'all',
-          deepLink: 'main/tests',
-          scheduleAt: new Date().toISOString(),
-          dedupeKey,
-        });
-      }
-      if (advancedConfig.sendEmailOnPublish === true) {
-        scheduleContentAnnouncementEmails({
-          kind: 'mocktest',
-          title: rows[0].title,
-          message: `${rows[0].title} is now live. Start your attempt and track your score.`,
-          ctaUrl: String(process.env.MAIL_APP_URL || '').trim(),
-          ctaLabel: 'Start Mock Test',
-        });
-      }
-    }
+    const emailResult = triggerTestPublishAnnouncementEmail({
+      testId: id,
+      testTitle: savedRow.title,
+      isPublished: savedRow.is_published === true,
+      lastCycleStartedAt: cycleIso,
+      advancedConfig,
+      previousAdvancedConfig,
+      justPublished,
+      cycleRenewed,
+    });
+    advancedConfig = mergePublishEmailDedupeKey(advancedConfig, emailResult.updateDedupeKey);
     const currentAdvancedMap = await getJsonSetting('testAdvancedConfigs', {});
     const nextAdvancedMap =
       currentAdvancedMap && typeof currentAdvancedMap === 'object' ? { ...currentAdvancedMap } : {};
@@ -3090,11 +3116,12 @@ router.patch('/tests/:id', async (req, res) => {
        LIMIT 1`,
       [id],
     );
-    const savedRow = refreshed.rows[0] || rows[0];
-    return res.json({ item: { ...savedRow, advanced_config: advancedConfig } });
+    const refreshedRow = refreshed.rows[0] || savedRow;
+    return res.json({ item: { ...refreshedRow, advanced_config: advancedConfig } });
   } catch (e) {
+    if (e.statusCode === 404) return res.status(404).json({ error: 'Test not found' });
     if (e.code === '23505') return res.status(409).json({ error: 'Slug already exists' });
-    console.error(e);
+    console.error('admin_update_test_error', e);
     return res.status(500).json({ error: 'Failed to update test' });
   }
 });
@@ -3876,7 +3903,7 @@ router.post('/articles', async (req, res) => {
       if (announcementOn) {
         const kind = feedKind === 'job' ? 'job' : feedKind === 'exam' ? 'exam' : null;
         if (kind) {
-          scheduleContentAnnouncementEmails({
+          queueContentAnnouncementEmails({
             kind,
             title: headline,
             message: String(summary || category || 'A new update is now available for you.'),
@@ -3958,7 +3985,7 @@ router.patch('/articles/:id', async (req, res) => {
       if (announcementOn) {
         const kind = feedKind === 'job' ? 'job' : feedKind === 'exam' ? 'exam' : null;
         if (kind) {
-          scheduleContentAnnouncementEmails({
+          queueContentAnnouncementEmails({
             kind,
             title: rows[0].headline,
             message: String(body.summary || body.category || 'A new update is now available for you.'),
@@ -4933,8 +4960,12 @@ router.post('/notifications/send', async (req, res) => {
         deactivated,
       });
     }
-    // Keep app bell/inbox feed in sync with manually sent pushes.
-    await appendPushNotificationItem(req.userId, { title, message, target, deepLink });
+    // Keep app bell/inbox feed in sync only when FCM actually delivered to at least one device.
+    // Do not write inbox entries when sent=0 (no tokens / all failed) — that made app show
+    // notifications the phone never received.
+    if (sent > 0) {
+      await appendPushNotificationItem(req.userId, { title, message, target, deepLink });
+    }
     await logAdminAction(req, 'push_notification_manual_send', 'notification', null, {
       target,
       sent,

@@ -686,6 +686,50 @@ function fromDateTimeLocal(value?: string | null) {
   return date.toISOString();
 }
 
+/** HTML `<input type="time">` (24h HH:MM) → API slot label (`09:30 AM`). */
+function timeInputToSlotLabel(timeValue: string): string {
+  const raw = String(timeValue || '').trim();
+  if (!raw) return '';
+  const m = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return '';
+  const hour24 = Number(m[1]);
+  const minute = Number(m[2]);
+  if (
+    !Number.isInteger(hour24) ||
+    !Number.isInteger(minute) ||
+    hour24 < 0 ||
+    hour24 > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return '';
+  }
+  const meridiem = hour24 >= 12 ? 'PM' : 'AM';
+  let hour12 = hour24 % 12;
+  if (hour12 === 0) hour12 = 12;
+  return `${String(hour12).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${meridiem}`;
+}
+
+/** API slot label → HTML time input value (24h HH:MM). */
+function slotLabelToTimeInput(slotLabel: string): string {
+  const raw = String(slotLabel || '').trim().toLowerCase();
+  if (!raw) return '';
+  const m = raw.match(/^(\d{1,2}):(\d{2})\s*(am|pm)?$/i);
+  if (!m) return '';
+  let hour = Number(m[1]);
+  const minute = Number(m[2]);
+  const meridiem = String(m[3] || '').toLowerCase();
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute < 0 || minute > 59) return '';
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return '';
+    if (meridiem === 'pm' && hour !== 12) hour += 12;
+    if (meridiem === 'am' && hour === 12) hour = 0;
+  } else if (hour < 0 || hour > 23) {
+    return '';
+  }
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
 function mapApiTestItem(x: any): TestItem {
   return {
     ...x,
@@ -1612,7 +1656,7 @@ function TestsTab({
   const [questionCount, setQuestionCount] = useState('');
   const [totalMarks, setTotalMarks] = useState('');
   const [examDate, setExamDate] = useState('');
-  const [slotLabel, setSlotLabel] = useState('');
+  const [slotTime, setSlotTime] = useState('');
   const [capacityTotal, setCapacityTotal] = useState('');
   const [enrolledCount, setEnrolledCount] = useState('0');
   const [attemptsAllowed, setAttemptsAllowed] = useState('');
@@ -1682,6 +1726,14 @@ function TestsTab({
   const TEST_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
   const SLOT_LABEL_RE = /^(0[1-9]|1[0-2]):([0-5][0-9])\s?(AM|PM)$/i;
 
+  function RequiredStar() {
+    return (
+      <span className="field-required-star" title="Required">
+        *
+      </span>
+    );
+  }
+
   function nextQuestionPositionFrom(itemsList: QuestionItem[]) {
     const maxPos = itemsList.reduce((max, item) => {
       const p = Number(item.position || 0);
@@ -1699,6 +1751,7 @@ function TestsTab({
     questionCount: string | number;
     totalMarks: string | number;
     examDate?: string;
+    slotTime?: string;
     slotLabel?: string;
     capacityTotal: string | number;
     enrolledCount: string | number;
@@ -1744,7 +1797,9 @@ function TestsTab({
     const questionCountValue = Number(input.questionCount);
     const totalMarksValue = Number(input.totalMarks || 0);
     const examDateValue = String(input.examDate || '').trim();
-    const slotLabelValue = String(input.slotLabel || '').trim().slice(0, 80);
+    const slotTimeValue = String(input.slotTime ?? '').trim();
+    const slotLabelFromTime = slotTimeValue ? timeInputToSlotLabel(slotTimeValue) : '';
+    const slotLabelValue = (slotLabelFromTime || String(input.slotLabel || '').trim()).slice(0, 80);
     const capacityValue = Number(input.capacityTotal || 0);
     const enrolledValue = Number(input.enrolledCount || 0);
     const attemptsValue = Number(input.attemptsAllowed || 1);
@@ -1801,11 +1856,14 @@ function TestsTab({
     if (examDateValue && Number.isNaN(Date.parse(`${examDateValue}T00:00:00Z`))) {
       return { error: 'examDate must be a valid date (YYYY-MM-DD)' };
     }
+    if (slotTimeValue && !slotLabelFromTime) {
+      return { error: 'slotTime must be a valid time (HH:MM)' };
+    }
     if (slotLabelValue && !SLOT_LABEL_RE.test(slotLabelValue)) {
-      return { error: 'slotLabel must be in HH:MM AM/PM format (example: 09:30 AM)' };
+      return { error: 'slotTime could not be converted — pick a time from the picker' };
     }
     if (examDateValue && !slotLabelValue) {
-      return { error: 'slotLabel is required when examDate is provided (use HH:MM AM/PM)' };
+      return { error: 'slotTime is required when examDate is provided' };
     }
     if (validUntilValue && Number.isNaN(Date.parse(`${validUntilValue}T00:00:00Z`))) {
       return { error: 'validUntil must be a valid date (YYYY-MM-DD)' };
@@ -1981,7 +2039,7 @@ function TestsTab({
     setQuestionCount('');
     setTotalMarks('');
     setExamDate('');
-    setSlotLabel('');
+    setSlotTime('');
     setCapacityTotal('');
     setEnrolledCount('0');
     setAttemptsAllowed('');
@@ -2026,7 +2084,7 @@ function TestsTab({
     setTotalMarks(String(t.total_marks ?? ''));
     setExamDate(t.exam_date || '');
     setValidUntil(t.valid_until || '');
-    setSlotLabel(t.slot_label || '');
+    setSlotTime(slotLabelToTimeInput(t.slot_label || ''));
     setCapacityTotal(String(t.capacity_total ?? ''));
     setEnrolledCount(String(t.enrolled_count ?? '0'));
     setAttemptsAllowed(String(t.attempts_allowed ?? ''));
@@ -2088,7 +2146,7 @@ function TestsTab({
       questionCount,
       totalMarks,
       examDate,
-      slotLabel,
+      slotTime,
       capacityTotal,
       enrolledCount,
       attemptsAllowed,
@@ -2150,7 +2208,23 @@ function TestsTab({
         await load();
       }
     } catch (err: any) {
-      pushToast('error', err?.response?.data?.error || (editingId ? 'Failed to update test' : 'Failed to create test'));
+      const status = err?.response?.status;
+      const apiError = err?.response?.data?.error;
+      const fallback = editingId ? 'Failed to update test' : 'Failed to create test';
+      const message = apiError || fallback;
+      if (!editingId && status === 409) {
+        const baseSlug = slug.trim() || title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        if (baseSlug) {
+          setSlug(`${baseSlug}-${Date.now()}`);
+        }
+        pushToast('error', `${message} Slug updated — review and submit again.`);
+        return;
+      }
+      if (!editingId && status === 500) {
+        pushToast('error', `${message} No test was saved — fix the issue and submit again.`);
+        return;
+      }
+      pushToast('error', message);
     }
   }
 
@@ -2478,26 +2552,51 @@ function TestsTab({
                 Editing test — use <b>Save changes</b> below, or <b>Cancel edit</b> to discard.
               </p>
             )}
+            <p className="all-tests-required-legend">
+              Fields marked with <span className="field-required-star">*</span> are required to create a test.
+            </p>
             <div className="all-tests-section">
               <h4>Basic</h4>
               <div className="all-tests-grid">
-                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Test title" required />
-                <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="test-slug" required />
-                <input
-                  value={subcategory}
-                  onChange={(e) => setSubcategory(e.target.value)}
-                  placeholder="Subcategory"
-                  list={subcategoryListId}
-                />
+                <label className="all-tests-field">
+                  <span>
+                    Test title
+                    <RequiredStar />
+                  </span>
+                  <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Test title" required />
+                </label>
+                <label className="all-tests-field">
+                  <span>
+                    Slug
+                    <RequiredStar />
+                  </span>
+                  <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="test-slug" required />
+                </label>
+                <label className="all-tests-field">
+                  <span>
+                    Subcategory
+                    <RequiredStar />
+                  </span>
+                  <input
+                    value={subcategory}
+                    onChange={(e) => setSubcategory(e.target.value)}
+                    placeholder="e.g. Patwari, Math"
+                    list={subcategoryListId}
+                    title="Must match app exam category so users see this test"
+                  />
+                </label>
                 <datalist id={subcategoryListId}>
                   {subcategoryOptions.map((name) => (
                     <option key={name} value={name} />
                   ))}
                 </datalist>
-                <select value={kind} onChange={(e) => setKind(e.target.value as TestKind)}>
-                  <option value="mock">Mock</option>
-                  <option value="quiz">Quiz</option>
-                </select>
+                <label className="all-tests-field">
+                  <span>Test kind</span>
+                  <select value={kind} onChange={(e) => setKind(e.target.value as TestKind)}>
+                    <option value="mock">Mock</option>
+                    <option value="quiz">Quiz</option>
+                  </select>
+                </label>
               </div>
             </div>
 
@@ -2505,33 +2604,105 @@ function TestsTab({
               <h4>Schedule & Stats</h4>
               <div className="all-tests-grid">
                 <label className="all-tests-field">
-                  <span>Exam Date</span>
+                  <span>Exam Date (optional)</span>
                   <input type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} />
                 </label>
                 <label className="all-tests-field">
-                  <span>Valid Until</span>
+                  <span>Valid Until (optional)</span>
                   <input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} />
                 </label>
-                <input value={slotLabel} onChange={(e) => setSlotLabel(e.target.value)} placeholder="Slot label (e.g. 09:30 AM)" />
-                <input type="number" value={durationMinutes} onChange={(e) => setDurationMinutes(e.target.value)} placeholder="Duration (minutes)" />
-                <input type="number" value={questionCount} onChange={(e) => setQuestionCount(e.target.value)} placeholder="Question count" />
-                <input type="number" value={totalMarks} onChange={(e) => setTotalMarks(e.target.value)} placeholder="Total marks" />
+                <label className="all-tests-field">
+                  <span>
+                    Slot time
+                    {examDate.trim() ? <RequiredStar /> : null}
+                  </span>
+                  <input
+                    type="time"
+                    value={slotTime}
+                    onChange={(e) => setSlotTime(e.target.value)}
+                    title={examDate.trim() ? 'Required when Exam Date is set' : 'Optional unless Exam Date is set'}
+                  />
+                </label>
+                <label className="all-tests-field">
+                  <span>
+                    Duration (minutes)
+                    <RequiredStar />
+                  </span>
+                  <input
+                    type="number"
+                    value={durationMinutes}
+                    onChange={(e) => setDurationMinutes(e.target.value)}
+                    placeholder="60"
+                    min={1}
+                    max={1440}
+                    required
+                  />
+                </label>
+                <label className="all-tests-field">
+                  <span>
+                    Question count
+                    <RequiredStar />
+                  </span>
+                  <input
+                    type="number"
+                    value={questionCount}
+                    onChange={(e) => setQuestionCount(e.target.value)}
+                    placeholder="50"
+                    min={1}
+                    max={500}
+                    required
+                  />
+                </label>
+                <label className="all-tests-field">
+                  <span>Total marks</span>
+                  <input type="number" value={totalMarks} onChange={(e) => setTotalMarks(e.target.value)} placeholder="100" min={0} />
+                </label>
               </div>
             </div>
 
             <div className="all-tests-section">
               <h4>Capacity & Rules</h4>
               <div className="all-tests-grid">
-                <input type="number" value={capacityTotal} onChange={(e) => setCapacityTotal(e.target.value)} placeholder="Capacity (e.g. 500)" />
-                <input
-                  type="number"
-                  value={enrolledCount}
-                  onChange={(e) => setEnrolledCount(e.target.value)}
-                  placeholder="Enrolled count (auto)"
-                  readOnly
-                  title="Auto-managed from user applications"
-                />
-                <input type="number" value={attemptsAllowed} onChange={(e) => setAttemptsAllowed(e.target.value)} placeholder="Attempts allowed" />
+                <label className="all-tests-field">
+                  <span>
+                    Capacity
+                    <RequiredStar />
+                  </span>
+                  <input
+                    type="number"
+                    value={capacityTotal}
+                    onChange={(e) => setCapacityTotal(e.target.value)}
+                    placeholder="500"
+                    min={1}
+                    title="Use 1 or more — 0 shows 0 seats in the app"
+                  />
+                </label>
+                <label className="all-tests-field">
+                  <span>Enrolled count (auto)</span>
+                  <input
+                    type="number"
+                    value={enrolledCount}
+                    onChange={(e) => setEnrolledCount(e.target.value)}
+                    placeholder="0"
+                    readOnly
+                    title="Auto-managed from user applications"
+                  />
+                </label>
+                <label className="all-tests-field">
+                  <span>
+                    Attempts allowed
+                    <RequiredStar />
+                  </span>
+                  <input
+                    type="number"
+                    value={attemptsAllowed}
+                    onChange={(e) => setAttemptsAllowed(e.target.value)}
+                    placeholder="1"
+                    min={1}
+                    max={20}
+                    required
+                  />
+                </label>
                 <input value={languageMode} onChange={(e) => setLanguageMode(e.target.value)} placeholder="Language mode" />
                 <input value={examMode} onChange={(e) => setExamMode(e.target.value)} placeholder="Exam mode" />
                 <input value={negativeMarkingText} onChange={(e) => setNegativeMarkingText(e.target.value)} placeholder="Negative marking" />

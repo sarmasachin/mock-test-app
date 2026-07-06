@@ -95,7 +95,8 @@ router.post('/', async (req, res) => {
     }
 
     const testRes = await pool.query(
-      `SELECT id, attempts_allowed FROM tests WHERE id = $1::uuid LIMIT 1`,
+      `SELECT id, attempts_allowed, last_cycle_started_at
+       FROM tests WHERE id = $1::uuid LIMIT 1`,
       [catalog],
     );
     const testRow = testRes.rows[0];

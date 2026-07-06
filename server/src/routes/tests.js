@@ -124,6 +124,9 @@ function mapTest(row) {
     enrolledCount,
     remainingSeats: Math.max(0, capacityTotal - enrolledCount),
     attemptsAllowed: Number(row.attempts_allowed || 1),
+    lastCycleStartedAt: row.last_cycle_started_at
+      ? new Date(row.last_cycle_started_at).toISOString()
+      : null,
     languageMode: String(row.language_mode || 'Bilingual'),
     examMode: String(row.exam_mode || 'Practice'),
     negativeMarkingText: String(row.negative_marking_text || 'No'),
@@ -358,8 +361,8 @@ router.get('/', async (req, res) => {
   const multiSubs = !sub ? parseSubcategoriesQueryParam(req.query.subcategories) : [];
   const kind = String(req.query.testKind || '').trim().toLowerCase();
   const limit = Math.min(Math.max(parseInt(String(req.query.limit || '40'), 10) || 40, 1), 100);
-  const catalogSelect = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, ${PUBLISHED_QUESTION_COUNT_SQL}, test_kind,
-                  exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed,
+  const catalogSelect = `SELECT id, slug, title, subcategory, meta_line, duration_minutes, question_count, ${PUBLISHED_QUESTION_COUNT_SQL}, test_kind, is_published,
+                  exam_date, total_marks, slot_label, capacity_total, enrolled_count, attempts_allowed, last_cycle_started_at,
                   language_mode, exam_mode, negative_marking_text, test_type_label, badge_enabled, badge_text, valid_until, answer_key_release_at, result_release_at,
                   dynamic_date_enabled, date_cycle_days`;
   try {
@@ -536,9 +539,20 @@ router.get('/my-applications', requireAuth, async (req, res) => {
       const examDate = resolveExamDate(row);
       const cyclePhase = resolveTestCyclePhase(row, advancedConfig, nowMs, publishScheduleItems);
       const catalogError = catalogVisibilityError(row, advancedConfig, nowMs);
+      const cycleStartedAtMs = Date.parse(String(row.last_cycle_started_at || ''));
       const [attemptCount, lastAttemptAtMs] = await Promise.all([
-        countUserTestAttempts(pool, req.userId, row.id),
-        lastUserTestAttemptAt(pool, req.userId, row.id),
+        countUserTestAttempts(
+          pool,
+          req.userId,
+          row.id,
+          Number.isFinite(cycleStartedAtMs) ? cycleStartedAtMs : null,
+        ),
+        lastUserTestAttemptAt(
+          pool,
+          req.userId,
+          row.id,
+          Number.isFinite(cycleStartedAtMs) ? cycleStartedAtMs : null,
+        ),
       ]);
       const attemptAccess = evaluateAttemptAccess({
         attemptsAllowed: row.attempts_allowed,

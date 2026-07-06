@@ -17,7 +17,7 @@ package com.freemocktest.app.util
  * ## Catalog cycle vs attempt vs resume
  * - **New cycle** ([tests.last_cycle_started_at] changes, user re-applies): new server shuffle seed
  *   → new question/option order. Previous cycle order must not repeat.
- * - **Attempt** ([attemptsAllowed] per test id, default 1): scored tries within a cycle; same cycle
+ * - **Attempt** ([attemptsAllowed] per test id per cycle, default 1): scored tries within a cycle; same cycle
  *   shares the same delivery seed (second allowed try keeps same order).
  * - **Resume** (in-progress timer): freezes exact [options] + [correctIndex] + correctOptionText
  *   in [InProgressQuizState.questionsSnapshot] — no re-shuffle on resume (Phase 4).

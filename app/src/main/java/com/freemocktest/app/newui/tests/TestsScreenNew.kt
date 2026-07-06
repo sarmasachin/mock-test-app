@@ -94,6 +94,7 @@ data class TestCardNew(
     val copyPasteBlocked: Boolean = false,
     val notifyOnPublish: Boolean = true,
     val attemptsAllowedCount: Int = 1,
+    val lastCycleStartedAtMillis: Long? = null,
     val questionCountValue: Int = 0,
     val totalMarksValue: Int = 0,
     val subcategory: String = "",

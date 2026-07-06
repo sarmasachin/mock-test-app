@@ -104,6 +104,16 @@ object TestHistoryRepository {
         }
     }
 
+    suspend fun countAttemptsSince(userKey: String, testName: String, cycleStartedAtMillis: Long): Int {
+        val d = dao ?: return 0
+        val safeUserKey = userKey.trim().ifBlank { "guest" }
+        val safeName = testName.trim()
+        if (safeName.isBlank() || cycleStartedAtMillis <= 0L) return 0
+        return withContext(Dispatchers.IO) {
+            runCatching { d.countByUserAndTestSince(safeUserKey, safeName, cycleStartedAtMillis) }.getOrDefault(0)
+        }
+    }
+
     suspend fun lastAttemptAtMillis(userKey: String, testName: String): Long? {
         val d = dao ?: return null
         val safeUserKey = userKey.trim().ifBlank { "guest" }
@@ -112,5 +122,35 @@ object TestHistoryRepository {
         return withContext(Dispatchers.IO) {
             runCatching { d.lastCompletedAtMillis(safeUserKey, safeName) }.getOrNull()
         }
+    }
+
+    suspend fun lastAttemptAtMillisSince(userKey: String, testName: String, cycleStartedAtMillis: Long): Long? {
+        val d = dao ?: return null
+        val safeUserKey = userKey.trim().ifBlank { "guest" }
+        val safeName = testName.trim()
+        if (safeName.isBlank() || cycleStartedAtMillis <= 0L) return null
+        return withContext(Dispatchers.IO) {
+            runCatching { d.lastCompletedAtMillisSince(safeUserKey, safeName, cycleStartedAtMillis) }.getOrNull()
+        }
+    }
+
+    suspend fun countAttemptsForCycle(
+        userKey: String,
+        testName: String,
+        cycleStartedAtMillis: Long?,
+    ): Int = if (cycleStartedAtMillis != null && cycleStartedAtMillis > 0L) {
+        countAttemptsSince(userKey, testName, cycleStartedAtMillis)
+    } else {
+        countAttempts(userKey, testName)
+    }
+
+    suspend fun lastAttemptAtMillisForCycle(
+        userKey: String,
+        testName: String,
+        cycleStartedAtMillis: Long?,
+    ): Long? = if (cycleStartedAtMillis != null && cycleStartedAtMillis > 0L) {
+        lastAttemptAtMillisSince(userKey, testName, cycleStartedAtMillis)
+    } else {
+        lastAttemptAtMillis(userKey, testName)
     }
 }

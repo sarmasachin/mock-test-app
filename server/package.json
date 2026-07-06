@@ -20,11 +20,20 @@
     "verify:notification-fix": "node scripts/verifyNotificationFixPhase5.js",
     "phase0:diag": "node scripts/phase0Diag.js",
     "verify:cycle-gap-phase1": "node scripts/verifyCycleRepublishGapPhase1.js",
+    "verify:catalog-list-phase1": "node scripts/verifyCatalogListPhase1.js",
+    "verify:apply-screen-phase2": "node scripts/verifyApplyScreenPhase2.js",
+    "verify:apply-start-phase3": "node scripts/verifyApplyStartPhase3.js",
+    "fix:phase3-local-test-data": "node scripts/fixPhase3LocalTestData.js",
+    "verify:admin-create-phase4": "node scripts/verifyAdminCreatePhase4.js",
     "verify:test-resolve-phase2": "node scripts/verifyTestResolvePhase2.js",
     "verify:admin-cycle-phase5": "node scripts/verifyAdminCycleStatusPhase5.js",
     "verify:scheduler-hardening-phase6": "node scripts/verifySchedulerHardeningPhase6.js",
     "phase6:publish-diag": "node scripts/diagPublishSchedulingPhase6.js",
     "verify:apply-cycle-phase7": "node scripts/verifyApplyCyclePhase7.js",
+    "verify:attempts-per-cycle-phase8": "node scripts/verifyAttemptsPerCyclePhase8.js",
+    "verify:publish-email-fix": "node scripts/verifyPublishEmailFix.js",
+    "verify:fcm-env": "node scripts/verifyFcmEnv.js",
+    "verify:publish-push-phase5": "node scripts/verifyPublishPushPhase5.js",
     "verify:schedule-timer-phase0": "node scripts/verifyScheduleTimerPhase0.js",
     "verify:schedule-timer-phase1": "node scripts/verifyScheduleTimerPhase1.js",
     "verify:schedule-timer-phase2": "node scripts/verifyScheduleTimerPhase2.js",
@@ -34,7 +43,8 @@
     "verify:interest-phase0": "node scripts/verifyInterestPhase0.js",
     "verify:interest-phase1": "node scripts/verifyInterestPhase1.js",
     "e2e:schedule-timer-phase2": "node scripts/e2eScheduleTimerPhase2.js",
-    "e2e:apply-cycle": "node scripts/e2eTestApplyCycle.js"
+    "e2e:apply-cycle": "node scripts/e2eTestApplyCycle.js",
+    "e2e:publish-email-diag": "node scripts/e2ePublishEmailDiag.js"
   },
   "engines": {
     "node": ">=18"

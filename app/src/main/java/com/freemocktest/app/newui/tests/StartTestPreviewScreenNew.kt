@@ -79,6 +79,26 @@ private fun isGenericStartTestRoute(name: String): Boolean {
         route.equals("applied", ignoreCase = true)
 }
 
+private fun matchesAppliedTestLookup(
+    app: MyTestApplicationDto,
+    lookupKey: String,
+    loadedCard: TestCardNew?,
+): Boolean {
+    val key = lookupKey.trim()
+    if (key.isBlank()) return false
+    if (app.testTitle.equals(key, ignoreCase = true)) return true
+    val card = loadedCard ?: return false
+    if (card.id.isNotBlank() && app.testId == card.id) return true
+    if (card.title.isNotBlank() && app.testTitle.equals(card.title, ignoreCase = true)) return true
+    if (card.subcategory.isNotBlank() &&
+        key.equals(card.subcategory, ignoreCase = true) &&
+        app.testTitle.equals(card.title, ignoreCase = true)
+    ) {
+        return true
+    }
+    return false
+}
+
 @Composable
 fun StartTestPreviewScreenNew(
     modifier: Modifier = Modifier,
@@ -186,31 +206,26 @@ fun StartTestPreviewScreenNew(
         }
         try {
             val cached = runCatching { ContentRepository.loadCachedTestByTitle(target) }.getOrNull()
-            if (cached != null && cached.id.isNotBlank()) {
+            if (cached != null && ContentRepository.hasCatalogDisplayFields(cached)) {
                 testSnapshot = cached
             }
             primaryLoading = testSnapshot == null
             val loadResult = runCatching {
                 ContentRepository.loadTestForApplyScreen(target, forceRefresh = true)
             }.getOrNull()
-            testSnapshot = loadResult?.effectiveCard ?: testSnapshot
+            val loadedCard = loadResult?.effectiveCard?.takeIf {
+                ContentRepository.hasCatalogDisplayFields(it)
+            } ?: testSnapshot
+            testSnapshot = loadedCard
             resolveSnapshot = loadResult?.resolveSnapshot
+            val apps = runCatching { AuthRepository.loadMyTestApplications() }.getOrNull()?.getOrNull()
+            matchedServerApplication = apps?.firstOrNull { app ->
+                matchesAppliedTestLookup(app, target, loadedCard)
+            }
             resolveAlreadyApplied =
                 loadResult?.resolveSnapshot?.alreadyAppliedInCurrentCycle == true ||
-                    loadResult?.resolveSnapshot?.canStart == true
-            matchedServerApplication = null
-            if (!resolveAlreadyApplied) {
-                val apps = runCatching { AuthRepository.loadMyTestApplications() }.getOrNull()?.getOrNull()
-                matchedServerApplication = apps?.firstOrNull { app ->
-                    app.testTitle.equals(target, ignoreCase = true)
-                }
-                resolveAlreadyApplied = matchedServerApplication != null
-            } else {
-                val apps = runCatching { AuthRepository.loadMyTestApplications() }.getOrNull()?.getOrNull()
-                matchedServerApplication = apps?.firstOrNull { app ->
-                    app.testTitle.equals(target, ignoreCase = true)
-                }
-            }
+                    loadResult?.resolveSnapshot?.canStart == true ||
+                    matchedServerApplication != null
         } catch (e: CancellationException) {
             throw e
         } finally {
@@ -766,7 +781,7 @@ private fun CountdownProgressRing(
             )
         }
         Text(
-            text = if (locked) countdown else "00:00:00",
+            text = if (locked) countdown else "Ready",
             color = Color(0xFF475569),
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,

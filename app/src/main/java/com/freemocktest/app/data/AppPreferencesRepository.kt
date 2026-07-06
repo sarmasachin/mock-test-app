@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import com.freemocktest.app.newui.auth.isValidEmail
 import com.freemocktest.app.newui.auth.isValidMobile
+import com.freemocktest.app.newui.tests.TestCardNew
 import com.freemocktest.app.util.TestScheduleUtils
 import com.freemocktest.app.util.UserInterestUtils
 import java.time.Instant
@@ -221,16 +222,35 @@ object AppPreferencesRepository {
         )
     }
 
-    suspend fun findAppliedEntryNow(testName: String): AppliedTestSeriesEntry? {
+    suspend fun findAppliedEntryNow(testName: String): AppliedTestSeriesEntry? =
+        findAppliedEntryForTestLookup(testName, catalogCard = null)
+
+    /**
+     * Match applied-test entry when [lookupKey] is a catalog title, subcategory, or alias.
+     */
+    suspend fun findAppliedEntryForTestLookup(
+        lookupKey: String,
+        catalogCard: TestCardNew? = null,
+    ): AppliedTestSeriesEntry? {
         if (!::appContext.isInitialized) return null
-        val safeName = testName.trim()
-        if (safeName.isBlank()) return null
+        val key = lookupKey.trim()
+        if (key.isBlank()) return null
         val now = System.currentTimeMillis()
-        return runCatching {
-            val prefs = store().data.first()
-            parseAppliedTestSeries(prefs[keyAppliedTestSeries])
-                .firstOrNull { it.testName.equals(safeName, ignoreCase = true) && it.isActive(now) }
-        }.getOrNull()
+        val entries = runCatching {
+            parseAppliedTestSeries(store().data.first()[keyAppliedTestSeries])
+        }.getOrNull().orEmpty().filter { it.isActive(now) }
+        entries.firstOrNull { it.testName.equals(key, ignoreCase = true) }?.let { return it }
+        val card = catalogCard ?: return null
+        if (card.title.isNotBlank()) {
+            entries.firstOrNull { it.testName.equals(card.title, ignoreCase = true) }?.let { return it }
+        }
+        if (card.subcategory.isNotBlank() && key.equals(card.subcategory, ignoreCase = true)) {
+            entries.firstOrNull { it.testName.equals(card.title, ignoreCase = true) }?.let { return it }
+        }
+        if (card.id.isNotBlank()) {
+            // Applied list is keyed by title; when card title differs from lookup, caller should pass card.
+        }
+        return null
     }
 
     suspend fun resolveStartBlockMessageNow(
@@ -239,14 +259,15 @@ object AppPreferencesRepository {
         examDate: String?,
         slotLabel: String?,
         lateJoinMinutes: Int = 0,
+        catalogCard: TestCardNew? = null,
     ): String? {
-        val entry = findAppliedEntryNow(testName)
+        val entry = findAppliedEntryForTestLookup(testName, catalogCard)
         return resolveStartBlockMessage(
             appliedEntry = entry,
             scheduleTimerEnabled = scheduleTimerEnabled,
-            examDate = examDate,
-            slotLabel = slotLabel,
-            lateJoinMinutes = lateJoinMinutes,
+            examDate = examDate ?: catalogCard?.examDate,
+            slotLabel = slotLabel ?: catalogCard?.slotLabel,
+            lateJoinMinutes = lateJoinMinutes.takeIf { it > 0 } ?: (catalogCard?.lateJoinMinutes ?: 0),
         )
     }
 
