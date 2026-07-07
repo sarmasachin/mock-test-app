@@ -19,7 +19,7 @@ const {
   publishScheduleEntityKey,
   isPublishSchedulePendingStatus,
 } = require('../src/lib/schedulingQueueLimits');
-const { isActiveDedupeStatus } = require('../src/lib/notificationScheduling');
+const { isActiveDedupeStatus, normalizeDedupeKeyForCompare } = require('../src/lib/notificationScheduling');
 const { resolveNotifyOnCycleRepublish } = require('../src/lib/testVisibility');
 
 const SMOKE_SCRIPTS = [
@@ -27,6 +27,9 @@ const SMOKE_SCRIPTS = [
   'verifyNotificationSchedulingPhase2.js',
   'verifySchedulingQueueLimitsPhase3.js',
   'verifyNotifyOnCycleRepublishPhase4.js',
+  'verifyPerUserPushDedupePhase2.js',
+  'verifyMockTestStartSoonPushPhase3.js',
+  'verifyPushTrayDedupePhase4.js',
 ];
 
 function runSmokeSuites() {
@@ -176,7 +179,7 @@ function auditNotificationScheduling(items, nowMs) {
       stats.testPublishTitles += 1;
     }
 
-    const dedupeKey = String(item.dedupeKey || '').trim();
+    const dedupeKey = normalizeDedupeKeyForCompare(String(item.dedupeKey || '').trim());
     if (!dedupeKey || !isActiveDedupeStatus(status)) continue;
     const refMs = Date.parse(String(item.sentAt || item.scheduleAt || item.createdAt || ''));
     if (Number.isFinite(refMs) && nowMs - refMs > 24 * 60 * 60 * 1000) continue;

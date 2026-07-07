@@ -239,9 +239,12 @@ fun StartTestPreviewScreenNew(
                 if (existing !in names) appliedSnapshots.remove(existing)
             }
             names.forEach { name ->
-                appliedSnapshots[name] = runCatching {
+                val loaded = runCatching {
                     ContentRepository.loadTestForApplyScreen(name, forceRefresh = true).effectiveCard
-                }.getOrNull() ?: appliedSnapshots[name]
+                }.getOrNull()
+                appliedSnapshots[name] = loaded?.takeIf {
+                    ContentRepository.hasCatalogDisplayFields(it)
+                } ?: appliedSnapshots[name]
             }
         } catch (e: CancellationException) {
             throw e

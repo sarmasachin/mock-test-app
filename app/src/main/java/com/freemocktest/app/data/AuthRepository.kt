@@ -683,6 +683,7 @@ object AuthRepository {
             val syncItems = resp.items.map { item ->
                 AppPreferencesRepository.ServerAppliedSyncItem(
                     testTitle = item.testTitle,
+                    testId = item.testId,
                     examDate = item.examDate,
                     slotLabel = item.slotLabel,
                     canStart = item.canStart,
@@ -690,7 +691,7 @@ object AuthRepository {
                     joinClosesAtMillis = TestScheduleUtils.parseIsoMillis(item.joinClosesAt),
                 )
             }
-            AppPreferencesRepository.replaceAppliedTestSeriesFromServer(
+            AppPreferencesRepository.mergeAppliedTestSeriesFromServer(
                 items = syncItems,
                 scheduleTimerEnabled = scheduleTimerEnabled,
             )

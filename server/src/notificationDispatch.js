@@ -44,6 +44,20 @@ async function getAccessToken() {
   return { token, projectId };
 }
 
+function resolvePushDedupeKey(payload) {
+  const explicit = String(payload?.dedupeKey || '').trim().slice(0, 120);
+  if (explicit) return explicit;
+  const campaignId = String(payload?.campaignId || '').trim().slice(0, 64);
+  if (campaignId) return `campaign:${campaignId}`;
+  return '';
+}
+
+function androidNotificationTagFromDedupeKey(dedupeKey) {
+  const key = String(dedupeKey || '').trim();
+  if (!key) return '';
+  return key.slice(0, 64).replace(/[^\w\-:.@]/g, '_');
+}
+
 async function sendPushToToken(deviceToken, payload) {
   const token = String(deviceToken || '').trim();
   if (!token) {
@@ -53,6 +67,7 @@ async function sendPushToToken(deviceToken, payload) {
   const body = String(payload?.message || '').trim().slice(0, 500);
   const deepLink = String(payload?.deepLink || '').trim().slice(0, 120);
   const campaignId = String(payload?.campaignId || '').trim().slice(0, 64);
+  const dedupeKey = resolvePushDedupeKey(payload);
   if (!title || !body) {
     return { ok: false, code: 'INVALID_PAYLOAD' };
   }
@@ -62,6 +77,15 @@ async function sendPushToToken(deviceToken, payload) {
   };
   if (deepLink) data.deepLink = deepLink;
   if (campaignId) data.campaignId = campaignId;
+  if (dedupeKey) data.dedupeKey = dedupeKey;
+  const androidNotification = {
+    channel_id: 'general_notifications',
+    default_sound: true,
+    icon: 'ic_stat_notification',
+    color: '#0B4CC9',
+  };
+  const notificationTag = androidNotificationTagFromDedupeKey(dedupeKey);
+  if (notificationTag) androidNotification.tag = notificationTag;
   const { token: accessToken, projectId } = await getAccessToken();
   const endpoint = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`;
   const response = await fetch(endpoint, {
@@ -80,12 +104,7 @@ async function sendPushToToken(deviceToken, payload) {
         data,
         android: {
           priority: 'HIGH',
-          notification: {
-            channel_id: 'general_notifications',
-            default_sound: true,
-            icon: 'ic_stat_notification',
-            color: '#0B4CC9',
-          },
+          notification: androidNotification,
         },
       },
       validate_only: false,
@@ -107,4 +126,6 @@ async function sendPushToToken(deviceToken, payload) {
 
 module.exports = {
   sendPushToToken,
+  resolvePushDedupeKey,
+  androidNotificationTagFromDedupeKey,
 };

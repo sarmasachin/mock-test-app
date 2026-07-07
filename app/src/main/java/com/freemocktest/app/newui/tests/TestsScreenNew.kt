@@ -148,8 +148,14 @@ fun TestsScreenNew(
                 ContentRepository.loadTestsForSubcategory(subcategory, forceRefresh = true)
             }
             tests = if (refreshOutcome.isSuccess) {
-                refreshOutcome.getOrNull() ?: tests
-            } else if (hadCache) {
+                val fresh = refreshOutcome.getOrNull().orEmpty()
+                    .filter { it.id.isNotBlank() }
+                when {
+                    fresh.isNotEmpty() -> fresh
+                    tests.isNotEmpty() -> tests
+                    else -> fresh
+                }
+            } else if (tests.isNotEmpty()) {
                 tests
             } else {
                 emptyList()

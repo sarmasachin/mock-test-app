@@ -3,17 +3,12 @@
 const { isTestCatalogVisible, catalogVisibilityError } = require('./testVisibility');
 const { cycleRepublishAtMs } = require('./cycleRepublishGap');
 const { buildTestResolvePayload } = require('./testResolve');
+const {
+  isApplicationFromOlderCycle,
+  evaluateApplicationCycleState,
+} = require('./testApplicationCycle');
 
 const DEFAULT_E2E_TEST_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
-
-function isApplicationFromOlderCycle(row, appliedAtIso) {
-  if (!appliedAtIso) return false;
-  const appliedMs = Date.parse(String(appliedAtIso || ''));
-  if (!Number.isFinite(appliedMs)) return false;
-  const cycleStartedMs = Date.parse(String(row?.last_cycle_started_at || ''));
-  if (!Number.isFinite(cycleStartedMs)) return false;
-  return appliedMs < cycleStartedMs;
-}
 
 function buildScenarioTestRow({
   isPublished,
@@ -142,9 +137,8 @@ function evaluateApplyCyclePhase({
   const catalogVisible = isTestCatalogVisible(row, advancedConfig, nowMs);
   const catalogListed = catalogVisible;
   const visibilityError = catalogVisibilityError(row, advancedConfig, nowMs);
-  const fromOlderCycle = isApplicationFromOlderCycle(row, appliedAtIso);
-  const alreadyAppliedInCurrentCycle = Boolean(appliedAtIso) && !fromOlderCycle;
-  const mayReapplyForNewCycle = Boolean(appliedAtIso) && fromOlderCycle;
+  const cycleState = evaluateApplicationCycleState(row, appliedAtIso);
+  const { fromOlderCycle, alreadyAppliedInCurrentCycle, mayReapplyForNewCycle } = cycleState;
 
   const resolve = buildTestResolvePayload({
     row,

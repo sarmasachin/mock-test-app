@@ -275,25 +275,35 @@ object AppPreferencesRepository {
     }
 
     /**
-     * Replace local applied-test list from server (authoritative). Clears stale/expired ghosts.
+     * Merge local applied-test list from server (authoritative per test) without wiping active
+     * local rows when the server returns empty or temporarily omits a current-cycle apply.
      */
-    suspend fun replaceAppliedTestSeriesFromServer(
+    suspend fun mergeAppliedTestSeriesFromServer(
         items: List<ServerAppliedSyncItem>,
         scheduleTimerEnabled: Boolean,
     ): Boolean {
         if (!::appContext.isInitialized) return false
         val now = System.currentTimeMillis()
-        val entries = items.mapNotNull { item ->
+        val serverEntries = items.mapNotNull { item ->
             buildAppliedEntryFromServerSyncItem(item, scheduleTimerEnabled, now)
         }
         return runCatching {
             store().edit { prefs ->
-                prefs[keyAppliedTestSeries] = encodeAppliedTestSeries(entries)
+                val localActive = parseAppliedTestSeries(prefs[keyAppliedTestSeries])
+                    .filter { it.isActive(now) }
+                val merged = AppliedTestSeriesSync.merge(localActive, serverEntries)
+                prefs[keyAppliedTestSeries] = encodeAppliedTestSeries(merged)
             }
             true
-        }.onFailure { Log.e(TAG, "replaceAppliedTestSeriesFromServer failed", it) }
+        }.onFailure { Log.e(TAG, "mergeAppliedTestSeriesFromServer failed", it) }
             .getOrDefault(false)
     }
+
+    /** @see mergeAppliedTestSeriesFromServer */
+    suspend fun replaceAppliedTestSeriesFromServer(
+        items: List<ServerAppliedSyncItem>,
+        scheduleTimerEnabled: Boolean,
+    ): Boolean = mergeAppliedTestSeriesFromServer(items, scheduleTimerEnabled)
 
     data class AppliedTestSeriesEntry(
         val testName: String,

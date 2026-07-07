@@ -3,6 +3,8 @@
 const assert = require('assert');
 const {
   buildTestPublishDedupeKey,
+  normalizeCycleStartedAtIso,
+  normalizeDedupeKeyForCompare,
   prependNotificationIfNotDuplicate,
   NOTIFICATION_DEDUPE_WINDOW_MS,
 } = require('../src/lib/notificationScheduling');
@@ -11,6 +13,22 @@ function testDedupeKey() {
   const key = buildTestPublishDedupeKey('abc-123', '2026-07-01T05:21:03.095Z');
   assert.strictEqual(key, 'test_publish:abc-123:2026-07-01T05:21:03.095Z');
   assert.strictEqual(buildTestPublishDedupeKey('', 'x'), '');
+}
+
+function testDateObjectNormalizesToIso() {
+  const d = new Date('2026-07-01T05:21:03.095Z');
+  assert.strictEqual(
+    buildTestPublishDedupeKey('t1', d),
+    'test_publish:t1:2026-07-01T05:21:03.095Z',
+  );
+  assert.strictEqual(normalizeCycleStartedAtIso(d), '2026-07-01T05:21:03.095Z');
+}
+
+function testLegacyLocaleKeyMatchesIsoKey() {
+  const isoKey = buildTestPublishDedupeKey('t1', '2026-07-01T05:21:03.095Z');
+  const legacyCycle = new Date('2026-07-01T05:21:03.095Z').toString();
+  const legacyDedupe = `test_publish:t1:${legacyCycle}`;
+  assert.strictEqual(normalizeDedupeKeyForCompare(legacyDedupe), normalizeDedupeKeyForCompare(isoKey));
 }
 
 function testSkipDuplicateEnqueue() {
@@ -41,6 +59,35 @@ function testSkipDuplicateEnqueue() {
   assert.strictEqual(skipped.enqueued, false);
   assert.strictEqual(skipped.skipped, true);
   assert.strictEqual(skipped.current.items.length, 1);
+}
+
+function testFailedStatusBlocksReenqueue() {
+  const nowMs = Date.parse('2026-07-01T12:00:00.000Z');
+  const dedupeKey = buildTestPublishDedupeKey('t1', '2026-07-01T05:21:03.095Z');
+  const current = {
+    items: [
+      {
+        id: 'failed-one',
+        title: 'New Test Published',
+        message: 'rr is now available.',
+        status: 'failed',
+        dedupeKey,
+        scheduleAt: '2026-07-01T05:21:03.095Z',
+        createdAt: '2026-07-01T05:21:03.095Z',
+      },
+    ],
+  };
+  const skipped = prependNotificationIfNotDuplicate(
+    current,
+    {
+      title: 'New Test Published',
+      message: 'rr is now available.',
+      dedupeKey,
+    },
+    nowMs,
+  );
+  assert.strictEqual(skipped.enqueued, false);
+  assert.strictEqual(skipped.skipped, true);
 }
 
 function testAllowsNewCycleKey() {
@@ -102,7 +149,10 @@ function testExpiredDedupeAllowsReenqueue() {
 }
 
 testDedupeKey();
+testDateObjectNormalizesToIso();
+testLegacyLocaleKeyMatchesIsoKey();
 testSkipDuplicateEnqueue();
+testFailedStatusBlocksReenqueue();
 testAllowsNewCycleKey();
 testExpiredDedupeAllowsReenqueue();
 console.log('notification_scheduling_phase2_smoke_ok');

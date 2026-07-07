@@ -86,6 +86,43 @@ object ContentRepository {
             !card.durationLabel.isNullOrBlank()
     }
 
+    /** Placeholder row from [defaultTests] — must never replace a real catalog card. */
+    private fun isPlaceholderTestCard(card: TestCardNew): Boolean {
+        return card.id.isBlank() &&
+            card.meta.contains("No published test is available", ignoreCase = true)
+    }
+
+    private fun isRealCatalogCard(card: TestCardNew): Boolean {
+        return card.id.isNotBlank() && !isPlaceholderTestCard(card)
+    }
+
+    private fun mergeCatalogCardPreferExisting(
+        incoming: TestCardNew,
+        existing: TestCardNew?,
+    ): TestCardNew {
+        if (existing == null) return incoming
+        if (hasCatalogDisplayFields(incoming)) return incoming
+        if (!hasCatalogDisplayFields(existing)) return incoming
+        return existing.copy(
+            id = incoming.id.ifBlank { existing.id },
+            title = incoming.title.ifBlank { existing.title },
+            meta = incoming.meta.ifBlank { existing.meta },
+            subcategory = incoming.subcategory.ifBlank { existing.subcategory },
+        )
+    }
+
+    private suspend fun readCachedCatalogCard(lookupKey: String): TestCardNew? {
+        val key = lookupKey.trim().lowercase(Locale.US)
+        if (key.isBlank()) return null
+        testCardMemory[key]?.takeIf { hasCatalogDisplayFields(it) }?.let { return it }
+        return loadCachedTestByTitle(lookupKey)
+    }
+
+    private suspend fun cachedTestsForSubcategoryOrEmpty(subcategory: String): List<TestCardNew> {
+        return loadCachedTestsForSubcategory(subcategory)
+            .filter { isRealCatalogCard(it) }
+    }
+
     @Volatile
     private var profileMenuItemsMemory: List<ProfileMenuItemRemote>? = null
     @Volatile

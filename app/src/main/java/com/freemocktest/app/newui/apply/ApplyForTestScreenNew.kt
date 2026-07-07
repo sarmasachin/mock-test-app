@@ -165,10 +165,15 @@ fun ApplyForTestScreenNew(
                 ContentRepository.loadTestForApplyScreen(routeTitle, forceRefresh = true)
             }.getOrNull()
             val resolveSnapshot = applyLoad?.resolveSnapshot
-            val publishedTest = applyLoad?.effectiveCard
+            val publishedTest = applyLoad?.effectiveCard?.takeIf {
+                ContentRepository.hasCatalogDisplayFields(it)
+            }
+                ?: applyLoad?.catalogTest?.takeIf {
+                    ContentRepository.hasCatalogDisplayFields(it)
+                }
                 ?: runCatching {
                     ContentRepository.loadTestsForSubcategory(routeTitle, forceRefresh = true)
-                        .firstOrNull { it.id.isNotBlank() }
+                        .firstOrNull { it.id.isNotBlank() && ContentRepository.hasCatalogDisplayFields(it) }
                 }.getOrNull()
 
             val matchedApplication = myApplications.firstOrNull { app ->

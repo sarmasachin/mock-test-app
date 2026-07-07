@@ -27,19 +27,22 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         super.onMessageReceived(message)
+        val data = message.data
         val title = message.notification?.title?.trim().orEmpty()
-            .ifBlank { message.data["title"]?.trim().orEmpty() }
+            .ifBlank { data["title"]?.trim().orEmpty() }
             .ifBlank { "Gov Mock Test" }
         val body = message.notification?.body?.trim().orEmpty()
-            .ifBlank { message.data["message"]?.trim().orEmpty() }
+            .ifBlank { data["message"]?.trim().orEmpty() }
         if (body.isBlank()) return
-        val deepLink = message.data["deepLink"]?.trim().orEmpty()
-        val campaignId = message.data["campaignId"]?.trim().orEmpty()
+        val deepLink = data["deepLink"]?.trim().orEmpty()
+        val campaignId = data["campaignId"]?.trim().orEmpty()
+        val dedupeKey = PushNotificationIdentity.resolveDedupeKey(data, title, body, deepLink)
         LocalNotificationInbox.save(
             context = applicationContext,
             title = title,
             message = body,
             deepLink = deepLink,
+            dedupeKey = dedupeKey.takeIf { it.isNotBlank() },
         )
         if (!canShowTrayNotification()) return
         val launchIntent = Intent(this, MainActivity::class.java).apply {
@@ -47,9 +50,10 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
             if (deepLink.isNotBlank()) putExtra("push_deep_link", deepLink)
             if (campaignId.isNotBlank()) putExtra("campaignId", campaignId)
         }
+        val notificationId = resolveTrayNotificationId(dedupeKey)
         val pendingIntent = PendingIntent.getActivity(
             this,
-            Random.nextInt(100000, 999999),
+            notificationId,
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -66,10 +70,16 @@ class MockTestFirebaseMessagingService : FirebaseMessagingService() {
             .setContentIntent(pendingIntent)
             .build()
         try {
-            NotificationManagerCompat.from(this).notify(Random.nextInt(1, Int.MAX_VALUE), notification)
+            NotificationManagerCompat.from(this).notify(notificationId, notification)
         } catch (e: SecurityException) {
             Log.w(TAG, "tray notify blocked: missing POST_NOTIFICATIONS", e)
         }
+    }
+
+    private fun resolveTrayNotificationId(dedupeKey: String): Int {
+        val stableId = PushNotificationIdentity.stableTrayNotificationId(dedupeKey)
+        if (stableId > 0) return stableId
+        return Random.nextInt(1, Int.MAX_VALUE)
     }
 
     private fun canShowTrayNotification(): Boolean {

@@ -7,7 +7,10 @@ const { pool } = require('../db');
 const { normalizeFeedKindSlug, FEED_KIND_INVALID_HINT } = require('../constants/articleFeeds');
 const { getArticleFeedKindList, setArticleFeedKindList } = require('../lib/articleFeedKindOptions');
 const { getArticleCategoryList, setArticleCategoryList } = require('../lib/articleCategoryOptions');
-const { sendPushToToken } = require('../notificationDispatch');
+const {
+  buildCampaignDedupeKey,
+  sendPushToAudience,
+} = require('../lib/pushAudienceDelivery');
 const {
   hashDeviceToken,
   createCampaign,
@@ -27,9 +30,9 @@ const {
   savePublishSchedulingItems,
 } = require('../lib/testVisibility');
 const {
-  buildTestPublishDedupeKey,
-  prependNotificationIfNotDuplicate,
+  buildTestPublishNotificationPayload,
 } = require('../lib/notificationScheduling');
+const { enqueueNotificationSchedulingItem } = require('../lib/notificationSchedulingQueue');
 const {
   triggerTestPublishAnnouncementEmail,
   mergePublishEmailDedupeKey,
@@ -958,12 +961,7 @@ function normalizeDailyQuizItem(raw, fallbackId) {
 }
 
 async function enqueueNotification(userId, payload) {
-  const current = await getJsonSetting('notificationScheduling', { items: [] });
-  const result = prependNotificationIfNotDuplicate(current, payload);
-  if (result.enqueued) {
-    await setJsonSetting('notificationScheduling', result.current, userId);
-  }
-  return result;
+  return enqueueNotificationSchedulingItem(payload, userId);
 }
 
 async function appendPushNotificationItem(userId, payload) {
@@ -2945,15 +2943,14 @@ router.post('/tests', async (req, res) => {
       );
       const cycleIso = cycleRes.rows[0]?.last_cycle_started_at;
       if (advancedConfig.notifyOnPublish !== false) {
-        const dedupeKey = buildTestPublishDedupeKey(createdRow.id, cycleIso);
-        await enqueueNotification(req.userId, {
-          title: 'New Test Published',
-          message: `${data.title} is now available.`,
-          target: 'all',
-          deepLink: 'main/tests',
-          scheduleAt: new Date().toISOString(),
-          dedupeKey,
+        const publishPayload = buildTestPublishNotificationPayload({
+          testId: createdRow.id,
+          testTitle: data.title,
+          cycleStartedAt: cycleIso,
         });
+        if (publishPayload) {
+          await enqueueNotification(req.userId, publishPayload);
+        }
       }
       const emailResult = triggerTestPublishAnnouncementEmail({
         testId: createdRow.id,
@@ -3092,15 +3089,16 @@ router.patch('/tests/:id', async (req, res) => {
     );
     const cycleIso = cycleRes.rows[0]?.last_cycle_started_at;
     if (justPublished && advancedConfig.notifyOnPublish !== false) {
-      const dedupeKey = buildTestPublishDedupeKey(id, cycleIso);
-      await enqueueNotification(req.userId, {
+      const publishPayload = buildTestPublishNotificationPayload({
+        testId: id,
+        testTitle: savedRow.title,
+        cycleStartedAt: cycleIso,
         title: 'Test Published',
         message: `${savedRow.title} is now live.`,
-        target: 'all',
-        deepLink: 'main/tests',
-        scheduleAt: new Date().toISOString(),
-        dedupeKey,
       });
+      if (publishPayload) {
+        await enqueueNotification(req.userId, publishPayload);
+      }
     }
     const emailResult = triggerTestPublishAnnouncementEmail({
       testId: id,
@@ -4778,94 +4776,6 @@ router.post('/notifications/send', async (req, res) => {
     return res.status(400).json({ error: 'target must be all, new_users or active_users' });
   }
   try {
-    await pool.query(
-      `CREATE TABLE IF NOT EXISTS user_device_tokens (
-         id BIGSERIAL PRIMARY KEY,
-         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-         device_token TEXT NOT NULL,
-         platform VARCHAR(20) NOT NULL DEFAULT 'android',
-         app_version VARCHAR(40) NOT NULL DEFAULT '',
-         device_model VARCHAR(120) NOT NULL DEFAULT '',
-         is_active BOOLEAN NOT NULL DEFAULT true,
-         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-         last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-         UNIQUE (device_token)
-       )`,
-    );
-    let whereClause = 'TRUE';
-    if (target === 'new_users') {
-      whereClause = `u.created_at >= now() - interval '7 days'`;
-    } else if (target === 'active_users') {
-      whereClause = `EXISTS (
-        SELECT 1 FROM test_attempts ta
-        WHERE ta.user_id = u.id AND ta.completed_at >= now() - interval '30 days'
-      )`;
-    }
-    const tableColsRes = await pool.query(
-      `SELECT table_name, column_name
-       FROM information_schema.columns
-       WHERE table_schema = 'public'
-         AND table_name IN ('user_device_tokens', 'user_devices')`,
-    );
-    const tableCols = {};
-    for (const row of tableColsRes.rows || []) {
-      const table = String(row.table_name || '');
-      const col = String(row.column_name || '');
-      if (!table || !col) continue;
-      if (!tableCols[table]) tableCols[table] = new Set();
-      tableCols[table].add(col);
-    }
-    const hasUdt = tableCols.user_device_tokens && tableCols.user_device_tokens.size > 0;
-    const hasUd = tableCols.user_devices && tableCols.user_devices.size > 0;
-    if (!hasUdt && !hasUd) {
-      return res.json({ ok: true, total: 0, sent: 0, failed: 0, deactivated: 0 });
-    }
-    const sourceTable = hasUdt ? 'user_device_tokens' : 'user_devices';
-    const cols = tableCols[sourceTable];
-    const tokenColumn = cols.has('device_token')
-      ? 'device_token'
-      : cols.has('token')
-        ? 'token'
-        : cols.has('fcm_token')
-          ? 'fcm_token'
-          : null;
-    if (!tokenColumn) {
-      return res.status(500).json({ error: 'Device token column not found in database schema' });
-    }
-    const activeColumn = cols.has('is_active')
-      ? 'is_active'
-      : cols.has('active')
-        ? 'active'
-        : cols.has('enabled')
-          ? 'enabled'
-          : null;
-    const orderColumn = cols.has('updated_at')
-      ? 'updated_at'
-      : cols.has('last_seen_at')
-        ? 'last_seen_at'
-        : cols.has('created_at')
-          ? 'created_at'
-          : null;
-    const activeClause = activeColumn ? `src.${activeColumn} = true AND ` : '';
-    const orderClause = orderColumn ? `ORDER BY src.${orderColumn} DESC` : '';
-    const hasPlatform = cols.has('platform');
-    const hasDeviceModel = cols.has('device_model');
-    const extraCols = [
-      hasPlatform ? 'src.platform AS platform' : null,
-      hasDeviceModel ? 'src.device_model AS device_model' : null,
-    ]
-      .filter(Boolean)
-      .join(', ');
-    const tokenRows = await pool.query(
-      `SELECT src.${tokenColumn} AS token, src.user_id AS user_id${extraCols ? `, ${extraCols}` : ''}
-       FROM ${sourceTable} src
-       INNER JOIN users u ON u.id = src.user_id
-       WHERE ${activeClause}${whereClause}
-       ${orderClause}
-       LIMIT 10000`,
-    );
-    const rows = tokenRows.rows || [];
     const campaignId = await createCampaign({
       pushItemId,
       title,
@@ -4875,100 +4785,76 @@ router.post('/notifications/send', async (req, res) => {
       sentByUserId: req.userId,
     });
     const campaignIdStr = campaignId ? String(campaignId) : '';
-    let sent = 0;
-    let failed = 0;
-    let deactivated = 0;
+    const dedupeKey = buildCampaignDedupeKey(campaignIdStr);
+    const pushResult = await sendPushToAudience({
+      title,
+      message,
+      target,
+      deepLink,
+      dedupeKey,
+      campaignId: campaignIdStr,
+      collectDeliveries: Boolean(campaignId),
+    });
+    const sent = Number(pushResult.sent || 0);
+    const failed = Number(pushResult.failed || 0);
+    const deactivated = Number(pushResult.deactivated || 0);
+    const skipped = Number(pushResult.skipped || 0);
+    const rows = pushResult.deliveries || [];
     const deliveryEvents = [];
     const now = new Date();
-    for (const row of rows) {
-      try {
-        const currentToken = String(row.token || '').trim();
-        const userId = row.user_id || null;
-        const platform = String(row.platform || 'android').slice(0, 20);
-        const deviceModel = String(row.device_model || '').slice(0, 120);
+    if (campaignId) {
+      for (const entry of rows) {
+        const currentToken = String(entry.token || '').trim();
+        const userId = entry.userId || null;
+        const platform = String(entry.platform || 'android').slice(0, 20);
+        const deviceModel = String(entry.deviceModel || '').slice(0, 120);
         if (!currentToken) {
-          failed += 1;
-          if (campaignId) {
-            deliveryEvents.push({
-              userId,
-              deviceTokenHash: hashDeviceToken(`empty-${userId}-${deliveryEvents.length}`),
-              platform,
-              deviceModel,
-              deliveryStatus: 'failed',
-              failCode: 'EMPTY_TOKEN',
-              failDetail: '',
-              deliveredAt: null,
-            });
-          }
+          deliveryEvents.push({
+            userId,
+            deviceTokenHash: hashDeviceToken(`empty-${userId}-${deliveryEvents.length}`),
+            platform,
+            deviceModel,
+            deliveryStatus: 'failed',
+            failCode: 'EMPTY_TOKEN',
+            failDetail: '',
+            deliveredAt: null,
+          });
           continue;
         }
-        const result = await sendPushToToken(currentToken, {
-          title,
-          message,
-          deepLink,
-          campaignId: campaignIdStr,
-        });
-        if (result.ok) {
-          sent += 1;
-          if (campaignId) {
-            deliveryEvents.push({
-              userId,
-              deviceTokenHash: hashDeviceToken(currentToken),
-              platform,
-              deviceModel,
-              deliveryStatus: 'delivered',
-              failCode: '',
-              failDetail: '',
-              deliveredAt: now,
-            });
-          }
+        if (entry.ok) {
+          deliveryEvents.push({
+            userId,
+            deviceTokenHash: hashDeviceToken(currentToken),
+            platform,
+            deviceModel,
+            deliveryStatus: 'delivered',
+            failCode: '',
+            failDetail: '',
+            deliveredAt: now,
+          });
         } else {
-          failed += 1;
-          console.error(
-            'fcm_push_token_failed',
-            result.code || 'unknown',
-            (result.detail && String(result.detail).slice(0, 400)) || '',
-          );
-          if (campaignId) {
-            deliveryEvents.push({
-              userId,
-              deviceTokenHash: hashDeviceToken(currentToken),
-              platform,
-              deviceModel,
-              deliveryStatus: 'failed',
-              failCode: String(result.code || 'unknown').slice(0, 40),
-              failDetail: String(result.detail || '').slice(0, 500),
-              deliveredAt: null,
-            });
+          if (entry.code && entry.code !== 'EXCEPTION') {
+            console.error(
+              'fcm_push_token_failed',
+              entry.code || 'unknown',
+              (entry.detail && String(entry.detail).slice(0, 400)) || '',
+            );
           }
-          if (result.code === 'UNREGISTERED') {
-            if (activeColumn) {
-              const updateTs = cols.has('updated_at') ? ', updated_at = now()' : '';
-              await pool.query(
-                `UPDATE ${sourceTable}
-                 SET ${activeColumn} = false${updateTs}
-                 WHERE ${tokenColumn} = $1`,
-                [currentToken],
-              );
-            } else {
-              await pool.query(
-                `DELETE FROM ${sourceTable}
-                 WHERE ${tokenColumn} = $1`,
-                [currentToken],
-              );
-            }
-            deactivated += 1;
-          }
+          deliveryEvents.push({
+            userId,
+            deviceTokenHash: hashDeviceToken(currentToken),
+            platform,
+            deviceModel,
+            deliveryStatus: 'failed',
+            failCode: String(entry.code || 'unknown').slice(0, 40),
+            failDetail: String(entry.detail || '').slice(0, 500),
+            deliveredAt: null,
+          });
         }
-      } catch (e) {
-        failed += 1;
-        console.error('fcm_push_token_exception', e && (e.message || e));
       }
-    }
-    if (campaignId) {
       await insertDeliveryEventsBatch(campaignId, deliveryEvents);
       await finalizeCampaignCounts(campaignId, {
-        total: rows.length,
+        total: Number(pushResult.total || 0),
         delivered: sent,
         failed,
         deactivated,
@@ -4985,15 +4871,18 @@ router.post('/notifications/send', async (req, res) => {
       sent,
       failed,
       deactivated,
-      total: rows.length,
+      skipped,
+      total: Number(pushResult.total || 0),
       campaignId: campaignIdStr,
     });
     return res.json({
       ok: true,
-      total: rows.length,
+      total: Number(pushResult.total || 0),
+      eligible: Number(pushResult.eligible || pushResult.total || 0),
       sent,
       failed,
       deactivated,
+      skipped,
       campaignId: campaignIdStr || null,
     });
   } catch (e) {
