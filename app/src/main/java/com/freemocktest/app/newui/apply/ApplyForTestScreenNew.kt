@@ -63,6 +63,7 @@ import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import com.freemocktest.app.newui.tests.TestCardNew
+import com.freemocktest.app.util.TestCyclePhase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -114,6 +115,9 @@ fun ApplyForTestScreenNew(
     var testUnavailable by remember { mutableStateOf(false) }
     var resolveBlockReason by remember { mutableStateOf<String?>(null) }
     var republishAtHint by remember { mutableStateOf<String?>(null) }
+    var cyclePhaseLabel by remember { mutableStateOf<String?>(null) }
+    var applyBlockedMessage by remember { mutableStateOf<String?>(null) }
+    var mayReapplyForNewCycle by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -191,11 +195,7 @@ fun ApplyForTestScreenNew(
                 TestCardNew(
                     id = app.testId,
                     title = app.testTitle.ifBlank { routeTitle },
-                    meta = if (app.isPublished) {
-                        "Live test"
-                    } else {
-                        "Between cycles — opens again when republished"
-                    },
+                    meta = TestCyclePhase.cardMetaFromApplication(app),
                     slotLabel = app.slotLabel,
                     enrolledCount = app.enrolledCount,
                     capacityTotal = app.capacityTotal,
@@ -225,12 +225,19 @@ fun ApplyForTestScreenNew(
             hasAlreadyApplied =
                 resolveSnapshot?.alreadyAppliedInCurrentCycle == true ||
                     matchedApplication != null
-            testBetweenCycles =
-                resolveSnapshot?.cyclePhase == "between_cycles" ||
-                    (matchedApplication != null && !matchedApplication.isPublished)
             testUnavailable = resolvedTest == null || testId.isBlank()
+            val applyUi = TestCyclePhase.resolveApplyUiState(
+                resolve = resolveSnapshot,
+                matchedApplication = matchedApplication,
+                hasAlreadyApplied = hasAlreadyApplied,
+                testUnavailable = testUnavailable,
+            )
+            testBetweenCycles = applyUi.betweenCycles
+            cyclePhaseLabel = applyUi.phaseLabel
+            applyBlockedMessage = applyUi.applyBlockedMessage
+            mayReapplyForNewCycle = applyUi.mayReapply
             resolveBlockReason = resolveSnapshot?.blockReason
-            republishAtHint = resolveSnapshot?.republishAt
+            republishAtHint = applyUi.republishAt
 
             when {
                 publishedTest != null -> {
@@ -352,6 +359,15 @@ fun ApplyForTestScreenNew(
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 16.sp,
                     )
+                    if (!cyclePhaseLabel.isNullOrBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = cyclePhaseLabel!!,
+                            color = p.systemBlue,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                     Spacer(Modifier.height(12.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
@@ -457,6 +473,29 @@ fun ApplyForTestScreenNew(
                     Spacer(Modifier.height(10.dp))
 
                     when {
+                        mayReapplyForNewCycle && !hasAlreadyApplied -> {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = "New cycle — you can apply again for this test.",
+                                color = Color(0xFF166534),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = { revealSubmitSection = true },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = p.systemBlue,
+                                    contentColor = Color.White,
+                                ),
+                            ) {
+                                Text(text = "Apply for new cycle", fontWeight = FontWeight.Bold)
+                            }
+                        }
                         hasAlreadyApplied && !isWaitlisted -> {
                             Spacer(Modifier.height(6.dp))
                             Text(
@@ -483,7 +522,8 @@ fun ApplyForTestScreenNew(
                         testBetweenCycles && !hasAlreadyApplied -> {
                             Spacer(Modifier.height(6.dp))
                             Text(
-                                text = resolveBlockReason
+                                text = applyBlockedMessage
+                                    ?: resolveBlockReason
                                     ?: "Applications are closed while this test is between cycles.",
                                 color = p.textSecondary,
                                 fontSize = 13.sp,
@@ -498,6 +538,15 @@ fun ApplyForTestScreenNew(
                                     fontWeight = FontWeight.Medium,
                                 )
                             }
+                        }
+                        !applyBlockedMessage.isNullOrBlank() && !hasAlreadyApplied -> {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = applyBlockedMessage!!,
+                                color = p.textSecondary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
                         testUnavailable -> {
                             Spacer(Modifier.height(6.dp))

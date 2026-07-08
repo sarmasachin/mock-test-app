@@ -65,7 +65,21 @@
     "e2e:publish-email-diag": "node scripts/e2ePublishEmailDiag.js",
     "fix:smtp-env": "node scripts/applySmtpEnv.js",
     "phase0:enrollment": "node scripts/phase0EnrollmentBaseline.js",
-    "verify:apply-enrollment-phase1": "node scripts/verifyApplyEnrollmentPhase1.js"
+    "phase0:exam-cycle": "node scripts/phase0ExamCycleBaseline.js",
+    "verify:exam-cycle-window-phase1": "node scripts/verifyExamCycleWindowPhase1.js",
+    "verify:exam-cycle-scheduler-phase2": "node scripts/verifyExamCycleSchedulerPhase2.js",
+    "verify:exam-cycle-apply-window-phase3": "node scripts/verifyExamCycleApplyWindowPhase3.js",
+    "verify:exam-cycle-admin-publish-phase4": "node scripts/verifyExamCycleAdminPublishPhase4.js",
+    "verify:exam-cycle-application-phase5": "node scripts/verifyExamCycleApplicationPhase5.js",
+    "verify:exam-cycle-admin-labels-phase6": "node scripts/verifyExamCycleAdminLabelsPhase6.js",
+    "verify:android-cycle-phase-phase7": "node scripts/verifyAndroidCyclePhasePhase7.js",
+    "verify:apply-enrollment-phase1": "node scripts/verifyApplyEnrollmentPhase1.js",
+    "verify:android-enrollment-cache-phase4": "node scripts/verifyAndroidEnrollmentCachePhase4.js",
+    "e2e:test-catalog-cache": "node scripts/e2eTestCatalogCacheFix.js",
+    "verify:resolve-enrollment-phase5": "node scripts/verifyResolveEnrollmentPhase5.js",
+    "e2e:enroll-start-test": "node scripts/e2eEnrollStartTestCheck.js --read-only",
+    "e2e:enroll-start-test-apply": "node scripts/e2eEnrollStartTestCheck.js --with-apply",
+    "verify:enrollment-phase6": "node scripts/verifyEnrollmentPhase6.js"
   },
   "engines": {
     "node": ">=18"

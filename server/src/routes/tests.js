@@ -9,7 +9,7 @@
  * - Delivery seed: `${userId}:${testId}:${last_cycle_started_at}` — new cycle ⇒ new order.
  * - shuffleQuestions / shuffleOptions are independent (see rules file §2).
  * - correctIndex always tracks admin's correct OPTION TEXT after option shuffle (§6).
- * - isApplicationFromOlderCycle() gates re-apply for a new catalog cycle (§5).
+ * - evaluateApplicationCycleState() gates re-apply / my-applications (§5, Phase 5).
  */
 
 const express = require('express');
@@ -43,12 +43,14 @@ const {
   loadScheduleTimerEnabled,
 } = require('../lib/testStartAccess');
 const {
-  isApplicationFromOlderCycle,
+  evaluateApplicationCycleState,
   buildApplyResponseBody,
   resolveApplyEligibilityForTest,
   resolveAlreadyAppliedForTarget,
   resolveExamDate,
+  resolveAttemptCycleStartedAtMs,
 } = require('../lib/testApplicationCycle');
+const { resolveApplyWindowState } = require('../lib/testCycleWindow');
 
 const USER_TEST_APPLICATIONS_SQL = `
   SELECT t.id, t.title, t.subcategory, t.is_published, t.capacity_total, t.enrolled_count,
@@ -535,7 +537,9 @@ router.get('/my-applications', requireAuth, async (req, res) => {
 
     const items = [];
     for (const row of rowsRes.rows) {
-      if (isApplicationFromOlderCycle(row, row.applied_at)) continue;
+      const appliedAtIso = row.applied_at ? new Date(row.applied_at).toISOString() : null;
+      const cycleState = evaluateApplicationCycleState(row, appliedAtIso, nowMs);
+      if (!cycleState.alreadyAppliedInCurrentCycle) continue;
 
       const advancedConfig = normalizeTestAdvancedConfig(
         resolveAdvancedConfigForTest(advancedMap, row.id),
@@ -543,19 +547,19 @@ router.get('/my-applications', requireAuth, async (req, res) => {
       const examDate = resolveExamDate(row);
       const cyclePhase = resolveTestCyclePhase(row, advancedConfig, nowMs, publishScheduleItems);
       const catalogError = catalogVisibilityError(row, advancedConfig, nowMs);
-      const cycleStartedAtMs = Date.parse(String(row.last_cycle_started_at || ''));
+      const cycleStartedAtMs = resolveAttemptCycleStartedAtMs(row, nowMs);
       const [attemptCount, lastAttemptAtMs] = await Promise.all([
         countUserTestAttempts(
           pool,
           req.userId,
           row.id,
-          Number.isFinite(cycleStartedAtMs) ? cycleStartedAtMs : null,
+          cycleStartedAtMs,
         ),
         lastUserTestAttemptAt(
           pool,
           req.userId,
           row.id,
-          Number.isFinite(cycleStartedAtMs) ? cycleStartedAtMs : null,
+          cycleStartedAtMs,
         ),
       ]);
       const attemptAccess = evaluateAttemptAccess({
@@ -584,9 +588,11 @@ router.get('/my-applications', requireAuth, async (req, res) => {
       items.push({
         testId: String(row.id),
         testTitle: String(row.title || 'Test'),
-        appliedAt: row.applied_at ? new Date(row.applied_at).toISOString() : null,
+        appliedAt: appliedAtIso,
         isPublished: row.is_published === true,
         alreadyAppliedInCurrentCycle: true,
+        mayReapplyForNewCycle: false,
+        cyclePhase,
         enrolledCount,
         capacityTotal,
         remainingSeats: Math.max(0, capacityTotal - enrolledCount),
@@ -792,6 +798,14 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
               : 'You already applied for this test',
         }),
       );
+    }
+
+    const applyWindow = resolveApplyWindowState(test);
+    if (!applyWindow.open) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        error: applyWindow.reason || 'Registration is not open for this test',
+      });
     }
 
     if (eligibility.kind === 'may_reapply_same_test') {

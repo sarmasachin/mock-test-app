@@ -34,6 +34,16 @@ function hasCatalogDisplayFields(card) {
   );
 }
 
+function hasEnrollmentFields(card) {
+  return (
+    card.enrolledLabel != null ||
+    card.enrolledCount != null ||
+    card.remainingSeatsLabel != null ||
+    card.remainingSeats != null ||
+    (card.capacityTotal != null && Number(card.capacityTotal) > 0)
+  );
+}
+
 function isPlaceholderTestCard(card) {
   return !String(card.id || '').trim() &&
     String(card.meta || '').toLowerCase().includes('no published test is available');
@@ -52,15 +62,28 @@ function defaultTests(subcategory) {
 
 function mergeCatalogCardPreferExisting(incoming, existing) {
   if (!existing) return incoming;
-  if (hasCatalogDisplayFields(incoming)) return incoming;
-  if (!hasCatalogDisplayFields(existing)) return incoming;
-  return {
-    ...existing,
-    id: String(incoming.id || existing.id || '').trim(),
-    title: String(incoming.title || existing.title || '').trim(),
-    meta: String(incoming.meta || existing.meta || '').trim(),
-    subcategory: String(incoming.subcategory || existing.subcategory || '').trim(),
-  };
+  if (isPlaceholderTestCard(incoming) && hasCatalogDisplayFields(existing)) return existing;
+  if (!hasCatalogDisplayFields(incoming)) {
+    if (!hasCatalogDisplayFields(existing)) return incoming;
+    return {
+      ...existing,
+      id: String(incoming.id || existing.id || '').trim(),
+      title: String(incoming.title || existing.title || '').trim(),
+      meta: String(incoming.meta || existing.meta || '').trim(),
+      subcategory: String(incoming.subcategory || existing.subcategory || '').trim(),
+    };
+  }
+  if (!hasEnrollmentFields(incoming) && hasEnrollmentFields(existing)) {
+    return {
+      ...incoming,
+      enrolledLabel: existing.enrolledLabel,
+      enrolledCount: existing.enrolledCount,
+      remainingSeats: existing.remainingSeats,
+      remainingSeatsLabel: existing.remainingSeatsLabel,
+      capacityTotal: incoming.capacityTotal ?? existing.capacityTotal,
+    };
+  }
+  return incoming;
 }
 
 function simulateLoadTestsForSubcategory({ apiItems, diskCache }) {
@@ -241,6 +264,11 @@ async function main() {
   const loadSubFn = src.repo.match(/suspend fun loadTestsForSubcategory[\s\S]*?^    \}/m);
   const loadSubBody = loadSubFn ? loadSubFn[0] : '';
   ok = line(src.repo.includes('isPlaceholderTestCard'), 'ContentRepository has placeholder guard') && ok;
+  ok = line(src.repo.includes('hasEnrollmentFields'), 'ContentRepository has enrollment field guard') && ok;
+  ok = line(
+    /cacheTestCardForLookupKey[\s\S]*?mergeCatalogCardPreferExisting/.test(src.repo),
+    'cacheTestCardForLookupKey uses mergeCatalogCardPreferExisting',
+  ) && ok;
   ok = line(
     loadSubBody.includes('Server already applies isTestCatalogVisible') &&
       !loadSubBody.includes('isTestListingVisible'),
@@ -255,6 +283,10 @@ async function main() {
     'loadTestsForSubcategory returns emptyList() when API has no rows',
   ) && ok;
   ok = line(src.testsScreen.includes('fresh.isNotEmpty() -> fresh'), 'TestsScreen stale-while-revalidate guard') && ok;
+  ok = line(
+    src.testsScreen.includes('Lifecycle.Event.ON_RESUME') && src.testsScreen.includes('testsReloadKey'),
+    'TestsScreen ON_RESUME enrollment refresh',
+  ) && ok;
   ok = line(src.preview.includes('hasCatalogDisplayFields(it)'), 'StartTestPreview guards appliedSnapshots') && ok;
   ok = line(src.apply.includes('hasCatalogDisplayFields(it)'), 'Apply screen guards publishedTest') && ok;
 

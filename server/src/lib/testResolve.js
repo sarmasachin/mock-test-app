@@ -12,6 +12,7 @@ const {
 const { cycleRepublishAtMs } = require('./cycleRepublishGap');
 const { parseCycleEndMs } = require('./testCycleTiming');
 const { evaluateTestStartAccess } = require('./testStartAccess');
+const { resolveApplyWindowState } = require('./testCycleWindow');
 
 /**
  * @typedef {'live'|'between_cycles'|'unpublished'|'scheduled'|'closed'|'not_found'} TestCyclePhase
@@ -111,6 +112,20 @@ function resolveUserFacingBlockReason({
 }
 
 /**
+ * @param {object|null|undefined} row — tests DB row
+ * @returns {{ capacityTotal: number, enrolledCount: number, remainingSeats: number }}
+ */
+function resolveEnrollmentFromTestRow(row) {
+  const capacityTotal = Math.max(0, Number(row?.capacity_total || 0));
+  const enrolledCount = Math.max(0, Number(row?.enrolled_count || 0));
+  return {
+    capacityTotal,
+    enrolledCount,
+    remainingSeats: Math.max(0, capacityTotal - enrolledCount),
+  };
+}
+
+/**
  * Build resolve payload for GET /tests/resolve (Phase 2).
  *
  * @param {object} options
@@ -151,25 +166,32 @@ function buildTestResolvePayload({
   const catalogError = catalogVisibilityError(row, adv, nowMs);
   const cyclePhase = resolveTestCyclePhase(row, adv, nowMs, publishScheduleItems);
   const republishAt = cyclePhase === 'between_cycles' ? resolveRepublishAtIso(row, adv, publishScheduleItems) : null;
+  const applyWindow = resolveApplyWindowState(row, nowMs);
 
   const canApply =
     cyclePhase === 'live' &&
     !catalogError &&
-    !alreadyAppliedInCurrentCycle;
+    !alreadyAppliedInCurrentCycle &&
+    applyWindow.open;
 
   const canReapplyForNewCycle =
     cyclePhase === 'live' &&
     !catalogError &&
-    mayReapplyForNewCycle;
+    mayReapplyForNewCycle &&
+    applyWindow.open;
+
+  const phaseBlockReason = resolveUserFacingBlockReason({
+    cyclePhase,
+    catalogError,
+    alreadyAppliedInCurrentCycle,
+  });
 
   const blockReason =
     canApply || canReapplyForNewCycle
       ? null
-      : resolveUserFacingBlockReason({
-          cyclePhase,
-          catalogError,
-          alreadyAppliedInCurrentCycle,
-        });
+      : cyclePhase === 'live' && !applyWindow.open && applyWindow.reason
+        ? applyWindow.reason
+        : phaseBlockReason || (!applyWindow.open && applyWindow.reason) || null;
 
   const lateJoinMinutes = Math.max(0, Number(adv.lateJoinMinutes || 0));
   const resolvedExamDate = examDate != null ? examDate : null;
@@ -188,6 +210,8 @@ function buildTestResolvePayload({
     advancedConfig: adv,
   });
 
+  const enrollment = resolveEnrollmentFromTestRow(row);
+
   return {
     found: true,
     id: String(row.id),
@@ -205,6 +229,9 @@ function buildTestResolvePayload({
     canStart: startAccess.canStart,
     startBlockReason: startAccess.startBlockReason,
     joinClosesAt: startAccess.joinClosesAt,
+    enrolledCount: enrollment.enrolledCount,
+    capacityTotal: enrollment.capacityTotal,
+    remainingSeats: enrollment.remainingSeats,
   };
 }
 
@@ -266,6 +293,7 @@ module.exports = {
   findEarliestPendingRepublishSchedule,
   resolveTestCyclePhase,
   resolveRepublishAtIso,
+  resolveEnrollmentFromTestRow,
   buildTestResolvePayload,
   lookupTestForResolve,
   loadPublishScheduleItemsSafe,

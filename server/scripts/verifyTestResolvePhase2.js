@@ -5,6 +5,7 @@
 const {
   resolveTestCyclePhase,
   buildTestResolvePayload,
+  resolveEnrollmentFromTestRow,
 } = require('../src/lib/testResolve');
 
 function line(ok, msg) {
@@ -57,6 +58,18 @@ const livePayload = buildTestResolvePayload({
 
 ok = line(livePayload.found === true && livePayload.canApply === true, 'live test canApply=true') && ok;
 ok = line(livePayload.catalogVisible === true, 'live test catalogVisible=true') && ok;
+
+const liveRowWithSeats = { ...liveRow, capacity_total: 100, enrolled_count: 7 };
+const enroll = resolveEnrollmentFromTestRow(liveRowWithSeats);
+ok = line(enroll.enrolledCount === 7 && enroll.remainingSeats === 93, 'resolveEnrollmentFromTestRow math') && ok;
+const liveEnrollPayload = buildTestResolvePayload({
+  row: liveRowWithSeats,
+  advancedConfig: {},
+  nowMs,
+  publishScheduleItems: [],
+});
+ok = line(liveEnrollPayload.enrolledCount === 7, 'live resolve includes enrolledCount') && ok;
+ok = line(liveEnrollPayload.capacityTotal === 100, 'live resolve includes capacityTotal') && ok;
 
 const betweenPayload = buildTestResolvePayload({
   row: betweenRow,

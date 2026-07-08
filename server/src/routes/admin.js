@@ -69,6 +69,7 @@ const {
 } = require('../lib/adminPermissions');
 const { adminPermissionGuard } = require('../middleware/adminPermissionGuard');
 const { buildAdminTestCycleFields } = require('../lib/adminTestCycleStatus');
+const { resolveAdminCycleStartUpdate } = require('../lib/testCycleWindow');
 const { loadPublishScheduleItemsSafe } = require('../lib/testResolve');
 const { republishTestNow } = require('../lib/testRepublishNow');
 const { buildPublishSchedulingDiagnostics } = require('../lib/publishScheduleDiagnostics');
@@ -2924,12 +2925,15 @@ router.post('/tests', async (req, res) => {
       );
       const createdRow = rows[0];
       if (storedPublished) {
-        await client.query(
-          `UPDATE tests
-           SET last_cycle_started_at = now(), updated_at = now()
-           WHERE id = $1::uuid`,
-          [createdRow.id],
-        );
+        const cycleAction = resolveAdminCycleStartUpdate(createdRow, null, { justPublished: true });
+        if (cycleAction.setCycleStart) {
+          await client.query(
+            `UPDATE tests
+             SET last_cycle_started_at = now(), updated_at = now()
+             WHERE id = $1::uuid`,
+            [createdRow.id],
+          );
+        }
         await regenerateTestFromSubcategoryPool(createdRow.id, { client });
       }
       return { createdRow };
@@ -3060,20 +3064,16 @@ router.patch('/tests/:id', async (req, res) => {
         throw err;
       }
       const justPublished = !beforeRow.is_published && rows[0].is_published;
-      let cycleRenewed = false;
+      const cycleRenewed = false;
       if (rows[0].is_published) {
-        const startedMs = Date.parse(String(beforeRow.last_cycle_started_at || ''));
-        const durationMinutes = Math.max(1, Number(rows[0].duration_minutes || 0));
-        const cycleEndMs = Number.isFinite(startedMs) ? startedMs + durationMinutes * 60 * 1000 : Number.NaN;
-        const cycleExpired = Number.isFinite(cycleEndMs) && Date.now() >= cycleEndMs;
-        if (justPublished || cycleExpired) {
+        const cycleAction = resolveAdminCycleStartUpdate(rows[0], beforeRow, { justPublished });
+        if (cycleAction.setCycleStart) {
           await client.query(
             `UPDATE tests
              SET last_cycle_started_at = now(), updated_at = now()
              WHERE id = $1::uuid`,
             [id],
           );
-          cycleRenewed = cycleExpired && !justPublished;
         }
       }
       if (justPublished) {

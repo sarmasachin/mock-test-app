@@ -65,6 +65,7 @@ import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.data.remote.MyTestApplicationDto
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
+import com.freemocktest.app.util.TestCyclePhase
 import com.freemocktest.app.util.TestScheduleUtils
 import com.freemocktest.app.util.UserInterestUtils
 import java.util.Locale
@@ -222,10 +223,13 @@ fun StartTestPreviewScreenNew(
             matchedServerApplication = apps?.firstOrNull { app ->
                 matchesAppliedTestLookup(app, target, loadedCard)
             }
-            resolveAlreadyApplied =
-                loadResult?.resolveSnapshot?.alreadyAppliedInCurrentCycle == true ||
-                    loadResult?.resolveSnapshot?.canStart == true ||
-                    matchedServerApplication != null
+            resolveAlreadyApplied = when {
+                loadResult?.resolveSnapshot?.mayReapplyForNewCycle == true -> false
+                loadResult?.resolveSnapshot?.alreadyAppliedInCurrentCycle == true -> true
+                loadResult?.resolveSnapshot?.canStart == true -> true
+                matchedServerApplication != null -> true
+                else -> false
+            }
         } catch (e: CancellationException) {
             throw e
         } finally {
@@ -307,14 +311,20 @@ fun StartTestPreviewScreenNew(
     val fallbackLocked = fallbackRemainingMs > 0L
     // List route only (Home → "applied"): show all applied tests. Specific catalog routes
     // (e.g. START_TEST_PREVIEW/ff) must show that test's Apply/Start UI — not HP GK's list.
+    val previewApplyState = remember(resolveSnapshot, resolveAlreadyApplied) {
+        TestCyclePhase.resolvePreviewApplyState(resolveSnapshot, resolveAlreadyApplied)
+    }
     val showAppliedList = isListRoute && activeAppliedEntries.isNotEmpty()
     val showLoading = appliedSyncLoading || (specificTestName != null && primaryLoading && !showAppliedList)
     val showSpecificStart = !showAppliedList && !showLoading && specificTest != null && specificStartEntry != null
     val showSpecificApply = !showAppliedList && !showLoading && specificTest != null &&
-        !showSpecificStart && !resolveAlreadyApplied
+        !showSpecificStart && !resolveAlreadyApplied && previewApplyState.showApplyButton
+    val showSpecificApplyBlocked = !showAppliedList && !showLoading && specificTest != null &&
+        !showSpecificStart && !resolveAlreadyApplied && !previewApplyState.showApplyButton &&
+        !previewApplyState.applyBlockedMessage.isNullOrBlank()
     val showSpecificLoadError = !showAppliedList && !showLoading && specificTest == null && specificTestName != null
     val showEmptyList = isListRoute && !showAppliedList && !showLoading && !showSpecificLoadError &&
-        specificTestName == null && !showSpecificStart && !showSpecificApply
+        specificTestName == null && !showSpecificStart && !showSpecificApply && !showSpecificApplyBlocked
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -454,11 +464,19 @@ fun StartTestPreviewScreenNew(
                         onStartTest(title)
                     },
                 )
-            } else if (showSpecificApply) {
+            } else if (showSpecificApply || showSpecificApplyBlocked) {
                 val test = specificTest!!
-                PreviewCard(test = test)
+                PreviewCard(test = test, cyclePhaseLabel = previewApplyState.phaseLabel)
                 Spacer(Modifier.height(10.dp))
-                if (fallbackLocked) {
+                if (showSpecificApplyBlocked) {
+                    Text(
+                        text = previewApplyState.applyBlockedMessage!!,
+                        color = p.textSecondary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                } else if (fallbackLocked) {
                     Text(
                         text = "Apply now — test starts on ${TestScheduleUtils.formatExamStartLabel(test.examDate, test.slotLabel)}",
                         color = p.textSecondary,
@@ -476,7 +494,7 @@ fun StartTestPreviewScreenNew(
                         fontSize = 20.sp,
                         fontWeight = FontWeight.ExtraBold,
                     )
-                } else {
+                } else if (!showSpecificApplyBlocked) {
                     Text(
                         text = "You need to apply for this test before starting it.",
                         color = p.textSecondary,
@@ -484,37 +502,39 @@ fun StartTestPreviewScreenNew(
                         fontWeight = FontWeight.Medium,
                     )
                 }
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        if (test.title.isBlank()) return@Button
-                        val now = System.currentTimeMillis()
-                        if (now - lastPrimaryNavAt < 600L) return@Button
-                        lastPrimaryNavAt = now
-                        onApplyForTest(test.title)
-                    },
-                    enabled = test.title.isNotBlank(),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .height(52.dp),
-                    shape = RoundedCornerShape(999.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = p.systemBlue,
-                        contentColor = Color.White,
-                    ),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.size(8.dp))
-                    Text(
-                        text = "Apply Now",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
+                if (showSpecificApply) {
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            if (test.title.isBlank()) return@Button
+                            val now = System.currentTimeMillis()
+                            if (now - lastPrimaryNavAt < 600L) return@Button
+                            lastPrimaryNavAt = now
+                            onApplyForTest(test.title)
+                        },
+                        enabled = test.title.isNotBlank(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .height(52.dp),
+                        shape = RoundedCornerShape(999.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = p.systemBlue,
+                            contentColor = Color.White,
+                        ),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.size(8.dp))
+                        Text(
+                            text = "Apply Now",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
                 }
             } else if (showSpecificLoadError) {
                 Card(
@@ -649,7 +669,10 @@ fun StartTestPreviewScreenNew(
 }
 
 @Composable
-private fun PreviewCard(test: TestCardNew) {
+private fun PreviewCard(
+    test: TestCardNew,
+    cyclePhaseLabel: String? = null,
+) {
     val p = mockTestPalette()
     Box(modifier = Modifier.fillMaxWidth()) {
         Card(
@@ -677,6 +700,18 @@ private fun PreviewCard(test: TestCardNew) {
                     color = p.textSecondary,
                     fontSize = 13.sp,
                 )
+                val phaseLine = cyclePhaseLabel?.trim().orEmpty().ifBlank {
+                    test.meta.trim()
+                }
+                if (phaseLine.isNotBlank() && phaseLine != test.meta.trim()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = phaseLine,
+                        color = p.systemBlue,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
                 Spacer(Modifier.height(14.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),

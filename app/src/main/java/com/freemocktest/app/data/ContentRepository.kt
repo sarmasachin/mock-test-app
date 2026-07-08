@@ -5,6 +5,7 @@ import com.freemocktest.app.data.remote.ExamCategoriesDto
 import com.freemocktest.app.data.remote.NewsArticleDto
 import com.freemocktest.app.data.remote.RetrofitProvider
 import com.freemocktest.app.data.remote.TestQuestionDto
+import com.freemocktest.app.data.remote.TestResolveResponse
 import org.json.JSONArray
 import org.json.JSONObject
 import com.freemocktest.app.newui.alerts.ManualExamAlertContent
@@ -95,6 +96,15 @@ object ContentRepository {
             !card.durationLabel.isNullOrBlank()
     }
 
+    /** True when enrollment / capacity fields are present (including zero counts from API). */
+    fun hasEnrollmentFields(card: TestCardNew): Boolean {
+        return card.enrolledLabel != null ||
+            card.enrolledCount != null ||
+            card.remainingSeatsLabel != null ||
+            card.remainingSeats != null ||
+            (card.capacityTotal != null && card.capacityTotal > 0)
+    }
+
     /** Placeholder row from [defaultTests] — must never replace a real catalog card. */
     private fun isPlaceholderTestCard(card: TestCardNew): Boolean {
         return card.id.isBlank() &&
@@ -105,18 +115,55 @@ object ContentRepository {
         return card.id.isNotBlank() && !isPlaceholderTestCard(card)
     }
 
+    /**
+     * Merge a fresh card into cache without dropping enrollment or catalog display fields.
+     * Resolve stubs and placeholders must not overwrite a real catalog row.
+     */
     private fun mergeCatalogCardPreferExisting(
         incoming: TestCardNew,
         existing: TestCardNew?,
     ): TestCardNew {
         if (existing == null) return incoming
-        if (hasCatalogDisplayFields(incoming)) return incoming
-        if (!hasCatalogDisplayFields(existing)) return incoming
-        return existing.copy(
-            id = incoming.id.ifBlank { existing.id },
-            title = incoming.title.ifBlank { existing.title },
-            meta = incoming.meta.ifBlank { existing.meta },
-            subcategory = incoming.subcategory.ifBlank { existing.subcategory },
+        if (isPlaceholderTestCard(incoming) && hasCatalogDisplayFields(existing)) return existing
+        if (!hasCatalogDisplayFields(incoming)) {
+            if (!hasCatalogDisplayFields(existing)) return incoming
+            return existing.copy(
+                id = incoming.id.ifBlank { existing.id },
+                title = incoming.title.ifBlank { existing.title },
+                meta = incoming.meta.ifBlank { existing.meta },
+                subcategory = incoming.subcategory.ifBlank { existing.subcategory },
+            )
+        }
+        if (!hasEnrollmentFields(incoming) && hasEnrollmentFields(existing)) {
+            return incoming.copy(
+                enrolledLabel = existing.enrolledLabel,
+                enrolledCount = existing.enrolledCount,
+                remainingSeats = existing.remainingSeats,
+                remainingSeatsLabel = existing.remainingSeatsLabel,
+                capacityTotal = incoming.capacityTotal ?: existing.capacityTotal,
+            )
+        }
+        return incoming
+    }
+
+    private fun mergeTestCardIntoMemory(key: String, incoming: TestCardNew): TestCardNew {
+        val merged = mergeCatalogCardPreferExisting(incoming, testCardMemory[key])
+        testCardMemory[key] = merged
+        return merged
+    }
+
+    /** Phase 5: overlay enrollment from GET /tests/resolve (authoritative DB snapshot). */
+    private fun applyResolveEnrollment(resp: TestResolveResponse, card: TestCardNew): TestCardNew {
+        if (!resp.found) return card
+        val cap = resp.capacityTotal.coerceAtLeast(0)
+        val enrolled = resp.enrolledCount.coerceAtLeast(0)
+        val remaining = resp.remainingSeats.coerceAtLeast(0)
+        return card.copy(
+            capacityTotal = cap,
+            enrolledCount = enrolled,
+            remainingSeats = remaining,
+            enrolledLabel = if (cap > 0) "$enrolled/$cap" else "$enrolled",
+            remainingSeatsLabel = "$remaining seats left",
         )
     }
 
@@ -468,7 +515,7 @@ object ContentRepository {
                 .filter { card -> card.id.isNotBlank() && card.title.isNotBlank() }
             mapped.forEach { card ->
                 val tKey = card.title.trim().lowercase(Locale.US)
-                if (tKey.isNotBlank()) testCardMemory[tKey] = card
+                if (tKey.isNotBlank()) mergeTestCardIntoMemory(tKey, card)
             }
             if (mapped.isNotEmpty()) {
                 testListBySubcategoryMemory[key] = mapped
@@ -817,10 +864,14 @@ object ContentRepository {
 
     private suspend fun cacheTestCardForLookupKey(lookupKey: String, card: TestCardNew) {
         val key = lookupKey.trim().lowercase(Locale.US)
-        if (key.isBlank() || card.id.isBlank()) return
-        testCardMemory[key] = card
-        runCatching { persistTestCardDiskCache(key, card) }
-            .onFailure { Log.w(TAG, "persistTestCardDiskCache $key", it) }
+        if (key.isBlank()) return
+        val merged = mergeCatalogCardPreferExisting(card, testCardMemory[key])
+        if (merged.id.isBlank()) return
+        testCardMemory[key] = merged
+        if (hasCatalogDisplayFields(merged) && !isPlaceholderTestCard(merged)) {
+            runCatching { persistTestCardDiskCache(key, merged) }
+                .onFailure { Log.w(TAG, "persistTestCardDiskCache $key", it) }
+        }
     }
 
     /** Full catalog row by test UUID (from GET /tests list). */
@@ -838,7 +889,7 @@ object ContentRepository {
             val mapped = resp.items.map { it.toTestCard() }
             mapped.forEach { card ->
                 val k = card.title.trim().lowercase(Locale.US)
-                if (k.isNotBlank()) testCardMemory[k] = card
+                if (k.isNotBlank()) mergeTestCardIntoMemory(k, card)
             }
             mapped.firstOrNull { it.id == id }
         } catch (e: Exception) {
@@ -863,32 +914,31 @@ object ContentRepository {
             val mapped = resp.items.map { it.toTestCard() }
             mapped.forEach { card ->
                 val k = card.title.trim().lowercase(Locale.US)
-                if (k.isNotBlank()) testCardMemory[k] = card
+                if (k.isNotBlank()) mergeTestCardIntoMemory(k, card)
             }
             val resolved = mapped.firstOrNull { it.title.equals(target, ignoreCase = true) }
                 ?: if (allowDefaultFallback) defaultTests(target).firstOrNull() else null
             if (resolved != null && resolved.title.isNotBlank()) {
-                testCardMemory[key] = resolved
-                if (resolved.id.isNotBlank()) {
-                    runCatching { persistTestCardDiskCache(key, resolved) }
+                val merged = mergeTestCardIntoMemory(key, resolved)
+                if (merged.id.isNotBlank() && hasCatalogDisplayFields(merged) && !isPlaceholderTestCard(merged)) {
+                    runCatching { persistTestCardDiskCache(key, merged) }
                         .onFailure { Log.w(TAG, "persistTestCardDiskCache $key", it) }
                 }
+                merged
+            } else {
+                null
             }
-            resolved
         } catch (e: Exception) {
             Log.w(TAG, "loadTestByTitle $target", e)
             val fromDisk = runCatching { loadCachedTestByTitle(target) }.getOrNull()
             if (fromDisk != null && fromDisk.title.isNotBlank() && fromDisk.id.isNotBlank()) {
-                testCardMemory[key] = fromDisk
-                return@withContext fromDisk
+                return@withContext mergeTestCardIntoMemory(key, fromDisk)
             }
             val fallback = if (allowDefaultFallback) defaultTests(target).firstOrNull() else null
             if (fallback != null && fallback.title.isNotBlank()) {
-                testCardMemory[key] = fallback
-                runCatching { persistTestCardDiskCache(key, fallback) }
-                    .onFailure { Log.w(TAG, "persistTestCardDiskCache fallback $key", it) }
+                mergeTestCardIntoMemory(key, fallback)
             }
-            fallback
+            testCardMemory[key]
         }
     }
 
@@ -910,17 +960,12 @@ object ContentRepository {
                 testId = idQ.takeIf { it.isNotBlank() },
             )
             if (!resp.found || resp.id.isNullOrBlank()) return@withContext null
-            val phase = resp.cyclePhase?.trim().orEmpty().ifBlank { "unpublished" }
+            val phase = com.freemocktest.app.util.TestCyclePhase.normalize(resp.cyclePhase)
             val displayTitle = resp.title?.trim().orEmpty().ifBlank { titleQ }
-            val meta = when (phase) {
-                "between_cycles" -> "Between cycles — opens again when republished"
-                "live" -> "Live test"
-                "scheduled" -> "Scheduled — not open yet"
-                "closed" -> "Registration closed"
-                else -> resp.blockReason?.trim().orEmpty().ifBlank { "Test status" }
-            }
+            val blockReason = resp.blockReason?.trim()?.takeIf { it.isNotBlank() }
+            val meta = com.freemocktest.app.util.TestCyclePhase.cardMetaLine(phase, blockReason)
             val catalogCard = loadTestCardFromCatalogById(resp.id.trim(), forceRefresh = true)
-            val card = if (catalogCard != null) {
+            val baseCard = if (catalogCard != null) {
                 catalogCard.copy(
                     title = displayTitle.ifBlank { catalogCard.title },
                     meta = meta.ifBlank { catalogCard.meta },
@@ -933,6 +978,7 @@ object ContentRepository {
                     meta = meta,
                 )
             }
+            val card = applyResolveEnrollment(resp, baseCard)
             val key = displayTitle.lowercase(Locale.US)
             if (key.isNotBlank()) {
                 cacheTestCardForLookupKey(displayTitle, card)

@@ -577,6 +577,8 @@ data class MyTestApplicationDto(
     @SerializedName("appliedAt") val appliedAt: String? = null,
     @SerializedName("isPublished") val isPublished: Boolean = false,
     @SerializedName("alreadyAppliedInCurrentCycle") val alreadyAppliedInCurrentCycle: Boolean = true,
+    @SerializedName("mayReapplyForNewCycle") val mayReapplyForNewCycle: Boolean = false,
+    @SerializedName("cyclePhase") val cyclePhase: String? = null,
     @SerializedName("enrolledInCurrentCycle") val enrolledInCurrentCycle: Boolean = true,
     @SerializedName("enrolledCount") val enrolledCount: Int = 0,
     @SerializedName("capacityTotal") val capacityTotal: Int = 0,
@@ -610,6 +612,9 @@ data class TestResolveResponse(
     @SerializedName("canStart") val canStart: Boolean = false,
     @SerializedName("startBlockReason") val startBlockReason: String? = null,
     @SerializedName("joinClosesAt") val joinClosesAt: String? = null,
+    @SerializedName("enrolledCount") val enrolledCount: Int = 0,
+    @SerializedName("capacityTotal") val capacityTotal: Int = 0,
+    @SerializedName("remainingSeats") val remainingSeats: Int = 0,
 )
 
 data class LeaderboardFilterTestDto(

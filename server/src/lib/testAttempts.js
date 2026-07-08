@@ -1,5 +1,7 @@
 'use strict';
 
+const { resolveAttemptCycleStartedAtMs } = require('./testCycleWindow');
+
 /**
  * Attempt limits within the current test catalog cycle.
  *
@@ -113,7 +115,7 @@ async function assertUserCanStartAttempt(pool, userId, testRow, advancedConfig, 
   if (!testId) {
     return { allowed: false, error: 'Test not found' };
   }
-  const cycleStartedAtMs = parseCycleStartedAtMs(testRow);
+  const cycleStartedAtMs = resolveAttemptCycleStartedAtMs(testRow, nowMs);
   const [attemptCount, lastAttemptAtMs] = await Promise.all([
     countUserTestAttempts(pool, userId, testId, cycleStartedAtMs),
     lastUserTestAttemptAt(pool, userId, testId, cycleStartedAtMs),

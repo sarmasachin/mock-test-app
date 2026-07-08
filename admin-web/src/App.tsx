@@ -40,6 +40,21 @@ import {
 import { RolesPermissionsTab } from './tabs/RolesPermissionsTab';
 import type { Tab } from './tabTypes';
 import { TAB_ICONS, TAB_LABELS } from './tabTypes';
+import {
+  ATTEMPT_DURATION_LABEL,
+  ATTEMPT_DURATION_TITLE,
+  classifyCycleModeInput,
+  cycleModeHint,
+  CYCLE_REPUBLISH_GAP_TITLE,
+  dateCycleDaysLabel,
+  dateCycleDaysTitle,
+  DYNAMIC_DATE_LABEL,
+  DYNAMIC_FLUCTUATION_TITLE,
+  dynamicDateTitle,
+  formatListAttemptLine,
+  formatListCycleLine,
+  NOTIFY_CYCLE_REPUBLISH_TITLE,
+} from './lib/testCycleLabels';
 
 const ADMIN_IMAGE_UPLOAD_MIME_TYPES = [
   'image/jpeg',
@@ -1740,6 +1755,20 @@ function TestsTab({
   const TEST_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
   const SLOT_LABEL_RE = /^(0[1-9]|1[0-2]):([0-5][0-9])\s?(AM|PM)$/i;
 
+  const cycleModeUi = useMemo(() => {
+    const mode = classifyCycleModeInput({
+      examDate,
+      dynamicDateEnabled,
+      dateCycleDays,
+    });
+    const days = Math.max(0, Number(dateCycleDays) || 0);
+    return {
+      mode,
+      hint: cycleModeHint(mode, days),
+      dateCycleTitle: dateCycleDaysTitle(mode),
+    };
+  }, [examDate, dynamicDateEnabled, dateCycleDays]);
+
   function RequiredStar() {
     return (
       <span className="field-required-star" title="Required">
@@ -2643,7 +2672,7 @@ function TestsTab({
                 </label>
                 <label className="all-tests-field">
                   <span>
-                    Duration (minutes)
+                    {ATTEMPT_DURATION_LABEL}
                     <RequiredStar />
                   </span>
                   <input
@@ -2654,7 +2683,9 @@ function TestsTab({
                     min={1}
                     max={1440}
                     required
+                    title={ATTEMPT_DURATION_TITLE}
                   />
+                  <span className="all-tests-field-hint">{ATTEMPT_DURATION_TITLE}</span>
                 </label>
                 <label className="all-tests-field">
                   <span>
@@ -2851,7 +2882,7 @@ function TestsTab({
                     <input type="checkbox" checked={notifyOnPublish} onChange={(e) => setNotifyOnPublish(e.target.checked)} />
                     notify on publish
                   </label>
-                  <label className="check-wrap" title="When the test auto-republishes after each cycle (duration + gap minutes)">
+                  <label className="check-wrap" title={NOTIFY_CYCLE_REPUBLISH_TITLE}>
                     <input
                       type="checkbox"
                       checked={notifyOnCycleRepublish}
@@ -2866,8 +2897,8 @@ function TestsTab({
                     step={1}
                     value={cycleRepublishGapMinutes}
                     onChange={(e) => setCycleRepublishGapMinutes(e.target.value)}
-                    placeholder="Cycle republish gap (min) — blank = server default 30"
-                    title="Minutes after cycle ends before auto-republish. Leave blank to use server env CYCLE_REPUBLISH_GAP_MINUTES (default 30)."
+                    placeholder="Republish gap (min) — blank = server default 30"
+                    title={CYCLE_REPUBLISH_GAP_TITLE}
                     style={{ minWidth: 280 }}
                   />
                   <label className="check-wrap">
@@ -2878,23 +2909,54 @@ function TestsTab({
               </div>
             )}
 
+            <div className="all-tests-section">
+              <h4>Exam cycle (repeat schedule)</h4>
+              <p className="all-tests-cycle-hint all-tests-cycle-hint--summary">
+                <strong>Attempt duration</strong> (above) = how long students get to finish once the exam starts.
+                Fields here control when a <em>new</em> apply window opens — not attempt length.
+              </p>
+              <div className="all-tests-grid">
+                <label className="check-wrap" title={dynamicDateTitle()}>
+                  <input
+                    type="checkbox"
+                    checked={dynamicDateEnabled}
+                    onChange={(e) => setDynamicDateEnabled(e.target.checked)}
+                  />
+                  {DYNAMIC_DATE_LABEL}
+                </label>
+                <label className="all-tests-field">
+                  <span title={cycleModeUi.dateCycleTitle}>{dateCycleDaysLabel()}</span>
+                  <input
+                    type="number"
+                    value={dateCycleDays}
+                    onChange={(e) => setDateCycleDays(e.target.value)}
+                    placeholder="0"
+                    min={0}
+                    max={3650}
+                    disabled={!dynamicDateEnabled}
+                    title={cycleModeUi.dateCycleTitle}
+                  />
+                </label>
+              </div>
+              {cycleModeUi.hint ? (
+                <p className="all-tests-cycle-hint" role="status">
+                  {cycleModeUi.hint}
+                </p>
+              ) : null}
+            </div>
+
             <div className="all-tests-actions">
-              <label className="check-wrap">
-                <input type="checkbox" checked={dynamicDateEnabled} onChange={(e) => setDynamicDateEnabled(e.target.checked)} />
-                dynamic date
-              </label>
-              <input type="number" value={dateCycleDays} onChange={(e) => setDateCycleDays(e.target.value)} placeholder="Date cycle days" />
               <label className="check-wrap">
                 <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
                 published
               </label>
-              <label className="check-wrap">
+              <label className="check-wrap" title={DYNAMIC_FLUCTUATION_TITLE}>
                 <input
                   type="checkbox"
                   checked={dynamicFluctuationOnPublish}
                   onChange={(e) => setDynamicFluctuationOnPublish(e.target.checked)}
                 />
-                dynamic fluctuation
+                dynamic fluctuation (shuffle)
               </label>
               <label className="check-wrap">
                 <input type="checkbox" checked={badgeEnabled} onChange={(e) => setBadgeEnabled(e.target.checked)} />
@@ -3041,7 +3103,7 @@ function TestsTab({
                 <span>
                   {item.test_kind}
                   <br />
-                  {item.duration_minutes} min · {item.question_count} Q
+                  {formatListAttemptLine(item.duration_minutes, item.question_count)}
                 </span>
                 <span>
                   {item.is_published ? 'Published' : 'Hidden'}
@@ -3070,9 +3132,9 @@ function TestsTab({
                   Catalog: {item.catalog_visible ? 'Visible' : 'Hidden'}
                 </span>
                 <span>
-                  {item.dynamic_fluctuation_on_publish ? 'Fluctuation: On' : 'Fluctuation: Off'}
+                  {item.dynamic_fluctuation_on_publish ? 'Shuffle: On' : 'Shuffle: Off'}
                   <br />
-                  {item.dynamic_date_enabled ? `Date: On (${item.date_cycle_days || 0}d)` : 'Date: Off'}
+                  {formatListCycleLine(item.dynamic_date_enabled, item.date_cycle_days)}
                   <br />
                   {item.badge_enabled ? `Badge: ${item.badge_text || 'Live'}` : 'Badge: Off'}
                 </span>

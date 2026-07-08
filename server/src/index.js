@@ -45,6 +45,11 @@ const {
   resolveNotifyOnCycleRepublish,
 } = require('./lib/testVisibility');
 const { cycleRepublishAtMs } = require('./lib/cycleRepublishGap');
+const {
+  shouldRunSchedulerRollover,
+  resolveSchedulerCycleEndMs,
+  resolveAdminCycleStartUpdate,
+} = require('./lib/testCycleWindow');
 const { countOverduePublishSchedules } = require('./lib/adminTestCycleStatus');
 const { promoteWaitlistForTest } = require('./lib/testRepublishNow');
 const { buildPublishSchedulingDiagnostics } = require('./lib/publishScheduleDiagnostics');
@@ -550,7 +555,8 @@ async function runPublishScheduleItemWork(item) {
       );
     } else {
       const existingRes = await pool.query(
-        `SELECT is_published, last_cycle_started_at
+        `SELECT is_published, last_cycle_started_at, exam_date, slot_label,
+                dynamic_date_enabled, date_cycle_days, duration_minutes
          FROM tests
          WHERE id = $1::uuid
          LIMIT 1`,
@@ -567,12 +573,24 @@ async function runPublishScheduleItemWork(item) {
 
       if (!alreadyPublishedForSchedule) {
         await regenerateTestFromSubcategoryPool(testId);
-        await pool.query(
-          `UPDATE tests
-           SET is_published = true, last_cycle_started_at = now(), updated_at = now()
-           WHERE id = $1::uuid`,
-          [testId],
-        );
+        const justPublished = existing?.is_published !== true;
+        const publishedRow = { ...existing, is_published: true };
+        const cycleAction = resolveAdminCycleStartUpdate(publishedRow, existing, { justPublished });
+        if (cycleAction.setCycleStart) {
+          await pool.query(
+            `UPDATE tests
+             SET is_published = true, last_cycle_started_at = now(), updated_at = now()
+             WHERE id = $1::uuid`,
+            [testId],
+          );
+        } else {
+          await pool.query(
+            `UPDATE tests
+             SET is_published = true, updated_at = now()
+             WHERE id = $1::uuid`,
+            [testId],
+          );
+        }
         await promoteWaitlistForTest(pool, testId);
       }
 
@@ -754,10 +772,10 @@ async function processTestCycleAutoReschedule() {
     const advancedMap = await getSettingJson('testAdvancedConfigs', {});
 
     const testsRes = await pool.query(
-      `SELECT id, duration_minutes, last_cycle_started_at
+      `SELECT id, duration_minutes, last_cycle_started_at, exam_date, slot_label,
+              dynamic_date_enabled, date_cycle_days, is_published, updated_at
        FROM tests
        WHERE is_published = true
-         AND COALESCE(duration_minutes, 0) > 0
          AND last_cycle_started_at IS NOT NULL`,
     );
 
@@ -767,11 +785,7 @@ async function processTestCycleAutoReschedule() {
     for (const row of testsRes.rows || []) {
       const testId = String(row.id || '').trim();
       if (!testId) continue;
-      const startedMs = Date.parse(String(row.last_cycle_started_at || ''));
-      if (!Number.isFinite(startedMs)) continue;
-      const durationMinutes = Math.max(1, Number(row.duration_minutes || 0));
-      const cycleEndMs = startedMs + durationMinutes * 60 * 1000;
-      if (nowMs < cycleEndMs) continue;
+      if (!shouldRunSchedulerRollover(row, nowMs)) continue;
 
       const adv = resolveAdvancedConfigForTest(advancedMap, testId);
       const useLegacyCatalogUnpublish = adv?.autoCatalogUnpublish === true;
@@ -780,7 +794,8 @@ async function processTestCycleAutoReschedule() {
       try {
         await client.query('BEGIN');
         const lockedRes = await client.query(
-          `SELECT id, is_published, duration_minutes, last_cycle_started_at, updated_at
+          `SELECT id, is_published, duration_minutes, last_cycle_started_at, updated_at,
+                  exam_date, slot_label, dynamic_date_enabled, date_cycle_days
            FROM tests
            WHERE id = $1::uuid
            LIMIT 1
@@ -792,17 +807,22 @@ async function processTestCycleAutoReschedule() {
           await client.query('COMMIT');
           continue;
         }
-        const lockedStartedMs = Date.parse(String(locked.last_cycle_started_at || ''));
-        const lockedDurationMinutes = Math.max(1, Number(locked.duration_minutes || 0));
-        const lockedCycleEndMs = Number.isFinite(lockedStartedMs)
-          ? lockedStartedMs + lockedDurationMinutes * 60 * 1000
-          : Number.NaN;
-        if (!Number.isFinite(lockedCycleEndMs) || Date.now() < lockedCycleEndMs) {
+        const lockedNowMs = Date.now();
+        if (!shouldRunSchedulerRollover(locked, lockedNowMs)) {
+          await client.query('COMMIT');
+          continue;
+        }
+        const lockedCycleEndMs = resolveSchedulerCycleEndMs(locked);
+        if (!Number.isFinite(lockedCycleEndMs)) {
           await client.query('COMMIT');
           continue;
         }
         const lockedUpdatedMs = Date.parse(String(locked.updated_at || ''));
-        if (Number.isFinite(lockedUpdatedMs) && Number.isFinite(lockedCycleEndMs) && lockedUpdatedMs > lockedCycleEndMs) {
+        if (
+          Number.isFinite(lockedUpdatedMs) &&
+          Number.isFinite(lockedCycleEndMs) &&
+          lockedUpdatedMs > lockedCycleEndMs
+        ) {
           await client.query('COMMIT');
           continue;
         }

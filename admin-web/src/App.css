@@ -1237,6 +1237,26 @@ button:active {
   letter-spacing: 0.01em;
 }
 
+.all-tests-field-hint {
+  font-size: 0.68rem;
+  color: #64748b;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.all-tests-cycle-hint {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.all-tests-cycle-hint--summary {
+  margin-top: 0;
+  margin-bottom: 12px;
+  color: #64748b;
+}
+
 .field-required-star {
   color: #dc2626;
   font-weight: 800;

@@ -138,7 +138,7 @@ function evaluateApplyCyclePhase({
   const catalogVisible = isTestCatalogVisible(row, advancedConfig, nowMs);
   const catalogListed = catalogVisible;
   const visibilityError = catalogVisibilityError(row, advancedConfig, nowMs);
-  const cycleState = evaluateApplicationCycleState(row, appliedAtIso);
+  const cycleState = evaluateApplicationCycleState(row, appliedAtIso, nowMs);
   const { fromOlderCycle, alreadyAppliedInCurrentCycle, mayReapplyForNewCycle } = cycleState;
 
   const resolve = buildTestResolvePayload({

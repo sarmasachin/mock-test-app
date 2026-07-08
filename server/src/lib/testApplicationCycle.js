@@ -10,6 +10,10 @@ function toIsoDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
+function loadCycleWindowHelpers() {
+  return require('./testCycleWindow');
+}
+
 function resolveExamDate(row) {
   if (!row) return null;
   const base = row.exam_date ? new Date(row.exam_date) : null;
@@ -27,51 +31,32 @@ function resolveExamDate(row) {
   return toIsoDate(shifted);
 }
 
-function toStartOfDayMs(date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-}
-
 /**
  * True when user's application predates the current test cycle (may re-apply for new shuffle round).
- * Safe default: when cycle boundary cannot be determined, treat as current cycle (return false).
+ * Phase 5: uses testCycleWindow.resolveApplicationCycleBoundaryMs (last_cycle_started_at only).
+ * Safe default: when boundary is not established, treat as current cycle (return false).
  */
-function isApplicationFromOlderCycle(row, appliedAtIso) {
+function isApplicationFromOlderCycle(row, appliedAtIso, nowMs = Date.now()) {
   if (!appliedAtIso) return false;
   const appliedAt = new Date(appliedAtIso);
   if (Number.isNaN(appliedAt.getTime())) return false;
 
-  const cycleStartedMs = Date.parse(String(row?.last_cycle_started_at || '').trim());
-  if (Number.isFinite(cycleStartedMs)) {
-    return appliedAt.getTime() < cycleStartedMs;
+  const { resolveApplicationCycleBoundaryMs } = loadCycleWindowHelpers();
+  const boundaryMs = resolveApplicationCycleBoundaryMs(row, nowMs);
+  if (!Number.isFinite(boundaryMs)) {
+    return false;
   }
-
-  const resolved = resolveExamDate(row);
-  if (resolved) {
-    const cycleExamDate = new Date(`${resolved}T00:00:00`);
-    if (!Number.isNaN(cycleExamDate.getTime())) {
-      const cycleExamMs = toStartOfDayMs(cycleExamDate);
-      if (row?.dynamic_date_enabled) {
-        const cycleDays = Math.max(0, Number(row.date_cycle_days || 0));
-        if (cycleDays > 0) {
-          const cycleStartMs = cycleExamMs - cycleDays * 24 * 60 * 60 * 1000;
-          return appliedAt.getTime() < cycleStartMs;
-        }
-      }
-      const nowStartMs = toStartOfDayMs(new Date());
-      return nowStartMs > cycleExamMs && appliedAt.getTime() < cycleExamMs;
-    }
-  }
-
-  return false;
+  return appliedAt.getTime() < boundaryMs;
 }
 
 /**
  * @param {object|null|undefined} row — tests DB row
  * @param {string|null|undefined} appliedAtIso
+ * @param {number} [nowMs]
  */
-function evaluateApplicationCycleState(row, appliedAtIso) {
+function evaluateApplicationCycleState(row, appliedAtIso, nowMs = Date.now()) {
   const appliedAt = appliedAtIso ? String(appliedAtIso).trim() : '';
-  const fromOlderCycle = Boolean(appliedAt) && isApplicationFromOlderCycle(row, appliedAt);
+  const fromOlderCycle = Boolean(appliedAt) && isApplicationFromOlderCycle(row, appliedAt, nowMs);
   const alreadyAppliedInCurrentCycle = Boolean(appliedAt) && !fromOlderCycle;
   const mayReapplyForNewCycle = Boolean(appliedAt) && fromOlderCycle;
   return {
@@ -248,6 +233,14 @@ function buildApplyResponseBody({
   };
 }
 
+/**
+ * Phase 5 — Attempt boundary aligned with testCycleWindow (null when cycle not seeded yet).
+ */
+function resolveAttemptCycleStartedAtMs(row, nowMs = Date.now()) {
+  const { resolveAttemptCycleStartedAtMs: fromWindow } = loadCycleWindowHelpers();
+  return fromWindow(row, nowMs);
+}
+
 module.exports = {
   resolveExamDate,
   isApplicationFromOlderCycle,
@@ -258,4 +251,5 @@ module.exports = {
   resolveAlreadyAppliedForTarget,
   normalizeEnrollmentCounts,
   buildApplyResponseBody,
+  resolveAttemptCycleStartedAtMs,
 };
