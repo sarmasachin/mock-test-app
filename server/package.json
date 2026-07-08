@@ -64,7 +64,8 @@
     "e2e:apply-cycle": "node scripts/e2eTestApplyCycle.js",
     "e2e:publish-email-diag": "node scripts/e2ePublishEmailDiag.js",
     "fix:smtp-env": "node scripts/applySmtpEnv.js",
-    "phase0:enrollment": "node scripts/phase0EnrollmentBaseline.js"
+    "phase0:enrollment": "node scripts/phase0EnrollmentBaseline.js",
+    "verify:apply-enrollment-phase1": "node scripts/verifyApplyEnrollmentPhase1.js"
   },
   "engines": {
     "node": ">=18"

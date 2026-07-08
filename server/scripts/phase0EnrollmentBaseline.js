@@ -79,9 +79,7 @@ function staticCodeAudit() {
   const resolveJs = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'testResolve.js'), 'utf8');
 
   const reapplyBlock = testsJs.includes("message: 'Re-enrolled for new test cycle'");
-  const reapplyIncrements = /Re-enrolled for new test cycle[\s\S]{0,400}enrolled_count = enrolled_count \+ 1/.test(
-    testsJs,
-  );
+  const reapplyIncrements = /if \(existing\) \{[\s\S]{0,1400}incrementTestEnrolledCount/.test(testsJs);
   ok =
     line(
       !reapplyBlock || reapplyIncrements,
