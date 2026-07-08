@@ -100,7 +100,7 @@ function runStaticChecks() {
   ok = line(routes.includes('alreadyAppliedInCurrentCycle: true'), 'my-applications exposes cycle flags') && ok;
   ok = line(models.includes('alreadyAppliedInCurrentCycle'), 'Android ApplyTestResponse cycle flags') && ok;
   ok = line(models.includes('enrolledInCurrentCycle'), 'Android enrolledInCurrentCycle field') && ok;
-  ok = line(applyScreen.includes('appliedInCurrentCycle'), 'Apply screen uses server cycle flags') && ok;
+  ok = line(applyScreen.includes('alreadyAppliedInCurrentCycle'), 'Apply screen uses server cycle flags') && ok;
 
   return ok;
 }

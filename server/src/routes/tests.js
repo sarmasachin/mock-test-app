@@ -45,7 +45,19 @@ const {
 const {
   isApplicationFromOlderCycle,
   buildApplyResponseBody,
+  resolveApplyEligibilityForTest,
+  resolveAlreadyAppliedForTarget,
+  resolveExamDate,
 } = require('../lib/testApplicationCycle');
+
+const USER_TEST_APPLICATIONS_SQL = `
+  SELECT t.id, t.title, t.subcategory, t.is_published, t.capacity_total, t.enrolled_count,
+         t.exam_date, t.dynamic_date_enabled, t.date_cycle_days, t.last_cycle_started_at,
+         ta.applied_at
+  FROM test_applications ta
+  INNER JOIN tests t ON t.id = ta.test_id
+  WHERE ta.user_id = $1::uuid
+`;
 
 const PUBLISHED_QUESTION_COUNT_SQL = `(SELECT COUNT(*)::int FROM questions q WHERE q.test_id = tests.id AND q.is_published = true) AS published_question_count`;
 
@@ -54,22 +66,6 @@ const router = express.Router();
 function toIsoDate(date) {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
   return date.toISOString().slice(0, 10);
-}
-
-function resolveExamDate(row) {
-  const base = row.exam_date ? new Date(row.exam_date) : null;
-  if (!base || Number.isNaN(base.getTime())) return null;
-  if (!row.dynamic_date_enabled) return toIsoDate(base);
-  const cycleDays = Math.max(0, Number(row.date_cycle_days || 0));
-  if (!cycleDays) return toIsoDate(base);
-  const today = new Date();
-  const diffMs = today.setHours(0, 0, 0, 0) - new Date(base).setHours(0, 0, 0, 0);
-  if (diffMs <= 0) return toIsoDate(base);
-  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
-  const jump = Math.ceil(diffDays / cycleDays) * cycleDays;
-  const shifted = new Date(base);
-  shifted.setDate(shifted.getDate() + jump);
-  return toIsoDate(shifted);
 }
 
 function mapTest(row) {
@@ -467,17 +463,11 @@ router.get('/resolve', requireAuth, async (req, res) => {
 
     const row = lookup.row;
     const nowMs = Date.now();
-    const [advancedMap, publishScheduleItems, applicationRes, scheduleTimerEnabled] =
+    const [advancedMap, publishScheduleItems, userAppsRes, scheduleTimerEnabled] =
       await Promise.all([
         loadAdvancedConfigMap(),
         loadPublishScheduleItemsSafe(pool),
-        pool.query(
-          `SELECT applied_at
-           FROM test_applications
-           WHERE user_id = $1::uuid AND test_id = $2::uuid
-           LIMIT 1`,
-          [req.userId, row.id],
-        ).catch((e) => {
+        pool.query(USER_TEST_APPLICATIONS_SQL, [req.userId]).catch((e) => {
           if (e && e.code === '42P01') return { rows: [] };
           throw e;
         }),
@@ -487,24 +477,32 @@ router.get('/resolve', requireAuth, async (req, res) => {
     const advancedConfig = normalizeTestAdvancedConfig(
       resolveAdvancedConfigForTest(advancedMap, row.id),
     );
-    const appliedAt = applicationRes.rows[0]?.applied_at
-      ? new Date(applicationRes.rows[0].applied_at).toISOString()
-      : null;
-    const fromOlderCycle = isApplicationFromOlderCycle(row, appliedAt);
-    const alreadyAppliedInCurrentCycle = Boolean(appliedAt) && !fromOlderCycle;
-    const mayReapplyForNewCycle = Boolean(appliedAt) && fromOlderCycle;
+    const applyState = resolveAlreadyAppliedForTarget(row, userAppsRes.rows);
+    const attemptRow =
+      applyState.appliedTestRow && applyState.alreadyAppliedInCurrentCycle
+        ? applyState.appliedTestRow
+        : row;
+    const attemptAdvancedConfig = normalizeTestAdvancedConfig(
+      resolveAdvancedConfigForTest(advancedMap, attemptRow.id),
+    );
 
     const payload = buildTestResolvePayload({
       row,
       advancedConfig,
       publishScheduleItems,
-      alreadyAppliedInCurrentCycle,
-      mayReapplyForNewCycle,
+      alreadyAppliedInCurrentCycle: applyState.alreadyAppliedInCurrentCycle,
+      mayReapplyForNewCycle: applyState.mayReapplyForNewCycle,
       scheduleTimerEnabled,
       examDate: resolveExamDate(row),
       slotLabel: String(row.slot_label || ''),
-      attemptAccess: alreadyAppliedInCurrentCycle
-        ? await assertUserCanStartAttempt(pool, req.userId, row, advancedConfig, nowMs)
+      attemptAccess: applyState.alreadyAppliedInCurrentCycle
+        ? await assertUserCanStartAttempt(
+            pool,
+            req.userId,
+            attemptRow,
+            attemptAdvancedConfig,
+            nowMs,
+          )
         : null,
     });
 
@@ -588,6 +586,7 @@ router.get('/my-applications', requireAuth, async (req, res) => {
         testTitle: String(row.title || 'Test'),
         appliedAt: row.applied_at ? new Date(row.applied_at).toISOString() : null,
         isPublished: row.is_published === true,
+        alreadyAppliedInCurrentCycle: true,
         enrolledCount,
         capacityTotal,
         remainingSeats: Math.max(0, capacityTotal - enrolledCount),
@@ -741,7 +740,7 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
   try {
     await client.query('BEGIN');
     const testRes = await client.query(
-      `SELECT id, title, is_published, capacity_total, enrolled_count, exam_date, valid_until,
+      `SELECT id, title, subcategory, is_published, capacity_total, enrolled_count, exam_date, valid_until,
               slot_label, dynamic_date_enabled, date_cycle_days, last_cycle_started_at
        FROM tests
        WHERE id = $1::uuid
@@ -761,17 +760,15 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(403).json({ error: visibilityError });
     }
-    const alreadyRes = await client.query(
-      `SELECT applied_at
-       FROM test_applications
-       WHERE user_id = $1::uuid AND test_id = $2::uuid
-       LIMIT 1`,
-      [req.userId, id],
-    );
+    const userAppsRes = await client.query(USER_TEST_APPLICATIONS_SQL, [req.userId]);
     const capacity = Math.max(0, Number(test.capacity_total || 0));
     const currentEnrolled = Math.max(0, Number(test.enrolled_count || 0));
-    const existing = alreadyRes.rows[0];
-    if (existing && !isApplicationFromOlderCycle(test, existing.applied_at)) {
+    const eligibility = resolveApplyEligibilityForTest(test, userAppsRes.rows);
+
+    if (
+      eligibility.kind === 'already_applied_same_test' ||
+      eligibility.kind === 'already_applied_sibling_subcategory'
+    ) {
       await client.query(
         `UPDATE test_waitlist
          SET status = 'cancelled'
@@ -779,18 +776,25 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
         [req.userId, id],
       );
       await client.query('COMMIT');
+      const responseTest = eligibility.testRow || test;
+      const responseEnrolled = Math.max(0, Number(responseTest.enrolled_count ?? currentEnrolled));
+      const responseCapacity = Math.max(0, Number(responseTest.capacity_total ?? capacity));
       return res.json(
         buildApplyResponseBody({
-          test,
-          enrolledCount: currentEnrolled,
-          capacityTotal: capacity,
+          test: responseTest,
+          enrolledCount: responseEnrolled,
+          capacityTotal: responseCapacity,
           alreadyApplied: true,
           alreadyAppliedInCurrentCycle: true,
-          message: 'You already applied for this test',
+          message:
+            eligibility.kind === 'already_applied_sibling_subcategory'
+              ? 'You already applied for a test in this category'
+              : 'You already applied for this test',
         }),
       );
     }
-    if (existing) {
+
+    if (eligibility.kind === 'may_reapply_same_test') {
       await client.query(
         `UPDATE test_waitlist
          SET status = 'cancelled'
@@ -831,6 +835,7 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
         }),
       );
     }
+
     if (capacity > 0 && currentEnrolled >= capacity) {
       const waitSnapshot = await enqueueUserWaitlist(client, req.userId, id);
       await client.query('COMMIT');

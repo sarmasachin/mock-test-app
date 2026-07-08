@@ -79,7 +79,7 @@ function staticCodeAudit() {
   const resolveJs = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'testResolve.js'), 'utf8');
 
   const reapplyBlock = testsJs.includes("message: 'Re-enrolled for new test cycle'");
-  const reapplyIncrements = /if \(existing\) \{[\s\S]{0,1400}incrementTestEnrolledCount/.test(testsJs);
+  const reapplyIncrements = /may_reapply_same_test[\s\S]{0,1400}incrementTestEnrolledCount/.test(testsJs);
   ok =
     line(
       !reapplyBlock || reapplyIncrements,
@@ -112,14 +112,8 @@ function staticCodeAudit() {
         : 'KNOWN BUG: GET /tests/resolve omits enrolledCount (testResolve.js)',
     ) && !resolveHasEnrollment && ok;
 
-  const usesCanonicalApply = testsJs.includes("require('../lib/testApplicationCycle')");
-  ok =
-    line(
-      usesCanonicalApply,
-      usesCanonicalApply
-        ? 'tests.js imports testApplicationCycle helpers'
-        : 'KNOWN: tests.js uses duplicate inline cycle logic (not testApplicationCycle.js)',
-    ) && !usesCanonicalApply && ok;
+  ok = line(testsJs.includes('resolveApplyEligibilityForTest'), 'tests.js uses resolveApplyEligibilityForTest') && ok;
+  ok = line(testsJs.includes('resolveAlreadyAppliedForTarget'), 'tests.js uses resolveAlreadyAppliedForTarget') && ok;
 
   return ok;
 }

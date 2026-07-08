@@ -33,7 +33,7 @@ function main() {
   ok = line(routes.includes('buildApplyResponseBody'), 'tests.js uses buildApplyResponseBody') && ok;
   ok = line(routes.includes('incrementTestEnrolledCount'), 'shared incrementTestEnrolledCount helper exists') && ok;
 
-  const reapplyBlock = /if \(existing\) \{[\s\S]{0,1400}incrementTestEnrolledCount/.test(routes);
+  const reapplyBlock = /may_reapply_same_test[\s\S]{0,1400}incrementTestEnrolledCount/.test(routes);
   ok =
     line(
       reapplyBlock,
