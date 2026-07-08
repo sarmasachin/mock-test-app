@@ -10,9 +10,11 @@ const {
   isPublishScheduleItemPending,
 } = require('./testVisibility');
 const { cycleRepublishAtMs } = require('./cycleRepublishGap');
-const { parseCycleEndMs } = require('./testCycleTiming');
 const { evaluateTestStartAccess } = require('./testStartAccess');
-const { resolveApplyWindowState } = require('./testCycleWindow');
+const {
+  resolveApplyWindowState,
+  resolveSchedulerCycleEndMs,
+} = require('./testCycleWindow');
 
 /**
  * @typedef {'live'|'between_cycles'|'unpublished'|'scheduled'|'closed'|'not_found'} TestCyclePhase
@@ -59,7 +61,7 @@ function resolveTestCyclePhase(row, advancedConfig, nowMs = Date.now(), publishS
     return 'live';
   }
 
-  const cycleEndMs = parseCycleEndMs(row);
+  const cycleEndMs = resolveSchedulerCycleEndMs(row);
   const pendingRepublish = findEarliestPendingRepublishSchedule(publishScheduleItems, row.id);
   const cycleEnded = Number.isFinite(cycleEndMs) && nowMs >= cycleEndMs;
 
@@ -80,7 +82,7 @@ function resolveRepublishAtIso(row, advancedConfig, publishScheduleItems = []) {
     const ms = Date.parse(String(pending.scheduleAt));
     if (Number.isFinite(ms)) return new Date(ms).toISOString();
   }
-  const cycleEndMs = parseCycleEndMs(row);
+  const cycleEndMs = resolveSchedulerCycleEndMs(row);
   if (!Number.isFinite(cycleEndMs)) return null;
   const republishMs = cycleRepublishAtMs(cycleEndMs, advancedConfig);
   if (!Number.isFinite(republishMs)) return null;
@@ -289,7 +291,6 @@ async function loadPublishScheduleItemsSafe(db) {
 }
 
 module.exports = {
-  parseCycleEndMs,
   findEarliestPendingRepublishSchedule,
   resolveTestCyclePhase,
   resolveRepublishAtIso,
@@ -297,4 +298,5 @@ module.exports = {
   buildTestResolvePayload,
   lookupTestForResolve,
   loadPublishScheduleItemsSafe,
+  resolveSchedulerCycleEndMs,
 };

@@ -2,9 +2,9 @@
 
 const {
   buildTestResolvePayload,
-  parseCycleEndMs,
   resolveTestCyclePhase,
 } = require('./testResolve');
+const { shouldRunSchedulerRollover } = require('./testCycleWindow');
 
 /**
  * Admin-facing cycle badge fields for GET /admin/tests (Phase 5).
@@ -23,9 +23,9 @@ function buildAdminTestCycleFields(row, advancedConfig, publishScheduleItems = [
   });
 
   const phase = payload.cyclePhase;
-  const cycleEndMs = parseCycleEndMs(row);
-  const cycleExpired = Number.isFinite(cycleEndMs) && nowMs >= cycleEndMs;
-  const stuckPublishedAfterCycle = row?.is_published === true && cycleExpired;
+  /** Phase 8: same rollover rule as index.js scheduler (not duration_minutes alone). */
+  const stuckPublishedAfterCycle =
+    row?.is_published === true && shouldRunSchedulerRollover(row, nowMs);
 
   let cycleStatus = 'unpublished';
   let cycleStatusLabel = 'Unpublished';

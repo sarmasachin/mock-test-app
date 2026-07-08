@@ -42,6 +42,7 @@
     "verify:admin-create-phase4": "node scripts/verifyAdminCreatePhase4.js",
     "verify:test-resolve-phase2": "node scripts/verifyTestResolvePhase2.js",
     "verify:admin-cycle-phase5": "node scripts/verifyAdminCycleStatusPhase5.js",
+    "verify:exam-cycle-admin-cycle-phase8": "node scripts/verifyExamCycleAdminCyclePhase8.js",
     "verify:scheduler-hardening-phase6": "node scripts/verifySchedulerHardeningPhase6.js",
     "phase6:publish-diag": "node scripts/diagPublishSchedulingPhase6.js",
     "verify:apply-cycle-phase7": "node scripts/verifyApplyCyclePhase7.js",

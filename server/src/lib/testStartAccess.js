@@ -5,8 +5,7 @@ const {
   isBeforeExamStart,
   isAfterLateJoinWindow,
 } = require('./examSchedule');
-const { parseCycleEndMs } = require('./testCycleTiming');
-
+const { resolveSchedulerCycleEndMs } = require('./testCycleWindow');
 /** Matches Android TestScheduleUtils.APPLIED_SERIES_NO_TIMER_TTL_MS */
 const DEFAULT_NO_SCHEDULE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -57,8 +56,7 @@ function evaluateTestStartAccess({
   row,
   advancedConfig,
 }) {
-  const cycleEndMs = parseCycleEndMs(row);
-  const joinClosesAtMs = resolveJoinClosesAtMs({
+  const cycleEndMs = resolveSchedulerCycleEndMs(row);  const joinClosesAtMs = resolveJoinClosesAtMs({
     examDate,
     slotLabel,
     lateJoinMinutes,

@@ -196,15 +196,34 @@ function staticCodeAudit() {
         : 'parseCycleEndMs pattern not found',
     ) && ok;
 
+  const adminCycleJs = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'adminTestCycleStatus.js'), 'utf8');
+  const testResolveJs = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'testResolve.js'), 'utf8');
+  const testStartJs = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'testStartAccess.js'), 'utf8');
+  ok =
+    line(
+      adminCycleJs.includes('shouldRunSchedulerRollover'),
+      'Phase 8: adminTestCycleStatus uses shouldRunSchedulerRollover',
+    ) && ok;
+  ok =
+    line(
+      testResolveJs.includes('resolveSchedulerCycleEndMs'),
+      'Phase 8: testResolve uses resolveSchedulerCycleEndMs',
+    ) && ok;
+  ok =
+    line(
+      testStartJs.includes('resolveSchedulerCycleEndMs'),
+      'Phase 8: testStartAccess join window uses resolveSchedulerCycleEndMs',
+    ) && ok;
+
   const schedulerUsesDuration =
     /processTestCycleAutoReschedule[\s\S]*?duration_minutes \* 60 \* 1000/.test(indexJs) ||
     /lockedDurationMinutes \* 60 \* 1000/.test(indexJs);
   ok =
     line(
-      schedulerUsesDuration,
+      !schedulerUsesDuration,
       schedulerUsesDuration
-        ? 'KNOWN: legacy parseCycleEndMs still duration-based (used outside scheduler until Phase 3+)'
-        : 'Duration rollover pattern not found',
+        ? 'FAIL: scheduler still uses duration_minutes for rollover'
+        : 'Phase 2: scheduler does not use duration-only rollover',
     ) && ok;
 
   const createSetsCycleNow =
