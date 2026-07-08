@@ -49,24 +49,13 @@ const { countOverduePublishSchedules } = require('./lib/adminTestCycleStatus');
 const { promoteWaitlistForTest } = require('./lib/testRepublishNow');
 const { buildPublishSchedulingDiagnostics } = require('./lib/publishScheduleDiagnostics');
 const {
-  buildTestPublishNotificationPayload,
+  buildTestPublishDedupeKey,
+  prependNotificationIfNotDuplicate,
   resolveNotificationDeliveryOutcome,
 } = require('./lib/notificationScheduling');
 const {
-  enqueueNotificationSchedulingItem,
-  mutateNotificationScheduling,
-} = require('./lib/notificationSchedulingQueue');
-  enqueueNotificationSchedulingItem,
-  mutateNotificationScheduling,
-} = require('./lib/notificationSchedulingQueue');
-const {
   triggerTestPublishAnnouncementEmail,
-const {
-  buildNotificationScheduleDedupeKey,
-  sendPushToAudience,
-} = require('./lib/pushAudienceDelivery');
-const { buildExamStartIso } = require('./lib/examStartTime');
-const { runMockTestStartReminderPush } = require('./lib/mockTestStartReminderPush');
+  mergePublishEmailDedupeKey,
 } = require('./lib/publishAnnouncementEmail');
 const { trimNotificationSchedulingPayload } = require('./lib/schedulingQueueLimits');
 const { sendPushToToken } = require('./notificationDispatch');
@@ -596,15 +585,15 @@ async function runPublishScheduleItemWork(item) {
              FROM tests
              WHERE id = $1::uuid
              LIMIT 1`,
-          const cycleStartedAt = metaRes.rows[0]?.last_cycle_started_at;
-          const publishPayload = buildTestPublishNotificationPayload({
-            testId,
-            testTitle,
-            cycleStartedAt,
-          });
-          const enqueueResult = publishPayload
-            ? await enqueueScheduledPushNotification(publishPayload)
-            : { enqueued: false, skipped: false };
+            [testId],
+          );
+          const testTitle = String(metaRes.rows[0]?.title || 'New test').trim() || 'New test';
+          const cycleIso = String(metaRes.rows[0]?.last_cycle_started_at || '').trim();
+          const dedupeKey = buildTestPublishDedupeKey(testId, cycleIso);
+          const enqueueResult = await enqueueScheduledPushNotification({
+            title: 'New Test Published',
+            message: `${testTitle} is now available.`,
+            target: 'all',
             deepLink: 'main/tests',
             dedupeKey,
           });
@@ -772,9 +761,7 @@ async function processTestCycleAutoReschedule() {
          AND last_cycle_started_at IS NOT NULL`,
     );
 
-    const legacyCycleActions = [];
-    const rolloverTestIds = [];
-
+    const cycleActions = [];
     for (const row of testsRes.rows || []) {
       const testId = String(row.id || '').trim();
       if (!testId) continue;
@@ -783,9 +770,10 @@ async function processTestCycleAutoReschedule() {
       const durationMinutes = Math.max(1, Number(row.duration_minutes || 0));
       const cycleEndMs = startedMs + durationMinutes * 60 * 1000;
       if (nowMs < cycleEndMs) continue;
-
       const adv = resolveAdvancedConfigForTest(advancedMap, testId);
-      const useLegacyCatalogUnpublish = adv.autoCatalogUnpublish === true;
+      const republishAtMs = cycleRepublishAtMs(cycleEndMs, adv);
+      if (!Number.isFinite(republishAtMs)) continue;
+      const scheduleAtIso = new Date(republishAtMs).toISOString();
 
       const client = await pool.connect();
       try {
@@ -819,39 +807,19 @@ async function processTestCycleAutoReschedule() {
         }
 
         await client.query(
+          `UPDATE tests
+           SET is_published = false, enrolled_count = 0, updated_at = now()
+           WHERE id = $1::uuid`,
+          [testId],
+        );
+        await client.query(
           `UPDATE test_waitlist
            SET status = 'cancelled'
            WHERE test_id = $1::uuid AND status = 'waiting'`,
           [testId],
         );
-
-        if (useLegacyCatalogUnpublish) {
-          const republishAtMs = cycleRepublishAtMs(lockedCycleEndMs, adv);
-          if (!Number.isFinite(republishAtMs)) {
-            await client.query('COMMIT');
-            continue;
-          }
-          await client.query(
-            `UPDATE tests
-             SET is_published = false, enrolled_count = 0, updated_at = now()
-             WHERE id = $1::uuid`,
-            [testId],
-          );
-          await client.query('COMMIT');
-          legacyCycleActions.push({
-            testId,
-            scheduleAtIso: new Date(republishAtMs).toISOString(),
-          });
-        } else {
-          await client.query(
-            `UPDATE tests
-             SET enrolled_count = 0, last_cycle_started_at = now(), updated_at = now()
-             WHERE id = $1::uuid`,
-            [testId],
-          );
-          await client.query('COMMIT');
-          rolloverTestIds.push(testId);
-        }
+        await client.query('COMMIT');
+        cycleActions.push({ testId, scheduleAtIso });
       } catch (e) {
         await client.query('ROLLBACK').catch(() => {});
         throw e;
@@ -860,22 +828,14 @@ async function processTestCycleAutoReschedule() {
       }
     }
 
-    for (const testId of rolloverTestIds) {
-      try {
-        await regenerateTestFromSubcategoryPool(testId);
-      } catch (e) {
-        console.error('cycle_rollover_regenerate_error', testId, e);
-      }
-    }
-
-    if (!legacyCycleActions.length) return;
+    if (!cycleActions.length) return;
 
     await withPublishSchedulingLock(async (client) => {
       const items = recoverStalePublishScheduleItems(await getPublishSchedulingItems(client), nowMs);
       let changedSettings = false;
       const nowIso = new Date().toISOString();
 
-      for (const action of legacyCycleActions) {
+      for (const action of cycleActions) {
         const testId = String(action.testId || '').trim();
         if (!testId) continue;
         const hasPendingSchedule = items.some(
@@ -1101,6 +1061,43 @@ async function processUnlockedResultEmails() {
   } catch (e) {
     if (e && e.code === '42P01') return;
     console.error('result_unlock_email_scheduler_error', e);
+  }
+}
+
+function parseHourMinuteFromSlotLabel(slotLabel) {
+  const raw = String(slotLabel || '').trim().toLowerCase();
+  if (!raw) return null;
+  const m = raw.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (!m) return null;
+  let hour = Number(m[1]);
+  const minute = Number(m[2] || 0);
+  const meridiem = String(m[3] || '').toLowerCase();
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return null;
+    if (meridiem === 'pm' && hour !== 12) hour += 12;
+    if (meridiem === 'am' && hour === 12) hour = 0;
+  } else if (hour < 0 || hour > 23) {
+    return null;
+  }
+  return { hour, minute };
+}
+
+function buildExamStartIso(examDate, slotLabel) {
+  const date = String(examDate || '').trim();
+  if (!date) return null;
+  const hm = parseHourMinuteFromSlotLabel(slotLabel);
+  if (!hm) return null;
+  const tzOffsetMinutes = Number(process.env.EXAM_TIMEZONE_OFFSET_MINUTES || 330);
+  const sign = tzOffsetMinutes >= 0 ? '+' : '-';
+  const abs = Math.abs(tzOffsetMinutes);
+  const tzH = String(Math.floor(abs / 60)).padStart(2, '0');
+  const tzM = String(abs % 60).padStart(2, '0');
+  const hh = String(hm.hour).padStart(2, '0');
+  const mm = String(hm.minute).padStart(2, '0');
+  const iso = `${date}T${hh}:${mm}:00${sign}${tzH}:${tzM}`;
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
   return new Date(ms).toISOString();
 }
 
@@ -1191,23 +1188,6 @@ async function processMockTestStartReminderEmails() {
   } catch (e) {
     if (e && e.code === '42P01') return;
     console.error('mocktest_start_reminder_scheduler_error', e);
-let startSoonPushSchedulerRunning = false;
-
-async function processMockTestStartReminderPush() {
-  if (startSoonPushSchedulerRunning) return;
-  startSoonPushSchedulerRunning = true;
-  try {
-    await runMockTestStartReminderPush({
-      loadAdvancedMap: async () => getSettingJson('testAdvancedConfigs', {}),
-    });
-  } catch (e) {
-    if (e && e.code === '42P01') return;
-    console.error('mocktest_start_reminder_push_scheduler_error', e);
-  } finally {
-    startSoonPushSchedulerRunning = false;
-  }
-}
-
   }
 }
 
@@ -1247,10 +1227,128 @@ function resolveAdvancedConfigForTest(advancedMap, testId) {
     }
   }
   return null;
-  return enqueueNotificationSchedulingItem(payload, null);
 }
 
-let notificationSchedulerRunning = false;
+async function enqueueScheduledPushNotification(payload) {
+  const current = await getSettingJson('notificationScheduling', { items: [] });
+  const result = prependNotificationIfNotDuplicate(current, payload);
+  if (result.enqueued) {
+    await setSettingJson('notificationScheduling', result.current);
+  }
+  return result;
+}
+
+async function sendPushToAudience({ title, message, target, deepLink }) {
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS user_device_tokens (
+       id BIGSERIAL PRIMARY KEY,
+       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       device_token TEXT NOT NULL,
+       platform VARCHAR(20) NOT NULL DEFAULT 'android',
+       app_version VARCHAR(40) NOT NULL DEFAULT '',
+       device_model VARCHAR(120) NOT NULL DEFAULT '',
+       is_active BOOLEAN NOT NULL DEFAULT true,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+       last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+       UNIQUE (device_token)
+     )`,
+  );
+  let whereClause = 'TRUE';
+  if (target === 'new_users') {
+    whereClause = `u.created_at >= now() - interval '7 days'`;
+  } else if (target === 'active_users') {
+    whereClause = `EXISTS (
+      SELECT 1 FROM test_attempts ta
+      WHERE ta.user_id = u.id AND ta.completed_at >= now() - interval '30 days'
+    )`;
+  }
+  const tableColsRes = await pool.query(
+    `SELECT table_name, column_name
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name IN ('user_device_tokens', 'user_devices')`,
+  );
+  const tableCols = {};
+  for (const row of tableColsRes.rows || []) {
+    const table = String(row.table_name || '');
+    const col = String(row.column_name || '');
+    if (!table || !col) continue;
+    if (!tableCols[table]) tableCols[table] = new Set();
+    tableCols[table].add(col);
+  }
+  const hasUdt = tableCols.user_device_tokens && tableCols.user_device_tokens.size > 0;
+  const hasUd = tableCols.user_devices && tableCols.user_devices.size > 0;
+  if (!hasUdt && !hasUd) return { total: 0, sent: 0, failed: 0, deactivated: 0 };
+  const sourceTable = hasUdt ? 'user_device_tokens' : 'user_devices';
+  const cols = tableCols[sourceTable];
+  const tokenColumn = cols.has('device_token')
+    ? 'device_token'
+    : cols.has('token')
+      ? 'token'
+      : cols.has('fcm_token')
+        ? 'fcm_token'
+        : null;
+  if (!tokenColumn) return { total: 0, sent: 0, failed: 0, deactivated: 0 };
+  const activeColumn = cols.has('is_active')
+    ? 'is_active'
+    : cols.has('active')
+      ? 'active'
+      : cols.has('enabled')
+        ? 'enabled'
+        : null;
+  const orderColumn = cols.has('updated_at')
+    ? 'updated_at'
+    : cols.has('last_seen_at')
+      ? 'last_seen_at'
+      : cols.has('created_at')
+        ? 'created_at'
+        : null;
+  const activeClause = activeColumn ? `src.${activeColumn} = true AND ` : '';
+  const orderClause = orderColumn ? `ORDER BY src.${orderColumn} DESC` : '';
+  const tokenRows = await pool.query(
+    `SELECT src.${tokenColumn} AS token
+     FROM ${sourceTable} src
+     INNER JOIN users u ON u.id = src.user_id
+     WHERE ${activeClause}${whereClause}
+     ${orderClause}
+     LIMIT 10000`,
+  );
+  const rows = tokenRows.rows || [];
+  let sent = 0;
+  let failed = 0;
+  let deactivated = 0;
+  for (const row of rows) {
+    const currentToken = String(row.token || '').trim();
+    if (!currentToken) {
+      failed += 1;
+      continue;
+    }
+    try {
+      const result = await sendPushToToken(currentToken, { title, message, deepLink });
+      if (result.ok) {
+        sent += 1;
+      } else {
+        failed += 1;
+        if (result.code === 'UNREGISTERED') {
+          if (activeColumn) {
+            const updateTs = cols.has('updated_at') ? ', updated_at = now()' : '';
+            await pool.query(
+              `UPDATE ${sourceTable}
+               SET ${activeColumn} = false${updateTs}
+               WHERE ${tokenColumn} = $1`,
+              [currentToken],
+            );
+          } else {
+            await pool.query(`DELETE FROM ${sourceTable} WHERE ${tokenColumn} = $1`, [currentToken]);
+          }
+          deactivated += 1;
+        }
+      }
+    } catch (e) {
+      failed += 1;
+      console.error('notification_scheduler_token_send_failed', e && (e.message || e));
+    }
   }
   return { total: rows.length, sent, failed, deactivated };
 }
@@ -1277,109 +1375,103 @@ function computeNextNotificationSchedule(item, baseIso) {
     return monthProbe.toISOString();
   }
   return d.toISOString();
-  if (notificationSchedulerRunning) return;
-  notificationSchedulerRunning = true;
+}
+
+async function processNotificationSchedules() {
   try {
-    await mutateNotificationScheduling(async (payload) => {
-      const items = Array.isArray(payload.items) ? payload.items : [];
-      if (!items.length) return { changed: false, items };
-      const nowMs = Date.now();
-      const maxPerRunRaw = Number(process.env.NOTIFICATION_SCHEDULER_MAX_PER_RUN || 3);
-      const maxPerRun = Number.isFinite(maxPerRunRaw) ? Math.max(1, Math.min(50, Math.floor(maxPerRunRaw))) : 3;
-      const deferMsRaw = Number(process.env.NOTIFICATION_SCHEDULER_DEFER_MS || 120000);
-      const deferMs = Number.isFinite(deferMsRaw) ? Math.max(10000, Math.min(3600000, Math.floor(deferMsRaw))) : 120000;
-      let processedThisRun = 0;
-      let changed = false;
-      const nextItems = [];
-      for (const raw of items) {
-        const item = raw || {};
-        const status = String(item.status || '').trim().toLowerCase();
-        if (status !== 'scheduled') {
-          nextItems.push(item);
-          continue;
-        }
-        const scheduleAt = String(item.scheduleAt || '').trim();
-        const scheduleMs = Date.parse(scheduleAt);
-        if (!Number.isFinite(scheduleMs) || scheduleMs > nowMs) {
-          nextItems.push(item);
-          continue;
-        }
-        if (processedThisRun >= maxPerRun) {
-          nextItems.push({
-            ...item,
-            scheduleAt: new Date(nowMs + deferMs).toISOString(),
-            status: 'scheduled',
-            lastRunAt: String(item.lastRunAt || ''),
-            lastRunSent: Number(item.lastRunSent || 0),
-            lastRunFailed: Number(item.lastRunFailed || 0),
-            lastError: 'deferred_backlog_limit',
-          });
-          changed = true;
-          continue;
-        }
-        const title = String(item.title || '').trim();
-        const message = String(item.message || '').trim();
-        const target = ['all', 'new_users', 'active_users'].includes(String(item.target || '').trim().toLowerCase())
-          ? String(item.target).trim().toLowerCase()
-          : 'all';
-        const deepLink = String(item.deepLink || '').trim();
-        if (!title || !message) {
-          nextItems.push({
-            ...item,
-            status: 'failed',
-            failedAt: new Date().toISOString(),
-            lastError: 'missing_title_or_message',
-          });
-          changed = true;
-          continue;
-        }
-        const dedupeKey = buildNotificationScheduleDedupeKey(item);
-        const result = await sendPushToAudience({
-          title,
-          message,
-          target,
-          deepLink,
-          dedupeKey,
-        });
-        processedThisRun += 1;
-        const delivery = resolveNotificationDeliveryOutcome(result);
-        const runSucceeded = delivery.succeeded;
-        const nextScheduleAt = computeNextNotificationSchedule(item, scheduleAt);
-        const repeatUntilMs = Date.parse(String(item.repeatUntil || '').trim());
-        const hasValidRepeatUntil = Number.isFinite(repeatUntilMs);
-        const nextScheduleMs = Date.parse(String(nextScheduleAt || ''));
-        const canRepeat = Number.isFinite(nextScheduleMs) && (!hasValidRepeatUntil || nextScheduleMs <= repeatUntilMs);
-        if (nextScheduleAt && canRepeat) {
-          nextItems.push({
-            ...item,
-            scheduleAt: nextScheduleAt,
-            status: 'scheduled',
-            sentAt: runSucceeded ? new Date().toISOString() : String(item.sentAt || ''),
-            lastRunAt: new Date().toISOString(),
-            lastRunSent: result.sent,
-            lastRunFailed: result.failed,
-            lastError: runSucceeded ? '' : delivery.lastError,
-          });
-        } else {
-          nextItems.push({
-            ...item,
-            status: runSucceeded ? 'sent' : 'failed',
-            sentAt: runSucceeded ? new Date().toISOString() : String(item.sentAt || ''),
-            failedAt: runSucceeded ? String(item.failedAt || '') : new Date().toISOString(),
-            lastRunSent: result.sent,
-            lastRunFailed: result.failed,
-            lastError: runSucceeded ? '' : delivery.lastError,
-          });
-        }
-        changed = true;
+    const payload = await getSettingJson('notificationScheduling', { items: [] });
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    if (!items.length) return;
+    const nowMs = Date.now();
+    // Safety: never blast a huge backlog in one scheduler tick.
+    // If multiple items are overdue (scheduleAt in the past), we process only a limited number per run,
+    // and defer the rest slightly into the future.
+    const maxPerRunRaw = Number(process.env.NOTIFICATION_SCHEDULER_MAX_PER_RUN || 3);
+    const maxPerRun = Number.isFinite(maxPerRunRaw) ? Math.max(1, Math.min(50, Math.floor(maxPerRunRaw))) : 3;
+    const deferMsRaw = Number(process.env.NOTIFICATION_SCHEDULER_DEFER_MS || 120000);
+    const deferMs = Number.isFinite(deferMsRaw) ? Math.max(10000, Math.min(3600000, Math.floor(deferMsRaw))) : 120000;
+    let processedThisRun = 0;
+    let changed = false;
+    const nextItems = [];
+    for (const raw of items) {
+      const item = raw || {};
+      const status = String(item.status || '').trim().toLowerCase();
+      if (status !== 'scheduled') {
+        nextItems.push(item);
+        continue;
       }
-      return { changed, items: nextItems };
-    });
-  } catch (e) {
-    if (e && e.code === '42P01') return;
-    console.error('notification_scheduler_error', e);
-  } finally {
-    notificationSchedulerRunning = false;
+      const scheduleAt = String(item.scheduleAt || '').trim();
+      const scheduleMs = Date.parse(scheduleAt);
+      if (!Number.isFinite(scheduleMs) || scheduleMs > nowMs) {
+        nextItems.push(item);
+        continue;
+      }
+      if (processedThisRun >= maxPerRun) {
+        // Defer: keep order stable and avoid re-sending immediately on the next tick.
+        nextItems.push({
+          ...item,
+          scheduleAt: new Date(nowMs + deferMs).toISOString(),
+          status: 'scheduled',
+          lastRunAt: String(item.lastRunAt || ''),
+          lastRunSent: Number(item.lastRunSent || 0),
+          lastRunFailed: Number(item.lastRunFailed || 0),
+          lastError: 'deferred_backlog_limit',
+        });
+        changed = true;
+        continue;
+      }
+      const title = String(item.title || '').trim();
+      const message = String(item.message || '').trim();
+      const target = ['all', 'new_users', 'active_users'].includes(String(item.target || '').trim().toLowerCase())
+        ? String(item.target).trim().toLowerCase()
+        : 'all';
+      const deepLink = String(item.deepLink || '').trim();
+      if (!title || !message) {
+        nextItems.push({
+          ...item,
+          status: 'failed',
+          failedAt: new Date().toISOString(),
+          lastError: 'missing_title_or_message',
+        });
+        changed = true;
+        continue;
+      }
+      const result = await sendPushToAudience({ title, message, target, deepLink });
+      processedThisRun += 1;
+      const delivery = resolveNotificationDeliveryOutcome(result);
+      const runSucceeded = delivery.succeeded;
+      const nextScheduleAt = computeNextNotificationSchedule(item, scheduleAt);
+      const repeatUntilMs = Date.parse(String(item.repeatUntil || '').trim());
+      const hasValidRepeatUntil = Number.isFinite(repeatUntilMs);
+      const nextScheduleMs = Date.parse(String(nextScheduleAt || ''));
+      const canRepeat = Number.isFinite(nextScheduleMs) && (!hasValidRepeatUntil || nextScheduleMs <= repeatUntilMs);
+      if (nextScheduleAt && canRepeat) {
+        nextItems.push({
+          ...item,
+          scheduleAt: nextScheduleAt,
+          status: 'scheduled',
+          sentAt: runSucceeded ? new Date().toISOString() : String(item.sentAt || ''),
+          lastRunAt: new Date().toISOString(),
+          lastRunSent: result.sent,
+          lastRunFailed: result.failed,
+          lastError: runSucceeded ? '' : delivery.lastError,
+        });
+      } else {
+        nextItems.push({
+          ...item,
+          status: runSucceeded ? 'sent' : 'failed',
+          sentAt: runSucceeded ? new Date().toISOString() : String(item.sentAt || ''),
+          failedAt: runSucceeded ? String(item.failedAt || '') : new Date().toISOString(),
+          lastRunSent: result.sent,
+          lastRunFailed: result.failed,
+          lastError: runSucceeded ? '' : delivery.lastError,
+        });
+      }
+      changed = true;
+    }
+    if (changed) {
+      await setSettingJson('notificationScheduling', { items: nextItems });
+    }
   } catch (e) {
     if (e && e.code === '42P01') return;
     console.error('notification_scheduler_error', e);
@@ -1761,9 +1853,6 @@ setInterval(() => {
 }, 60000);
 setInterval(() => {
   processUnlockedResultEmails();
-}, 60000);
-setInterval(() => {
-  processMockTestStartReminderPush();
 }, 60000);
 setInterval(() => {
   processMockTestStartReminderEmails();
