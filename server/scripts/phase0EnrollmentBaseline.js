@@ -88,13 +88,18 @@ function staticCodeAudit() {
         : 'KNOWN BUG: re-apply for new cycle does NOT increment enrolled_count (tests.js)',
     ) && ok;
 
-  const cycleResetsCount = indexJs.includes('enrolled_count = 0') && indexJs.includes('is_published = false');
+  const cycleResetsCount = indexJs.includes('enrolled_count = 0') && indexJs.includes('last_cycle_started_at = now()');
   ok =
     line(
-      true,
+      cycleResetsCount,
       cycleResetsCount
-        ? 'KNOWN: cycle scheduler resets enrolled_count=0 and unpublishes (index.js)'
-        : 'Cycle scheduler enrolled_count reset pattern not found',
+        ? 'Cycle rollover resets enrolled_count and bumps last_cycle_started_at (index.js)'
+        : 'Cycle rollover enrolled_count reset pattern not found',
+    ) && ok;
+  ok =
+    line(
+      indexJs.includes('autoCatalogUnpublish === true'),
+      'Legacy autoCatalogUnpublish opt-in preserved for between-cycles unpublish',
     ) && ok;
 
   const resolveHasEnrollment =
@@ -274,13 +279,10 @@ async function auditDatabase() {
         `${String(r.title).slice(0, 28).padEnd(28)} | ${String(dbEnc).padStart(5)} | ${String(totalApps).padStart(10)} | ${String(cycleApps).padStart(18)} | ${String(cap).padStart(8)} | ${cycle}`,
       );
 
-      if (dbEnc !== totalApps) {
-        issues.push({
-          title: r.title,
-          kind: 'db_count_vs_total_applications',
-          enrolled_count: dbEnc,
-          total_apps: totalApps,
-        });
+      if (dbEnc !== totalApps && totalApps > cycleApps) {
+        info(
+          `note: "${r.title}" has ${totalApps - cycleApps} application(s) from older cycle(s) — enrolled_count tracks current cycle only`,
+        );
       }
       if (dbEnc !== cycleApps && r.last_cycle_started_at) {
         issues.push({
