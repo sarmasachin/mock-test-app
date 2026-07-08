@@ -46,8 +46,12 @@ function isLocalCoveredByServer(local, serverEntries) {
 
 function merge(localActive, serverEntries) {
   if (!serverEntries || serverEntries.length === 0) return localActive || [];
-  const localOnly = (localActive || []).filter((local) => !isLocalCoveredByServer(local, serverEntries));
-  return [...serverEntries, ...localOnly];
+  const pendingOnServer = (localActive || []).filter(
+    (local) =>
+      !isLocalCoveredByServer(local, serverEntries) &&
+      String(local.testId || '').trim() !== '',
+  );
+  return [...serverEntries, ...pendingOnServer];
 }
 
 function runLogicMirrorTests() {
@@ -90,7 +94,15 @@ function runLogicMirrorTests() {
     },
   ];
   const mergedTwo = merge(localOther, server);
-  ok = line(mergedTwo.length === 2, 'merge: keeps unmatched active local + server rows') && ok;
+  ok = line(mergedTwo.length === 2, 'merge: keeps testId local row pending server catch-up') && ok;
+
+  const ghostLocal = [
+    { testName: 'HP GK', testId: 'uuid-local' },
+    { testName: 'ff' },
+  ];
+  const ghostServer = [{ testName: 'HP GK', testId: 'uuid-local' }];
+  const ghostMerged = merge(ghostLocal, ghostServer);
+  ok = line(ghostMerged.length === 1, 'merge: drops local ghost without testId when server has data') && ok;
 
   ok =
     line(
@@ -113,7 +125,8 @@ function runStaticChecks() {
 
   ok = line(sync.includes('object AppliedTestSeriesSync'), 'AppliedTestSeriesSync.kt exists') && ok;
   ok = mustInclude(sync, 'if (serverEntries.isEmpty())', 'AppliedTestSeriesSync') && ok;
-  ok = mustInclude(sync, 'localOnly', 'AppliedTestSeriesSync') && ok;
+  ok = mustInclude(sync, 'pendingOnServer', 'AppliedTestSeriesSync') && ok;
+  ok = mustInclude(sync, 'testId.trim().isNotBlank()', 'AppliedTestSeriesSync ghost prune') && ok;
 
   ok = mustInclude(prefs, 'mergeAppliedTestSeriesFromServer', 'AppPreferencesRepository') && ok;
   ok = mustInclude(prefs, 'AppliedTestSeriesSync.merge', 'AppPreferencesRepository') && ok;
@@ -128,8 +141,8 @@ function runStaticChecks() {
   ok = mustInclude(auth, 'mergeAppliedTestSeriesFromServer', 'AuthRepository') && ok;
   ok = mustInclude(auth, 'testId = item.testId', 'AuthRepository sync testId') && ok;
 
-  ok = mustInclude(applyScreen, 'testId = appliedId', 'ApplyForTestScreenNew local save testId') && ok;
-  ok = mustInclude(applyScreen, 'testId = testId', 'ApplyForTestScreenNew dialog save testId') && ok;
+  ok = mustInclude(applyScreen, 'testId = idToSave', 'ApplyForTestScreenNew local save testId') && ok;
+  ok = mustInclude(applyScreen, 'testId = testId.trim()', 'ApplyForTestScreenNew dialog save testId') && ok;
 
   return ok;
 }

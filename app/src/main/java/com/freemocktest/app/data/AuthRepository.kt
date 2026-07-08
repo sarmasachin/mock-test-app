@@ -348,6 +348,7 @@ object AuthRepository {
     suspend fun logout(): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             clearSession()
+            ContentRepository.clearTestNavigationCaches()
             AppPreferencesRepository.clearAuthSessionPrefs()
         }.fold(
             onSuccess = { Result.success(Unit) },

@@ -25,7 +25,7 @@ function evalPhase(key) {
   const phase = byKey[key];
   return evaluateApplyCyclePhase({
     row: phase.row,
-    advancedConfig: timeline.advancedConfig,
+    advancedConfig: phase.advancedConfig || timeline.advancedConfig,
     publishScheduleItems: phase.publishScheduleItems,
     nowMs: phase.nowMs,
     appliedAtIso: phase.appliedAtIso,
@@ -43,25 +43,25 @@ ok = line(applied.resolve.canApply === false, 'step2: already applied → canApp
 ok = line(applied.alreadyAppliedInCurrentCycle === true, 'step2: alreadyAppliedInCurrentCycle') && ok;
 ok = line(applied.applyAllowed === false, 'step2: apply blocked (already applied)') && ok;
 
-const between = evalPhase('between_cycles');
-ok = line(between.catalogListed === false, 'step3: between cycles → catalog empty') && ok;
-ok = line(between.resolve.cyclePhase === 'between_cycles', 'step3: between_cycles phase') && ok;
-ok = line(between.resolve.canApply === false, 'step3: canApply=false') && ok;
-ok = line(between.resolve.found === true && between.resolve.id, 'step3: resolve still finds test id') && ok;
+const between = evalPhase('legacy_between_cycles');
+ok = line(between.catalogListed === false, 'step3 legacy: between cycles → catalog empty') && ok;
+ok = line(between.resolve.cyclePhase === 'between_cycles', 'step3 legacy: between_cycles phase') && ok;
+ok = line(between.resolve.canApply === false, 'step3 legacy: canApply=false') && ok;
+ok = line(between.resolve.found === true && between.resolve.id, 'step3 legacy: resolve still finds test id') && ok;
 ok =
   line(
     String(between.resolve.blockReason || '').toLowerCase().includes('between cycles'),
-    'step3: blockReason mentions between cycles',
+    'step3 legacy: blockReason mentions between cycles',
   ) && ok;
-ok = line(between.applyAllowed === false && between.applyHttpStatus === 403, 'step3: POST /apply → 403') && ok;
-ok = line(Boolean(between.resolve.republishAt), 'step3: republishAt present') && ok;
+ok = line(between.applyAllowed === false && between.applyHttpStatus === 403, 'step3 legacy: POST /apply → 403') && ok;
+ok = line(Boolean(between.resolve.republishAt), 'step3 legacy: republishAt present') && ok;
 
-const republished = evalPhase('republished_new_cycle');
-ok = line(republished.catalogListed === true, 'step4: after republish → catalog listed again') && ok;
-ok = line(republished.resolve.cyclePhase === 'live', 'step4: new cycle live') && ok;
-ok = line(republished.mayReapplyForNewCycle === true, 'step4: may re-apply for new cycle') && ok;
-ok = line(republished.applyAllowed === true && republished.applyHttpStatus === 201, 'step4: re-apply allowed (201)') && ok;
-ok = line(republished.fromOlderCycle === true, 'step4: application from older cycle detected') && ok;
+const rolled = evalPhase('cycle_rolled_over');
+ok = line(rolled.catalogListed === true, 'step4: cycle rollover → catalog still listed') && ok;
+ok = line(rolled.resolve.cyclePhase === 'live', 'step4: rollover → live cycle phase') && ok;
+ok = line(rolled.mayReapplyForNewCycle === true, 'step4: may re-apply for new cycle') && ok;
+ok = line(rolled.applyAllowed === true && rolled.applyHttpStatus === 201, 'step4: re-apply allowed (201)') && ok;
+ok = line(rolled.fromOlderCycle === true, 'step4: application from older cycle detected') && ok;
 
 ok = line(timeline.phases.length === 4, 'timeline has 4 phases') && ok;
 ok =

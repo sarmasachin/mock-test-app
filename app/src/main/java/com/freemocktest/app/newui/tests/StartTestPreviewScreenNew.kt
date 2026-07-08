@@ -118,7 +118,7 @@ fun StartTestPreviewScreenNew(
     val pendingResult by AppPreferencesRepository.pendingResultState.collectAsState(initial = null)
     val loginPickedTitles by AppPreferencesRepository.loginPickedTestTitles.collectAsState(initial = emptyList())
     val loginPickedSubcategories by AppPreferencesRepository.loginPickedSubcategories.collectAsState(initial = emptyList())
-    val showAllTests by AppPreferencesRepository.showAllTestsCatalog.collectAsState(initial = false)
+    val showAllTests by AppPreferencesRepository.showAllTestsCatalog.collectAsState(initial = true)
     val normalizedSubs = remember(loginPickedSubcategories) {
         UserInterestUtils.normalizeInterestSubcategories(loginPickedSubcategories)
     }
@@ -305,7 +305,9 @@ fun StartTestPreviewScreenNew(
         0L
     }
     val fallbackLocked = fallbackRemainingMs > 0L
-    val showAppliedList = activeAppliedEntries.isNotEmpty()
+    // List route only (Home → "applied"): show all applied tests. Specific catalog routes
+    // (e.g. START_TEST_PREVIEW/ff) must show that test's Apply/Start UI — not HP GK's list.
+    val showAppliedList = isListRoute && activeAppliedEntries.isNotEmpty()
     val showLoading = appliedSyncLoading || (specificTestName != null && primaryLoading && !showAppliedList)
     val showSpecificStart = !showAppliedList && !showLoading && specificTest != null && specificStartEntry != null
     val showSpecificApply = !showAppliedList && !showLoading && specificTest != null &&

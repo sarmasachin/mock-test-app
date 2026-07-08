@@ -95,8 +95,21 @@ function getApplyCycleTimeline({
         appliedAtIso: new Date(cycleStartMs + 30 * 1000).toISOString(),
       },
       {
-        key: 'between_cycles',
-        label: 'Cycle ended — between republish gap',
+        key: 'cycle_rolled_over',
+        label: 'Cycle ended — catalog stays published, new cycle started',
+        nowMs: cycleEndMs + 60 * 1000,
+        row: buildScenarioTestRow({
+          isPublished: true,
+          cycleStartedIso: new Date(cycleEndMs).toISOString(),
+          durationMinutes,
+          testId,
+        }),
+        publishScheduleItems: [],
+        appliedAtIso: new Date(cycleStartMs + 30 * 1000).toISOString(),
+      },
+      {
+        key: 'legacy_between_cycles',
+        label: 'Legacy autoCatalogUnpublish — catalog hidden between cycles',
         nowMs: cycleEndMs + 60 * 1000,
         row: buildScenarioTestRow({
           isPublished: false,
@@ -106,19 +119,7 @@ function getApplyCycleTimeline({
         }),
         publishScheduleItems: buildRepublishScheduleItems(testId, cycleEndMs, advancedConfig),
         appliedAtIso: null,
-      },
-      {
-        key: 'republished_new_cycle',
-        label: 'Republished — new cycle live',
-        nowMs: republishMs + 60 * 1000,
-        row: buildScenarioTestRow({
-          isPublished: true,
-          cycleStartedIso: republishIso,
-          durationMinutes,
-          testId,
-        }),
-        publishScheduleItems: [],
-        appliedAtIso: new Date(cycleStartMs + 30 * 1000).toISOString(),
+        advancedConfig: { ...advancedConfig, autoCatalogUnpublish: true },
       },
     ],
   };

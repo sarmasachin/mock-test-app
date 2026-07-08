@@ -238,9 +238,22 @@ async function main() {
 
   console.log('\n-- Static source checks --');
   const src = readKotlinSources();
+  const loadSubFn = src.repo.match(/suspend fun loadTestsForSubcategory[\s\S]*?^    \}/m);
+  const loadSubBody = loadSubFn ? loadSubFn[0] : '';
   ok = line(src.repo.includes('isPlaceholderTestCard'), 'ContentRepository has placeholder guard') && ok;
-  ok = line(src.repo.includes('Server already applies isTestCatalogVisible'), 'double client filter removed') && ok;
-  ok = line(src.repo.includes('emptyList()'), 'loadTestsForSubcategory returns empty instead of defaultTests on miss') && ok;
+  ok = line(
+    loadSubBody.includes('Server already applies isTestCatalogVisible') &&
+      !loadSubBody.includes('isTestListingVisible'),
+    'loadTestsForSubcategory: no duplicate isTestListingVisible filter',
+  ) && ok;
+  ok = line(
+    !loadSubBody.includes('defaultTests(sub)'),
+    'loadTestsForSubcategory does not return defaultTests(sub) on miss',
+  ) && ok;
+  ok = line(
+    /else\s*\{\s*\n\s*emptyList\(\)/.test(loadSubBody),
+    'loadTestsForSubcategory returns emptyList() when API has no rows',
+  ) && ok;
   ok = line(src.testsScreen.includes('fresh.isNotEmpty() -> fresh'), 'TestsScreen stale-while-revalidate guard') && ok;
   ok = line(src.preview.includes('hasCatalogDisplayFields(it)'), 'StartTestPreview guards appliedSnapshots') && ok;
   ok = line(src.apply.includes('hasCatalogDisplayFields(it)'), 'Apply screen guards publishedTest') && ok;

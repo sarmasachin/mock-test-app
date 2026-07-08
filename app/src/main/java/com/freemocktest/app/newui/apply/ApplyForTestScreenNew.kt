@@ -576,9 +576,13 @@ fun ApplyForTestScreenNew(
                                                 val titleToSave = response.testTitle?.trim()
                                                     ?.takeIf { it.isNotBlank() }
                                                     ?: resolvedTestName
+                                                val idToSave = response.testId?.trim()
+                                                    ?.takeIf { it.isNotBlank() }
+                                                    ?: testId.trim()
                                                 localApplySeriesSaved = runCatching {
                                                     AppPreferencesRepository.addAppliedTestSeriesNow(
                                                         testName = titleToSave,
+                                                        testId = idToSave,
                                                         scheduleTimerEnabled = scheduleTimerEnabled,
                                                         examDate = resolvedExamDate,
                                                         slotLabel = resolvedSlotLabel,
@@ -691,6 +695,7 @@ fun ApplyForTestScreenNew(
                                     if (titleToSave.isNotBlank()) {
                                         localApplySeriesSaved = AppPreferencesRepository.addAppliedTestSeriesNow(
                                             testName = titleToSave,
+                                            testId = testId.trim(),
                                             scheduleTimerEnabled = scheduleTimerEnabled,
                                             examDate = resolvedExamDate,
                                             slotLabel = resolvedSlotLabel,

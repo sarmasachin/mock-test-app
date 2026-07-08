@@ -24,6 +24,7 @@ import com.freemocktest.app.newui.auth.isValidMobile
 import com.freemocktest.app.newui.tests.TestCardNew
 import com.freemocktest.app.util.TestScheduleUtils
 import com.freemocktest.app.util.UserInterestUtils
+import com.freemocktest.app.util.AppliedTestSeriesSync
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -112,6 +113,10 @@ object AppPreferencesRepository {
     private val keyLoginPickedSubcategories = stringPreferencesKey("login_picked_subcategories")
     /** 1 = user chose browse-all mode on Tests tab (Phase 4 UI). */
     private val keyShowAllTestsCatalog = intPreferencesKey("show_all_tests_catalog")
+    /** 1 = user explicitly tapped "Sirf mere tests" (do not auto-reset on migration). */
+    private val keyInterestFilterOptIn = intPreferencesKey("interest_filter_opt_in")
+    /** One-time migration for interest catalog defaults (Phase 3). */
+    private val keyInterestCatalogDefaultsV1 = intPreferencesKey("interest_catalog_defaults_v1")
     /** Daily Quiz only — not mock-test attempts. JSON object: date (yyyy-MM-dd) → result blob. */
     private val keyDailyQuizResultsByDayJson = stringPreferencesKey("daily_quiz_results_by_day_v1")
 
@@ -229,7 +234,9 @@ object AppPreferencesRepository {
         findAppliedEntryForTestLookup(testName, catalogCard = null)
 
     /**
-     * Match applied-test entry when [lookupKey] is a catalog title, subcategory, or alias.
+     * Match applied-test entry when [lookupKey] is a catalog title or subcategory.
+     * Card-based matching runs only when [lookupKey] matches [catalogCard] title/subcategory
+     * so a stale cache (e.g. ff key → HP GK card) cannot mark the wrong test as applied.
      */
     suspend fun findAppliedEntryForTestLookup(
         lookupKey: String,
@@ -244,16 +251,29 @@ object AppPreferencesRepository {
         }.getOrNull().orEmpty().filter { it.isActive(now) }
         entries.firstOrNull { it.testName.equals(key, ignoreCase = true) }?.let { return it }
         val card = catalogCard ?: return null
-        if (card.title.isNotBlank()) {
-            entries.firstOrNull { it.testName.equals(card.title, ignoreCase = true) }?.let { return it }
+        if (!catalogLookupKeyMatchesCard(key, card)) return null
+        val cardId = card.id.trim()
+        if (cardId.isNotBlank()) {
+            entries.firstOrNull { entry ->
+                entry.testId.isNotBlank() && entry.testId.equals(cardId, ignoreCase = true)
+            }?.let { return it }
         }
-        if (card.subcategory.isNotBlank() && key.equals(card.subcategory, ignoreCase = true)) {
-            entries.firstOrNull { it.testName.equals(card.title, ignoreCase = true) }?.let { return it }
-        }
-        if (card.id.isNotBlank()) {
-            // Applied list is keyed by title; when card title differs from lookup, caller should pass card.
+        val cardTitle = card.title.trim()
+        if (cardTitle.isNotBlank()) {
+            entries.firstOrNull { it.testName.equals(cardTitle, ignoreCase = true) }?.let { return it }
         }
         return null
+    }
+
+    /** True when navigation [lookupKey] targets this catalog row (title or subcategory). */
+    private fun catalogLookupKeyMatchesCard(lookupKey: String, card: TestCardNew): Boolean {
+        val key = lookupKey.trim()
+        if (key.isBlank()) return false
+        val cardTitle = card.title.trim()
+        val cardSub = card.subcategory.trim()
+        if (cardTitle.isNotBlank() && key.equals(cardTitle, ignoreCase = true)) return true
+        if (cardSub.isNotBlank() && key.equals(cardSub, ignoreCase = true)) return true
+        return false
     }
 
     suspend fun resolveStartBlockMessageNow(
@@ -309,6 +329,8 @@ object AppPreferencesRepository {
         val testName: String,
         val unlockAtMillis: Long,
         val expiresAtMillis: Long,
+        /** Stable catalog id from server apply/sync when known. */
+        val testId: String = "",
         /** Future exam start from admin exam date + slot; 0 when not scheduled. */
         val scheduledStartAtMillis: Long = 0L,
         /** Server GET /tests/my-applications — null = use local lock/join rules. */
@@ -324,9 +346,10 @@ object AppPreferencesRepository {
             expiresAtMillis > nowMs || serverCanStart == true
     }
 
-    /** One row from GET /tests/my-applications for atomic local replace. */
+    /** One row from GET /tests/my-applications for local merge sync. */
     data class ServerAppliedSyncItem(
         val testTitle: String,
+        val testId: String = "",
         val examDate: String? = null,
         val slotLabel: String? = null,
         val lateJoinMinutes: Int = 0,
@@ -357,6 +380,7 @@ object AppPreferencesRepository {
             ?: timing.expiresAtMillis
         return AppliedTestSeriesEntry(
             testName = title,
+            testId = item.testId.trim(),
             unlockAtMillis = unlockAt,
             expiresAtMillis = expiresAt,
             scheduledStartAtMillis = timing.scheduledStartAtMillis,
@@ -781,8 +805,35 @@ object AppPreferencesRepository {
     /** When true, Tests tab shows full catalog instead of interest filter (Phase 4). */
     val showAllTestsCatalog: Flow<Boolean>
         get() = storeOrNull()?.data?.map { prefs ->
-            (prefs[keyShowAllTestsCatalog] ?: 0) == 1
-        } ?: flowOf(false)
+            isShowAllTestsCatalogPref(prefs)
+        } ?: flowOf(true)
+
+    private fun isShowAllTestsCatalogPref(prefs: Preferences): Boolean {
+        val stored = prefs[keyShowAllTestsCatalog]
+        if (stored != null) return stored == 1
+        // Unset pref: browse-all until user opts into "Sirf mere tests".
+        return true
+    }
+
+    /**
+     * One-time fix: users who saved interests while browse-all defaulted off could not see
+     * published tests after APK update. Respect explicit "Sirf mere tests" opt-in.
+     */
+    suspend fun applyInterestCatalogDefaultsMigration() {
+        if (!::appContext.isInitialized) return
+        runCatching {
+            store().edit { prefs ->
+                if ((prefs[keyInterestCatalogDefaultsV1] ?: 0) == 1) return@edit
+                prefs[keyInterestCatalogDefaultsV1] = 1
+                if ((prefs[keyInterestFilterOptIn] ?: 0) == 1) return@edit
+                val pickDone = (prefs[keyLoginTestPickDone] ?: 0) == 1
+                val subs = parseInterestSubcategoriesJson(prefs[keyLoginPickedSubcategories].orEmpty())
+                if (pickDone && subs.isNotEmpty()) {
+                    prefs[keyShowAllTestsCatalog] = 1
+                }
+            }
+        }.onFailure { Log.e(TAG, "applyInterestCatalogDefaultsMigration failed", it) }
+    }
 
     fun rememberTestOpened(testName: String) {
         if (!::appContext.isInitialized) return
@@ -880,10 +931,12 @@ object AppPreferencesRepository {
         joinClosesAtMillis: Long? = null,
         serverCanStart: Boolean? = null,
         startBlockReason: String? = null,
+        testId: String = "",
     ): Boolean {
         if (!::appContext.isInitialized) return false
         val safeName = testName.trim()
         if (safeName.isBlank()) return false
+        val safeTestId = testId.trim()
         val now = System.currentTimeMillis()
         return runCatching {
             store().edit { prefs ->
@@ -904,6 +957,7 @@ object AppPreferencesRepository {
                     ?: timing.expiresAtMillis
                 val nextEntry = AppliedTestSeriesEntry(
                     testName = safeName,
+                    testId = safeTestId,
                     unlockAtMillis = unlockAt,
                     expiresAtMillis = expiresAt,
                     scheduledStartAtMillis = timing.scheduledStartAtMillis,
@@ -911,7 +965,7 @@ object AppPreferencesRepository {
                     startBlockReason = startBlockReason?.trim()?.takeIf { it.isNotBlank() },
                 )
                 val updated = existing
-                    .filterNot { it.testName.equals(safeName, ignoreCase = true) } + nextEntry
+                    .filterNot { AppliedTestSeriesSync.entriesMatchSameTest(it, nextEntry) } + nextEntry
                 prefs[keyAppliedTestSeries] = encodeAppliedTestSeries(updated)
             }
             true
@@ -1452,6 +1506,7 @@ object AppPreferencesRepository {
                         add(
                             AppliedTestSeriesEntry(
                                 testName = name,
+                                testId = obj.optString("testId", "").trim(),
                                 unlockAtMillis = unlockAt,
                                 expiresAtMillis = expiresAt,
                                 scheduledStartAtMillis = obj.optLong("scheduledStartAtMillis", 0L),
@@ -1496,6 +1551,9 @@ object AppPreferencesRepository {
             arr.put(
                 JSONObject().apply {
                     put("testName", item.testName)
+                    if (item.testId.isNotBlank()) {
+                        put("testId", item.testId)
+                    }
                     put("unlockAtMillis", item.unlockAtMillis)
                     put("expiresAtMillis", item.expiresAtMillis)
                     if (item.scheduledStartAtMillis > 0L) {
@@ -1840,6 +1898,9 @@ object AppPreferencesRepository {
                 prefs[keyPendingResultTotal] = 0
                 prefs[keyPendingResultViewed] = 1
                 prefs[keyAppliedTestSeries] = "[]"
+                // Drop per-user test catalog disk cache (stale title→card maps survive logout otherwise).
+                prefs[keyCachedTestCardsBlob] = ""
+                prefs[keyCachedTestsListsBlob] = ""
                 prefs[keyAuthBootstrapState] = RestoreSessionStatus.LoggedOut.name
                 prefs[keyInProgressQuizJson] = ""
                 prefs[keySubmittedAttemptJson] = ""
@@ -1888,9 +1949,14 @@ object AppPreferencesRepository {
         selectedTitles.map { it.trim() }.filter { it.isNotBlank() }.distinct().forEach { titlesArr.put(it) }
         return runCatching {
             store().edit { prefs ->
+                val wasPickDone = (prefs[keyLoginTestPickDone] ?: 0) == 1
                 prefs[keyLoginPickedSubcategories] = subsArr.toString()
                 prefs[keyLoginTestPickTitles] = titlesArr.toString()
                 prefs[keyLoginTestPickDone] = 1
+                // First login pick only: browse-all until user opts into filter on Tests tab.
+                if (!wasPickDone && subs.isNotEmpty()) {
+                    prefs[keyShowAllTestsCatalog] = 1
+                }
             }
             true
         }.onFailure { Log.e(TAG, "saveLoginInterestPick failed", it) }
@@ -1899,14 +1965,10 @@ object AppPreferencesRepository {
 
     suspend fun saveProfileUserInterests(subcategories: List<String>): Boolean {
         val subs = UserInterestUtils.normalizeInterestSubcategories(subcategories)
-        val ok = saveLoginInterestPick(
+        return saveLoginInterestPick(
             selectedSubcategories = subs,
             selectedTitles = emptyList(),
         )
-        if (ok && subs.isNotEmpty()) {
-            setShowAllTestsCatalog(false)
-        }
-        return ok
     }
 
     suspend fun replaceLocalUserInterests(subcategories: List<String>) {
@@ -1932,14 +1994,17 @@ object AppPreferencesRepository {
         runCatching {
             store().edit { prefs ->
                 prefs[keyShowAllTestsCatalog] = if (showAll) 1 else 0
+                if (!showAll) {
+                    prefs[keyInterestFilterOptIn] = 1
+                }
             }
         }.onFailure { Log.e(TAG, "setShowAllTestsCatalog failed", it) }
     }
 
     suspend fun peekShowAllTestsCatalog(): Boolean {
-        if (!::appContext.isInitialized) return false
-        val prefs = runCatching { store().data.first() }.getOrNull() ?: return false
-        return (prefs[keyShowAllTestsCatalog] ?: 0) == 1
+        if (!::appContext.isInitialized) return true
+        val prefs = runCatching { store().data.first() }.getOrNull() ?: return true
+        return isShowAllTestsCatalogPref(prefs)
     }
 
     suspend fun peekLoginPickedTestTitles(): List<String> {

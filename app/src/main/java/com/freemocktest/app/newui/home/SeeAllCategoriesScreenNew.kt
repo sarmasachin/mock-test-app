@@ -201,7 +201,7 @@ fun SeeAllCategoriesScreenNew(
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val scope = rememberCoroutineScope()
     val userInterests by AppPreferencesRepository.loginPickedSubcategories.collectAsState(initial = emptyList())
-    val showAllTests by AppPreferencesRepository.showAllTestsCatalog.collectAsState(initial = false)
+    val showAllTests by AppPreferencesRepository.showAllTestsCatalog.collectAsState(initial = true)
     val interestFilterActive = remember(userInterests, showAllTests) {
         !showAllTests && UserInterestUtils.normalizeInterestSubcategories(userInterests).isNotEmpty()
     }

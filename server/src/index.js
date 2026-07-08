@@ -772,7 +772,9 @@ async function processTestCycleAutoReschedule() {
          AND last_cycle_started_at IS NOT NULL`,
     );
 
-    const cycleActions = [];
+    const legacyCycleActions = [];
+    const rolloverTestIds = [];
+
     for (const row of testsRes.rows || []) {
       const testId = String(row.id || '').trim();
       if (!testId) continue;
@@ -781,10 +783,9 @@ async function processTestCycleAutoReschedule() {
       const durationMinutes = Math.max(1, Number(row.duration_minutes || 0));
       const cycleEndMs = startedMs + durationMinutes * 60 * 1000;
       if (nowMs < cycleEndMs) continue;
+
       const adv = resolveAdvancedConfigForTest(advancedMap, testId);
-      const republishAtMs = cycleRepublishAtMs(cycleEndMs, adv);
-      if (!Number.isFinite(republishAtMs)) continue;
-      const scheduleAtIso = new Date(republishAtMs).toISOString();
+      const useLegacyCatalogUnpublish = adv.autoCatalogUnpublish === true;
 
       const client = await pool.connect();
       try {
@@ -818,19 +819,39 @@ async function processTestCycleAutoReschedule() {
         }
 
         await client.query(
-          `UPDATE tests
-           SET is_published = false, enrolled_count = 0, updated_at = now()
-           WHERE id = $1::uuid`,
-          [testId],
-        );
-        await client.query(
           `UPDATE test_waitlist
            SET status = 'cancelled'
            WHERE test_id = $1::uuid AND status = 'waiting'`,
           [testId],
         );
-        await client.query('COMMIT');
-        cycleActions.push({ testId, scheduleAtIso });
+
+        if (useLegacyCatalogUnpublish) {
+          const republishAtMs = cycleRepublishAtMs(lockedCycleEndMs, adv);
+          if (!Number.isFinite(republishAtMs)) {
+            await client.query('COMMIT');
+            continue;
+          }
+          await client.query(
+            `UPDATE tests
+             SET is_published = false, enrolled_count = 0, updated_at = now()
+             WHERE id = $1::uuid`,
+            [testId],
+          );
+          await client.query('COMMIT');
+          legacyCycleActions.push({
+            testId,
+            scheduleAtIso: new Date(republishAtMs).toISOString(),
+          });
+        } else {
+          await client.query(
+            `UPDATE tests
+             SET enrolled_count = 0, last_cycle_started_at = now(), updated_at = now()
+             WHERE id = $1::uuid`,
+            [testId],
+          );
+          await client.query('COMMIT');
+          rolloverTestIds.push(testId);
+        }
       } catch (e) {
         await client.query('ROLLBACK').catch(() => {});
         throw e;
@@ -839,14 +860,22 @@ async function processTestCycleAutoReschedule() {
       }
     }
 
-    if (!cycleActions.length) return;
+    for (const testId of rolloverTestIds) {
+      try {
+        await regenerateTestFromSubcategoryPool(testId);
+      } catch (e) {
+        console.error('cycle_rollover_regenerate_error', testId, e);
+      }
+    }
+
+    if (!legacyCycleActions.length) return;
 
     await withPublishSchedulingLock(async (client) => {
       const items = recoverStalePublishScheduleItems(await getPublishSchedulingItems(client), nowMs);
       let changedSettings = false;
       const nowIso = new Date().toISOString();
 
-      for (const action of cycleActions) {
+      for (const action of legacyCycleActions) {
         const testId = String(action.testId || '').trim();
         if (!testId) continue;
         const hasPendingSchedule = items.some(

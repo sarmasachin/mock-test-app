@@ -20,6 +20,7 @@ class MockTestApp : Application() {
         AuthRepository.init(this)
         RetrofitProvider.init(this)
         runBlocking(Dispatchers.IO) {
+            AppPreferencesRepository.applyInterestCatalogDefaultsMigration()
             AuthRepository.loadStoredTokens()
             ContentRepository.warmCachesFromDisk()
         }

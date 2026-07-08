@@ -4,8 +4,11 @@ import com.freemocktest.app.data.AppPreferencesRepository.AppliedTestSeriesEntry
 import java.util.Locale
 
 /**
- * Phase 2 — merge GET /tests/my-applications into local applied list without wiping
- * active local rows when the server returns empty or omits a current-cycle apply.
+ * Merge GET /tests/my-applications into local applied list.
+ *
+ * - Empty server response: keep active local rows (offline / apply→sync race).
+ * - Non-empty server: server rows are authoritative; drop local ghosts without [testId].
+ * - Local rows with [testId] not yet on the server are kept (apply just succeeded).
  */
 object AppliedTestSeriesSync {
     fun entriesMatchSameTest(
@@ -39,7 +42,10 @@ object AppliedTestSeriesSync {
         if (serverEntries.isEmpty()) {
             return localActive
         }
-        val localOnly = localActive.filter { local -> !isLocalCoveredByServer(local, serverEntries) }
-        return serverEntries + localOnly
+        val pendingOnServer = localActive.filter { local ->
+            !isLocalCoveredByServer(local, serverEntries) &&
+                local.testId.trim().isNotBlank()
+        }
+        return serverEntries + pendingOnServer
     }
 }

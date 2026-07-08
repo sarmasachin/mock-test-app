@@ -41,6 +41,15 @@ object ContentRepository {
     private val testListBySubcategoryMemory = ConcurrentHashMap<String, List<TestCardNew>>()
     private val quizQuestionsMemory = ConcurrentHashMap<String, QuizQuestionsCacheBundle>()
 
+    /**
+     * In-memory test catalog caches (title lookup + subcategory lists). Cleared on logout so a
+     * previous account's resolved cards cannot leak into apply/start for the next user.
+     */
+    fun clearTestNavigationCaches() {
+        testCardMemory.clear()
+        testListBySubcategoryMemory.clear()
+    }
+
     /** Phase 3: delivery metadata stored with cached question rows (cycle + shuffle flags). */
     data class QuizQuestionsCacheMeta(
         val cycleKey: String,
@@ -453,14 +462,10 @@ object ContentRepository {
         }
         try {
             val resp = RetrofitProvider.publicApi.listTests(subcategory = sub, limit = 40)
-            val mapped = resp.items.map { row -> row.toTestCard() }
-                .filter { card ->
-                    com.freemocktest.app.util.TestScheduleUtils.isTestListingVisible(
-                        validUntilIso = card.validUntilIso,
-                        publishAt = card.publishAt,
-                        unpublishAt = card.unpublishAt,
-                    )
-                }
+            // Server already applies isTestCatalogVisible; avoid a second client filter hiding every row.
+            val mapped = resp.items
+                .map { row -> row.toTestCard() }
+                .filter { card -> card.id.isNotBlank() && card.title.isNotBlank() }
             mapped.forEach { card ->
                 val tKey = card.title.trim().lowercase(Locale.US)
                 if (tKey.isNotBlank()) testCardMemory[tKey] = card
@@ -471,12 +476,14 @@ object ContentRepository {
                     .onFailure { Log.w(TAG, "persistTestsListDiskCache $key", it) }
                 mapped
             } else {
-                defaultTests(sub)
+                emptyList()
             }
         } catch (e: Exception) {
             Log.w(TAG, "loadTestsForSubcategory $sub", e)
-            val disk = runCatching { loadCachedTestsForSubcategory(sub) }.getOrDefault(emptyList())
-            if (disk.isNotEmpty()) disk else defaultTests(sub)
+            val disk = runCatching { loadCachedTestsForSubcategory(sub) }
+                .getOrDefault(emptyList())
+                .filter { isRealCatalogCard(it) }
+            if (disk.isNotEmpty()) disk else emptyList()
         }
     }
 

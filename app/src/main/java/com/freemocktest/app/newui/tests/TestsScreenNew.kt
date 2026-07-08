@@ -114,7 +114,7 @@ fun TestsScreenNew(
     val bg = Brush.verticalGradient(colors = p.gradientColors())
     val scope = rememberCoroutineScope()
     val userInterests by AppPreferencesRepository.loginPickedSubcategories.collectAsState(initial = emptyList())
-    val showAllTests by AppPreferencesRepository.showAllTestsCatalog.collectAsState(initial = false)
+    val showAllTests by AppPreferencesRepository.showAllTestsCatalog.collectAsState(initial = true)
     val interestBlocked = remember(subcategory, userInterests, showAllTests) {
         !showAllTests &&
             UserInterestUtils.normalizeInterestSubcategories(userInterests).isNotEmpty() &&
