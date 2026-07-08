@@ -21,6 +21,40 @@ function seededRandom(seedText) {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 
+/** Seeded Fisher-Yates in place. */
+function fisherYatesSeeded(list, seedPrefix) {
+  for (let i = list.length - 1; i > 0; i -= 1) {
+    const r = seededRandom(`${seedPrefix}-${i}`);
+    const j = Math.floor(r * (i + 1));
+    const tmp = list[i];
+    list[i] = list[j];
+    list[j] = tmp;
+  }
+  return list;
+}
+
+function isIdentityOrder(list, keyFn, baselineKeys) {
+  if (list.length !== baselineKeys.length) return false;
+  for (let i = 0; i < list.length; i += 1) {
+    if (keyFn(list[i]) !== baselineKeys[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * When Fisher-Yates returns admin order, force one seeded swap so delivery always differs
+ * (when length >= 2). Keeps determinism for the same seedPrefix.
+ */
+function ensureVisibleShuffle(list, seedPrefix, keyFn, baselineKeys) {
+  if (list.length < 2) return list;
+  if (!isIdentityOrder(list, keyFn, baselineKeys)) return list;
+  const j = 1 + Math.floor(seededRandom(`${seedPrefix}-identity-fix`) * (list.length - 1));
+  const tmp = list[0];
+  list[0] = list[j];
+  list[j] = tmp;
+  return list;
+}
+
 function shuffleQuizOptions(item, dayKey) {
   const orig = clampMcqCorrectIndex(item.correctIndex);
   const options = [
@@ -29,14 +63,11 @@ function shuffleQuizOptions(item, dayKey) {
     { text: item.optionC, originalIndex: 2 },
     { text: item.optionD, originalIndex: 3 },
   ];
+  const baselineKeys = options.map((x) => x.originalIndex);
   const list = [...options];
-  for (let i = list.length - 1; i > 0; i -= 1) {
-    const r = seededRandom(`daily-quiz-opt-${item.id}-${dayKey}-${i}`);
-    const j = Math.floor(r * (i + 1));
-    const tmp = list[i];
-    list[i] = list[j];
-    list[j] = tmp;
-  }
+  const seedPrefix = `daily-quiz-opt-${item.id}-${dayKey}`;
+  fisherYatesSeeded(list, seedPrefix);
+  ensureVisibleShuffle(list, seedPrefix, (x) => x.originalIndex, baselineKeys);
   const correctIndex = list.findIndex((x) => x.originalIndex === orig);
   if (correctIndex < 0) {
     return {
@@ -54,14 +85,11 @@ function shuffleQuizOptions(item, dayKey) {
 function buildDailyQuizItemsForDay(items, dayKey) {
   const published = items.filter((x) => x && x.isPublished !== false);
   if (!published.length) return [];
+  const baselineKeys = published.map((x) => String(x.id || ''));
   const list = [...published];
-  for (let i = list.length - 1; i > 0; i -= 1) {
-    const r = seededRandom(`daily-quiz-order-${dayKey}-${i}`);
-    const j = Math.floor(r * (i + 1));
-    const tmp = list[i];
-    list[i] = list[j];
-    list[j] = tmp;
-  }
+  const seedPrefix = `daily-quiz-order-${dayKey}`;
+  fisherYatesSeeded(list, seedPrefix);
+  ensureVisibleShuffle(list, seedPrefix, (x) => String(x.id || ''), baselineKeys);
   return list.map((item) => {
     const shuffled = shuffleQuizOptions(item, dayKey);
     return {
@@ -136,6 +164,9 @@ function parseQuizDayInput(value) {
 module.exports = {
   hashString,
   seededRandom,
+  fisherYatesSeeded,
+  isIdentityOrder,
+  ensureVisibleShuffle,
   shuffleQuizOptions,
   buildDailyQuizItemsForDay,
   loadDailyQuizSettings,
