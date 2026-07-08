@@ -62,7 +62,8 @@
     "verify:interest-phase1": "node scripts/verifyInterestPhase1.js",
     "e2e:schedule-timer-phase2": "node scripts/e2eScheduleTimerPhase2.js",
     "e2e:apply-cycle": "node scripts/e2eTestApplyCycle.js",
-    "e2e:publish-email-diag": "node scripts/e2ePublishEmailDiag.js"
+    "e2e:publish-email-diag": "node scripts/e2ePublishEmailDiag.js",
+    "fix:smtp-env": "node scripts/applySmtpEnv.js"
   },
   "engines": {
     "node": ">=18"
