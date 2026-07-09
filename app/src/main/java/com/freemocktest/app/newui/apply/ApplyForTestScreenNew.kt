@@ -63,6 +63,7 @@ import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import com.freemocktest.app.newui.tests.TestCardNew
+import com.freemocktest.app.util.TestApplyState
 import com.freemocktest.app.util.TestCyclePhase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.isActive
@@ -180,16 +181,11 @@ fun ApplyForTestScreenNew(
                         .firstOrNull { it.id.isNotBlank() && ContentRepository.hasCatalogDisplayFields(it) }
                 }.getOrNull()
 
-            val matchedApplication = myApplications.firstOrNull { app ->
-                val appTitle = app.testTitle.trim()
-                val appId = app.testId.trim()
-                when {
-                    publishedTest?.id?.isNotBlank() == true && appId == publishedTest.id -> true
-                    appTitle.equals(routeTitle, ignoreCase = true) -> true
-                    publishedTest?.title?.let { appTitle.equals(it, ignoreCase = true) } == true -> true
-                    else -> false
-                }
-            }
+            val matchedApplication = TestApplyState.pickPreferredMyTestApplication(
+                applications = myApplications,
+                routeKey = routeTitle,
+                card = publishedTest,
+            )
 
             val resolvedTest = publishedTest ?: matchedApplication?.let { app ->
                 TestCardNew(
@@ -222,9 +218,10 @@ fun ApplyForTestScreenNew(
             resolvedLateJoinMinutes = publishedTest?.lateJoinMinutes ?: resolvedTest?.lateJoinMinutes ?: 0
             slotInfo = resolvedTest?.slotLabel?.ifBlank { "Morning Slot" } ?: "Morning Slot"
 
-            hasAlreadyApplied =
-                resolveSnapshot?.alreadyAppliedInCurrentCycle == true ||
-                    matchedApplication != null
+            hasAlreadyApplied = TestApplyState.userHasAppliedForCurrentCycle(
+                resolve = resolveSnapshot,
+                matchedApplication = matchedApplication,
+            )
             testUnavailable = resolvedTest == null || testId.isBlank()
             val applyUi = TestCyclePhase.resolveApplyUiState(
                 resolve = resolveSnapshot,
@@ -612,13 +609,16 @@ fun ApplyForTestScreenNew(
                                             isWaitlisted = response.waitlisted
                                             waitingPosition = response.waitingPosition.coerceAtLeast(0)
                                             waitingTotal = response.waitingTotal.coerceAtLeast(0)
+                                            val reenrolled = response.reenrolledForNewCycle
                                             successMessage = when {
                                                 response.message?.isNotBlank() == true -> response.message
+                                                reenrolled -> "Re-enrolled for new test cycle"
                                                 response.alreadyApplied -> "You have already applied for this test."
                                                 else -> successMessage
                                             }
                                             if (!response.waitlisted) {
                                                 hasAlreadyApplied = true
+                                                mayReapplyForNewCycle = false
                                                 revealSubmitSection = false
                                                 testBetweenCycles = false
                                                 testUnavailable = false
@@ -628,21 +628,24 @@ fun ApplyForTestScreenNew(
                                                 val idToSave = response.testId?.trim()
                                                     ?.takeIf { it.isNotBlank() }
                                                     ?: testId.trim()
-                                                localApplySeriesSaved = runCatching {
-                                                    AppPreferencesRepository.addAppliedTestSeriesNow(
-                                                        testName = titleToSave,
-                                                        testId = idToSave,
-                                                        scheduleTimerEnabled = scheduleTimerEnabled,
-                                                        examDate = resolvedExamDate,
-                                                        slotLabel = resolvedSlotLabel,
-                                                        lateJoinMinutes = resolvedLateJoinMinutes,
-                                                    )
-                                                }.getOrDefault(false) || localApplySeriesSaved
+                                                if (!reenrolled) {
+                                                    localApplySeriesSaved = runCatching {
+                                                        AppPreferencesRepository.addAppliedTestSeriesNow(
+                                                            testName = titleToSave,
+                                                            testId = idToSave,
+                                                            scheduleTimerEnabled = scheduleTimerEnabled,
+                                                            examDate = resolvedExamDate,
+                                                            slotLabel = resolvedSlotLabel,
+                                                            lateJoinMinutes = resolvedLateJoinMinutes,
+                                                        )
+                                                    }.getOrDefault(false) || localApplySeriesSaved
+                                                }
                                                 runCatching {
                                                     AuthRepository.syncAppliedTestSeriesFromServer(
                                                         scheduleTimerEnabled = scheduleTimerEnabled,
                                                     )
                                                 }.onSuccess { localApplySeriesSaved = true }
+                                                refreshTick += 1
                                             }
                                             if (response.waitlisted) {
                                                 submitWarning = successMessage

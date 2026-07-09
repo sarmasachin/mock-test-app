@@ -3064,16 +3064,26 @@ router.patch('/tests/:id', async (req, res) => {
         throw err;
       }
       const justPublished = !beforeRow.is_published && rows[0].is_published;
-      const cycleRenewed = false;
+      let cycleRenewed = false;
       if (rows[0].is_published) {
         const cycleAction = resolveAdminCycleStartUpdate(rows[0], beforeRow, { justPublished });
         if (cycleAction.setCycleStart) {
-          await client.query(
-            `UPDATE tests
-             SET last_cycle_started_at = now(), updated_at = now()
-             WHERE id = $1::uuid`,
-            [id],
-          );
+          if (cycleAction.reason === 'admin_reschedule_new_cycle') {
+            await client.query(
+              `UPDATE tests
+               SET last_cycle_started_at = now(), enrolled_count = 0, updated_at = now()
+               WHERE id = $1::uuid`,
+              [id],
+            );
+            cycleRenewed = true;
+          } else {
+            await client.query(
+              `UPDATE tests
+               SET last_cycle_started_at = now(), updated_at = now()
+               WHERE id = $1::uuid`,
+              [id],
+            );
+          }
         }
       }
       if (justPublished) {
@@ -3129,7 +3139,7 @@ router.patch('/tests/:id', async (req, res) => {
       [id],
     );
     const refreshedRow = refreshed.rows[0] || savedRow;
-    return res.json({ item: { ...refreshedRow, advanced_config: advancedConfig } });
+    return res.json({ item: { ...refreshedRow, advanced_config: advancedConfig }, cycleRenewed });
   } catch (e) {
     if (e.statusCode === 404) return res.status(404).json({ error: 'Test not found' });
     if (e.code === '23505') return res.status(409).json({ error: 'Slug already exists' });

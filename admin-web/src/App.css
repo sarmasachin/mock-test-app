@@ -1257,6 +1257,18 @@ button:active {
   color: #64748b;
 }
 
+.all-tests-cycle-notice {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  font-weight: 500;
+}
+
 .field-required-star {
   color: #dc2626;
   font-weight: 800;

@@ -571,7 +571,23 @@ async function runPublishScheduleItemWork(item) {
         Number.isFinite(scheduleMs) &&
         cycleMs >= scheduleMs;
 
-      if (!alreadyPublishedForSchedule) {
+      if (alreadyPublishedForSchedule) {
+        const rolloverNowMs = Date.now();
+        if (shouldRunSchedulerRollover(existing, rolloverNowMs)) {
+          await pool.query(
+            `UPDATE tests
+             SET last_cycle_started_at = now(), enrolled_count = 0, updated_at = now()
+             WHERE id = $1::uuid`,
+            [testId],
+          );
+          try {
+            await regenerateTestFromSubcategoryPool(testId);
+          } catch (e) {
+            console.error('scheduled_publish_stuck_rollover_regenerate_error', testId, e);
+          }
+          await promoteWaitlistForTest(pool, testId);
+        }
+      } else {
         await regenerateTestFromSubcategoryPool(testId);
         const justPublished = existing?.is_published !== true;
         const publishedRow = { ...existing, is_published: true };

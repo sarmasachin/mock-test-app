@@ -196,6 +196,65 @@ function normalizeEnrollmentCounts(testRow, enrolledCount, capacityTotal) {
   return { capacityTotal: capacity, enrolledCount: enrolled, remainingSeats };
 }
 
+function normalizeCycleStartedAtIso(row) {
+  const raw = row?.last_cycle_started_at;
+  if (!raw) return null;
+  const ms = Date.parse(String(raw));
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+/**
+ * Phase 2 — one GET /tests/my-applications item (aligned with resolve / apply flags).
+ */
+function buildMyTestApplicationItem({
+  row,
+  appliedAtIso,
+  cycleState,
+  cyclePhase,
+  examDate,
+  startAccess = null,
+  enrolledCount,
+  capacityTotal,
+  mayReapplyForNewCycle = false,
+  applyBlockReason = null,
+}) {
+  const isCurrentCycle = cycleState.alreadyAppliedInCurrentCycle === true;
+  const canReapply = mayReapplyForNewCycle === true;
+  const capacityTotalNorm = Math.max(0, Number(capacityTotal || 0));
+  const enrolledCountNorm = Math.max(0, Number(enrolledCount || 0));
+  return {
+    testId: String(row.id),
+    testTitle: String(row.title || 'Test'),
+    appliedAt: appliedAtIso,
+    isPublished: row.is_published === true,
+    alreadyAppliedInCurrentCycle: isCurrentCycle,
+    mayReapplyForNewCycle: canReapply,
+    enrolledInCurrentCycle: isCurrentCycle && !canReapply,
+    cyclePhase,
+    enrolledCount: enrolledCountNorm,
+    capacityTotal: capacityTotalNorm,
+    remainingSeats: Math.max(0, capacityTotalNorm - enrolledCountNorm),
+    slotLabel: String(row.slot_label || ''),
+    examDate,
+    lastCycleStartedAt: normalizeCycleStartedAtIso(row),
+    canStart: isCurrentCycle ? startAccess?.canStart === true : false,
+    startBlockReason: isCurrentCycle
+      ? startAccess?.startBlockReason || null
+      : canReapply
+        ? null
+        : applyBlockReason || 'Apply again when the new test cycle opens',
+    joinClosesAt: isCurrentCycle ? startAccess?.joinClosesAt || null : null,
+  };
+}
+
+/**
+ * Whether my-applications row should sync into Android local appliedSeries cache.
+ * Re-apply eligible rows are API-only — must not become ghost "applied" on device.
+ */
+function shouldSyncMyApplicationToLocalAppliedSeries(item) {
+  return item?.alreadyAppliedInCurrentCycle === true && item?.mayReapplyForNewCycle !== true;
+}
+
 /**
  * Stable JSON body for POST /tests/:id/apply (all branches).
  */
@@ -250,6 +309,9 @@ module.exports = {
   resolveApplyEligibilityForTest,
   resolveAlreadyAppliedForTarget,
   normalizeEnrollmentCounts,
+  buildMyTestApplicationItem,
+  shouldSyncMyApplicationToLocalAppliedSeries,
+  normalizeCycleStartedAtIso,
   buildApplyResponseBody,
   resolveAttemptCycleStartedAtMs,
 };

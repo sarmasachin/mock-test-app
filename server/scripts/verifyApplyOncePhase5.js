@@ -97,9 +97,16 @@ function userHasAppliedForCurrentCycle(resolve, matchedApplication) {
   if (resolve?.mayReapplyForNewCycle === true && resolve?.alreadyAppliedInCurrentCycle !== true) {
     return false;
   }
+  if (
+    matchedApplication?.mayReapplyForNewCycle === true &&
+    !matchedApplication?.alreadyAppliedInCurrentCycle
+  ) {
+    return false;
+  }
   if (resolve?.alreadyAppliedInCurrentCycle === true) return true;
   if (resolve?.canStart === true) return true;
-  if (matchedApplication) return true;
+  if (matchedApplication?.alreadyAppliedInCurrentCycle === true) return true;
+  if (matchedApplication?.mayReapplyForNewCycle === true) return false;
   return false;
 }
 

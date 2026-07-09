@@ -55,6 +55,24 @@ import {
   formatListCycleLine,
   NOTIFY_CYCLE_REPUBLISH_TITLE,
 } from './lib/testCycleLabels';
+import {
+  buildRescheduleConfirmDialog,
+  buildRescheduleInlineNotice,
+  previewRescheduleCycleRenewal,
+} from './lib/adminRescheduleCycle.mjs';
+
+type AdminScheduleBaseline = {
+  testId: string;
+  title: string;
+  enrolledCount: number;
+  examDate: string;
+  slotLabel: string;
+  dynamicDateEnabled: boolean;
+  dateCycleDays: number;
+  durationMinutes: number;
+  isPublished: boolean;
+  lastCycleStartedAt: string | null;
+};
 
 const ADMIN_IMAGE_UPLOAD_MIME_TYPES = [
   'image/jpeg',
@@ -133,6 +151,7 @@ type TestItem = {
   republish_overdue?: boolean;
   catalog_visible?: boolean;
   can_republish_now?: boolean;
+  last_cycle_started_at?: string | null;
 };
 
 type QuestionItem = {
@@ -1723,6 +1742,8 @@ function TestsTab({
   const [questionBuilderSearch, setQuestionBuilderSearch] = useState('');
   /** When set, top “Add / edit test” form is editing this test (inline table edit removed). */
   const [editingTestId, setEditingTestId] = useState('');
+  /** Snapshot of schedule fields when edit began — used for reschedule enrollment warning. */
+  const [editingScheduleBaseline, setEditingScheduleBaseline] = useState<AdminScheduleBaseline | null>(null);
   const testFormRef = useRef<HTMLFormElement | null>(null);
   const [kind, setKind] = useState<TestKind>('mock');
   const [isPublished, setIsPublished] = useState(true);
@@ -1768,6 +1789,28 @@ function TestsTab({
       dateCycleTitle: dateCycleDaysTitle(mode),
     };
   }, [examDate, dynamicDateEnabled, dateCycleDays]);
+
+  const rescheduleRenewalPending = useMemo(() => {
+    if (!editingTestId || !editingScheduleBaseline) return false;
+    const slotLabel = slotTime.trim() ? timeInputToSlotLabel(slotTime) : '';
+    return previewRescheduleCycleRenewal(editingScheduleBaseline, {
+      examDate: examDate.trim(),
+      slotLabel,
+      dynamicDateEnabled,
+      dateCycleDays: Number(dateCycleDays || 0),
+      durationMinutes: Number(durationMinutes || 0),
+      isPublished,
+    });
+  }, [
+    editingTestId,
+    editingScheduleBaseline,
+    examDate,
+    slotTime,
+    dynamicDateEnabled,
+    dateCycleDays,
+    durationMinutes,
+    isPublished,
+  ]);
 
   function RequiredStar() {
     return (
@@ -2077,6 +2120,7 @@ function TestsTab({
 
   function resetTestFormToCreate() {
     setEditingTestId('');
+    setEditingScheduleBaseline(null);
     setTitle('');
     setSlug('');
     setSubcategory('');
@@ -2117,6 +2161,21 @@ function TestsTab({
     setKind('mock');
     setIsPublished(true);
     setDynamicFluctuationOnPublish(true);
+  }
+
+  function captureScheduleBaseline(t: TestItem) {
+    setEditingScheduleBaseline({
+      testId: t.id,
+      title: t.title || '',
+      enrolledCount: Number(t.enrolled_count || 0),
+      examDate: t.exam_date || '',
+      slotLabel: t.slot_label || '',
+      dynamicDateEnabled: normalizeBoolean(t.dynamic_date_enabled, false),
+      dateCycleDays: Number(t.date_cycle_days || 0),
+      durationMinutes: Number(t.duration_minutes || 0),
+      isPublished: t.is_published !== false,
+      lastCycleStartedAt: t.last_cycle_started_at ? String(t.last_cycle_started_at) : null,
+    });
   }
 
   function applyTestToForm(t: TestItem) {
@@ -2174,6 +2233,7 @@ function TestsTab({
           }))
         : [],
     );
+    captureScheduleBaseline(t);
   }
 
   function cancelEditTest() {
@@ -2237,10 +2297,38 @@ function TestsTab({
     }
     const data = parsed.value;
     const editingId = editingTestId;
+    if (editingId && editingScheduleBaseline) {
+      const slotLabel = data.slotLabel || '';
+      if (
+        previewRescheduleCycleRenewal(editingScheduleBaseline, {
+          examDate: data.examDate || '',
+          slotLabel,
+          dynamicDateEnabled: data.dynamicDateEnabled,
+          dateCycleDays: data.dateCycleDays,
+          durationMinutes: data.durationMinutes,
+          isPublished: data.isPublished,
+        })
+      ) {
+        const dialog = buildRescheduleConfirmDialog({
+          testTitle: data.title,
+          enrolledCount: editingScheduleBaseline.enrolledCount,
+        });
+        const confirmed = await adminConfirm(dialog);
+        if (!confirmed) return;
+      }
+    }
     try {
       if (editingId) {
-        await apiClient.patch(`/admin/tests/${editingId}`, data);
-        pushToast('success', `Test "${data.title}" updated successfully.`);
+        const res = await apiClient.patch(`/admin/tests/${editingId}`, data);
+        const cycleRenewed = res.data?.cycleRenewed === true;
+        if (cycleRenewed) {
+          pushToast(
+            'success',
+            `Test "${data.title}" updated. Enrollment period restarted — students must apply again for this round.`,
+          );
+        } else {
+          pushToast('success', `Test "${data.title}" updated successfully.`);
+        }
         const freshItems = await load();
         const refreshed = freshItems.find((x) => x.id === editingId);
         if (refreshed) {
@@ -2649,6 +2737,11 @@ function TestsTab({
 
             <div className="all-tests-section">
               <h4>Schedule & Stats</h4>
+              {rescheduleRenewalPending ? (
+                <p className="all-tests-cycle-notice" role="status">
+                  {buildRescheduleInlineNotice()}
+                </p>
+              ) : null}
               <div className="all-tests-grid">
                 <label className="all-tests-field">
                   <span>Exam Date (optional)</span>

@@ -215,6 +215,80 @@ function shouldSeedCycleStartOnAdminPublish(row, nowMs = Date.now()) {
   return true;
 }
 
+function normalizeExamDateKey(value) {
+  if (value == null) return '';
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+  const text = String(value).trim();
+  if (!text) return '';
+  const parsed = Date.parse(text);
+  if (Number.isFinite(parsed)) {
+    return new Date(parsed).toISOString().slice(0, 10);
+  }
+  return text;
+}
+
+function normalizeSlotLabelKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeDynamicDateKey(row) {
+  return row?.dynamic_date_enabled === true;
+}
+
+function normalizeCycleDaysKey(row) {
+  return Math.max(0, Number(row?.date_cycle_days || 0));
+}
+
+/**
+ * True when admin save changes fields that define the next exam round schedule.
+ */
+function hasAdminScheduleFieldsChanged(beforeRow, afterRow) {
+  if (!beforeRow || !afterRow) return false;
+  if (normalizeExamDateKey(beforeRow.exam_date) !== normalizeExamDateKey(afterRow.exam_date)) {
+    return true;
+  }
+  if (normalizeSlotLabelKey(beforeRow.slot_label) !== normalizeSlotLabelKey(afterRow.slot_label)) {
+    return true;
+  }
+  if (normalizeDynamicDateKey(beforeRow) !== normalizeDynamicDateKey(afterRow)) {
+    return true;
+  }
+  if (normalizeCycleDaysKey(beforeRow) !== normalizeCycleDaysKey(afterRow)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * True when the prior catalog round has ended (same rule as scheduler rollover).
+ * Uses beforeRow — state before admin save. Blocks renew while exam is in progress.
+ */
+function hasPreviousCatalogCycleEnded(beforeRow, nowMs = Date.now()) {
+  if (!beforeRow || beforeRow.is_published !== true) {
+    return false;
+  }
+  if (isExamInProgress(beforeRow, nowMs)) {
+    return false;
+  }
+  return shouldRunSchedulerRollover(beforeRow, nowMs);
+}
+
+/**
+ * Phase 9 — Renew application cycle when admin reschedules after a completed round.
+ * Requires schedule field change AND prior round ended. Title/capacity-only edits never renew.
+ */
+function shouldRenewCycleOnAdminEdit(beforeRow, afterRow, nowMs = Date.now()) {
+  if (!beforeRow || !afterRow || afterRow.is_published !== true) {
+    return false;
+  }
+  if (!hasAdminScheduleFieldsChanged(beforeRow, afterRow)) {
+    return false;
+  }
+  return hasPreviousCatalogCycleEnded(beforeRow, nowMs);
+}
+
 /**
  * Phase 4 — Admin create/patch/scheduled publish: when to SET last_cycle_started_at = now().
  * Never bumps an existing cycle on edit using duration_minutes (scheduler owns rollover).
@@ -238,6 +312,10 @@ function resolveAdminCycleStartUpdate(row, beforeRow, { justPublished = false, n
 
   if (!hadCycleStart && shouldSeed) {
     return { setCycleStart: true, reason: 'seed_missing_cycle_marker' };
+  }
+
+  if (shouldRenewCycleOnAdminEdit(beforeRow, row, nowMs)) {
+    return { setCycleStart: true, reason: 'admin_reschedule_new_cycle' };
   }
 
   return {
@@ -322,6 +400,9 @@ module.exports = {
   resolveApplyWindowState,
   resolveCycleWindows,
   shouldSeedCycleStartOnAdminPublish,
+  hasAdminScheduleFieldsChanged,
+  hasPreviousCatalogCycleEnded,
+  shouldRenewCycleOnAdminEdit,
   resolveAdminCycleStartUpdate,
   resolveApplicationCycleBoundaryMs,
   resolveAttemptCycleStartedAtMs,

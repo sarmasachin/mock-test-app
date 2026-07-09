@@ -77,6 +77,7 @@ object ContentRepository {
         val canStart: Boolean = false,
         val startBlockReason: String? = null,
         val joinClosesAt: String? = null,
+        val lastCycleStartedAt: String? = null,
     )
 
     /** Catalog test (if live) + optional resolve metadata when catalog misses. */
@@ -999,6 +1000,7 @@ object ContentRepository {
                 canStart = resp.canStart,
                 startBlockReason = resp.startBlockReason?.trim()?.takeIf { it.isNotBlank() },
                 joinClosesAt = resp.joinClosesAt?.trim()?.takeIf { it.isNotBlank() },
+                lastCycleStartedAt = resp.lastCycleStartedAt?.trim()?.takeIf { it.isNotBlank() },
             )
         } catch (e: HttpException) {
             Log.w(TAG, "resolveTestForApply http ${e.code()} $titleQ", e)
@@ -1007,6 +1009,31 @@ object ContentRepository {
             Log.w(TAG, "resolveTestForApply $titleQ", e)
             null
         }
+    }
+
+    /**
+     * Catalog row + authenticated resolve (enrollment, canApply, canStart).
+     * Resolve must run even when catalog hit succeeds — otherwise Start Test preview
+     * gets resolve=null and hides Apply (blank screen) while enrollment stays stale.
+     */
+    private suspend fun attachResolveToCatalogCard(
+        catalogCard: TestCardNew,
+        lookupKey: String,
+    ): TestApplyLoadResult {
+        cacheTestCardForLookupKey(lookupKey, catalogCard)
+        val resolve = resolveTestForApply(
+            title = catalogCard.title.ifBlank { lookupKey },
+            testId = catalogCard.id.takeIf { it.isNotBlank() },
+        ) ?: return TestApplyLoadResult(catalogCard, null)
+        val mergedCard = mergeCatalogCardPreferExisting(catalogCard, resolve.card)
+        cacheTestCardForLookupKey(lookupKey, mergedCard)
+        if (mergedCard.title.isNotBlank()) {
+            cacheTestCardForLookupKey(mergedCard.title, mergedCard)
+        }
+        if (mergedCard.subcategory.isNotBlank()) {
+            cacheTestCardForLookupKey(mergedCard.subcategory, mergedCard)
+        }
+        return TestApplyLoadResult(mergedCard, resolve.copy(card = mergedCard))
     }
 
     /**
@@ -1025,8 +1052,7 @@ object ContentRepository {
             loadTestByTitle(target, forceRefresh = forceRefresh, allowDefaultFallback = false)
         }.getOrNull()?.takeIf { it.id.isNotBlank() }
         if (catalog != null) {
-            cacheTestCardForLookupKey(target, catalog)
-            return@withContext TestApplyLoadResult(catalog, null)
+            return@withContext attachResolveToCatalogCard(catalog, target)
         }
         // Login interest may store subcategory name (e.g. "Patwari"), not catalog title.
         val bySubcategory = runCatching {
@@ -1034,8 +1060,7 @@ object ContentRepository {
                 .firstOrNull { it.id.isNotBlank() && hasCatalogDisplayFields(it) }
         }.getOrNull()
         if (bySubcategory != null) {
-            cacheTestCardForLookupKey(target, bySubcategory)
-            return@withContext TestApplyLoadResult(bySubcategory, null)
+            return@withContext attachResolveToCatalogCard(bySubcategory, target)
         }
         val resolve = resolveTestForApply(target)
         if (resolve != null) {
@@ -1162,6 +1187,48 @@ object ContentRepository {
             testCardMemory[key]?.let { patched ->
                 runCatching { persistTestCardDiskCache(key, patched) }
                     .onFailure { Log.w(TAG, "persistTestCardDiskCache after apply $key", it) }
+            }
+        }
+    }
+
+    /**
+     * Phase 3 — evict quiz delivery cache for one test + user scope (all cycle keys).
+     */
+    suspend fun evictQuizDeliveryCacheForTest(
+        testTitle: String,
+        cacheUserScope: String? = null,
+    ) {
+        val titleKey = testTitle.trim().lowercase(Locale.US)
+        if (titleKey.isBlank()) return
+        val userScope = resolveQuizCacheUserScope(cacheUserScope)
+        evictQuizQuestionsCacheForTitleUser(titleKey, userScope)
+    }
+
+    /**
+     * Phase 3 — after re-enroll for a new catalog cycle: drop stale delivery, resume, and review data.
+     */
+    suspend fun finalizeReenrollmentAfterApply(
+        testId: String?,
+        testTitle: String?,
+        reenrolledForNewCycle: Boolean,
+        cacheUserScope: String? = null,
+    ) = withContext(Dispatchers.IO) {
+        if (!reenrolledForNewCycle) return@withContext
+        val title = testTitle?.trim().orEmpty()
+        val id = testId?.trim().orEmpty()
+        val ownerKey = resolveQuizCacheUserScope(cacheUserScope)
+        suspend fun clearForTitle(name: String) {
+            val trimmed = name.trim()
+            if (trimmed.isBlank()) return
+            evictQuizDeliveryCacheForTest(trimmed, cacheUserScope)
+            AppPreferencesRepository.clearInProgressQuizForTestName(ownerKey, trimmed)
+            AppPreferencesRepository.clearSubmittedAttemptSnapshotForTestName(ownerKey, trimmed)
+        }
+        clearForTitle(title)
+        if (id.isNotBlank()) {
+            val alias = testCardMemory.values.firstOrNull { it.id == id }?.title?.trim().orEmpty()
+            if (alias.isNotBlank() && !alias.equals(title, ignoreCase = true)) {
+                clearForTitle(alias)
             }
         }
     }

@@ -22,6 +22,7 @@ import com.freemocktest.app.data.remote.TextMessageBody
 import com.freemocktest.app.data.remote.ApplyTestResponse
 import com.freemocktest.app.data.remote.MyTestApplicationDto
 import com.freemocktest.app.data.remote.TestWaitlistStatusResponse
+import com.freemocktest.app.util.TestApplyState
 import com.freemocktest.app.util.TestScheduleUtils
 import com.freemocktest.app.util.UserInterestUtils
 import com.freemocktest.app.notifications.PushTokenRegistrar
@@ -235,6 +236,7 @@ object AuthRepository {
                 ),
             )
             persistTokens(resp.accessToken, resp.refreshToken)
+            AppPreferencesRepository.clearAppliedTestSeriesOnAuthSwitch()
             AppPreferencesRepository.applyServerAuthProfile(
                 displayName = resp.user.displayName,
                 email = resp.user.email,
@@ -269,6 +271,7 @@ object AuthRepository {
                 GoogleSignInRequestBody(idToken = idToken.trim()),
             )
             persistTokens(resp.accessToken, resp.refreshToken)
+            AppPreferencesRepository.clearAppliedTestSeriesOnAuthSwitch()
             AppPreferencesRepository.applyServerAuthProfile(
                 displayName = resp.user.displayName,
                 email = resp.user.email,
@@ -317,6 +320,7 @@ object AuthRepository {
                 ),
             )
             persistTokens(resp.accessToken, resp.refreshToken)
+            AppPreferencesRepository.clearAppliedTestSeriesOnAuthSwitch()
             AppPreferencesRepository.applyServerAuthProfile(
                 displayName = resp.user.displayName,
                 email = resp.user.email,
@@ -664,6 +668,11 @@ object AuthRepository {
                 capacityTotal = resp.capacityTotal,
                 remainingSeats = resp.remainingSeats,
             )
+            ContentRepository.finalizeReenrollmentAfterApply(
+                testId = resp.testId,
+                testTitle = resp.testTitle,
+                reenrolledForNewCycle = resp.reenrolledForNewCycle,
+            )
             Result.success(resp)
         } catch (e: HttpException) {
             Result.failure(Exception(parseHttpError(e)))
@@ -681,7 +690,12 @@ object AuthRepository {
         }
         try {
             val resp = RetrofitProvider.appApi.getMyTestApplications()
-            val syncItems = resp.items.map { item ->
+            val mayReapplyItems = resp.items.filter {
+                it.mayReapplyForNewCycle || !it.alreadyAppliedInCurrentCycle
+            }
+            val syncItems = resp.items
+                .filter { TestApplyState.shouldSyncApplicationToLocalSeries(it) }
+                .map { item ->
                 AppPreferencesRepository.ServerAppliedSyncItem(
                     testTitle = item.testTitle,
                     testId = item.testId,
@@ -695,6 +709,8 @@ object AuthRepository {
             AppPreferencesRepository.mergeAppliedTestSeriesFromServer(
                 items = syncItems,
                 scheduleTimerEnabled = scheduleTimerEnabled,
+                evictLocalTestIds = mayReapplyItems.map { it.testId }.toSet(),
+                evictLocalTestTitles = mayReapplyItems.map { it.testTitle }.toSet(),
             )
             Result.success(Unit)
         } catch (e: HttpException) {

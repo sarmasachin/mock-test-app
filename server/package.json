@@ -83,7 +83,14 @@
     "verify:resolve-enrollment-phase5": "node scripts/verifyResolveEnrollmentPhase5.js",
     "e2e:enroll-start-test": "node scripts/e2eEnrollStartTestCheck.js --read-only",
     "e2e:enroll-start-test-apply": "node scripts/e2eEnrollStartTestCheck.js --with-apply",
-    "verify:enrollment-phase6": "node scripts/verifyEnrollmentPhase6.js"
+    "verify:enrollment-phase6": "node scripts/verifyEnrollmentPhase6.js",
+    "verify:admin-reschedule-reapply-phase9": "node scripts/verifyAdminRescheduleReapplyPhase9.js",
+    "verify:my-applications-phase2": "node scripts/verifyExamCycleMyApplicationsPhase2.js",
+    "verify:android-reapply-phase3": "node scripts/verifyAndroidReapplyPhase3.js",
+    "verify:reschedule-reapply-integrated-phase4": "node scripts/verifyRescheduleReapplyIntegratedPhase4.js",
+    "verify:reschedule-reapply-all-phase4": "node scripts/verifyRescheduleReapplyAllPhase4.js",
+    "e2e:reschedule-reapply-live-phase4": "node scripts/e2eRescheduleReapplyLivePhase4.js",
+    "verify:admin-reschedule-warning-phase5": "node scripts/verifyAdminRescheduleWarningPhase5.js"
   },
   "engines": {
     "node": ">=18"

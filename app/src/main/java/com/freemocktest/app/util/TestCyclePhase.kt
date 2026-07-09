@@ -80,8 +80,7 @@ object TestCyclePhase {
         )
         val blockReason = resolve?.blockReason?.trim().orEmpty()
         val republishAt = resolve?.republishAt?.trim()?.takeIf { it.isNotBlank() }
-        val mayReapply = resolve?.mayReapplyForNewCycle == true ||
-            matchedApplication?.mayReapplyForNewCycle == true
+        val mayReapply = TestApplyState.userMayReapplyForNewCycle(resolve, matchedApplication)
         val betweenCycles = isBetweenCycles(phase) ||
             (matchedApplication != null && !matchedApplication.isPublished && phase != LIVE)
         val phaseLabel = cardMetaLine(phase, blockReason)
@@ -123,11 +122,18 @@ object TestCyclePhase {
         resolve: ContentRepository.TestApplyResolveSnapshot?,
         alreadyApplied: Boolean,
     ): PreviewApplyState {
-        if (alreadyApplied || resolve == null) {
+        if (alreadyApplied) {
             return PreviewApplyState(
                 phaseLabel = resolve?.let { cardMetaLine(it.cyclePhase, it.blockReason) },
                 applyBlockedMessage = null,
                 showApplyButton = false,
+            )
+        }
+        if (resolve == null) {
+            return PreviewApplyState(
+                phaseLabel = null,
+                applyBlockedMessage = null,
+                showApplyButton = true,
             )
         }
         val phase = normalize(resolve.cyclePhase)

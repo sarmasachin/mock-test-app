@@ -588,6 +588,7 @@ data class MyTestApplicationDto(
     @SerializedName("canStart") val canStart: Boolean = false,
     @SerializedName("startBlockReason") val startBlockReason: String? = null,
     @SerializedName("joinClosesAt") val joinClosesAt: String? = null,
+    @SerializedName("lastCycleStartedAt") val lastCycleStartedAt: String? = null,
 )
 
 data class MyTestApplicationsResponse(
@@ -615,6 +616,7 @@ data class TestResolveResponse(
     @SerializedName("enrolledCount") val enrolledCount: Int = 0,
     @SerializedName("capacityTotal") val capacityTotal: Int = 0,
     @SerializedName("remainingSeats") val remainingSeats: Int = 0,
+    @SerializedName("lastCycleStartedAt") val lastCycleStartedAt: String? = null,
 )
 
 data class LeaderboardFilterTestDto(

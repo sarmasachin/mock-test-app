@@ -44,6 +44,38 @@ function mergeAppliedSeries(localActive, serverEntries) {
   return [...serverEntries, ...pendingOnServer];
 }
 
+function filterLocalsEvictingMayReapply(localActive, evictIds, evictTitles) {
+  const ids = new Set((evictIds || []).map((s) => String(s).trim().toLowerCase()).filter(Boolean));
+  const titles = new Set((evictTitles || []).map((s) => String(s).trim().toLowerCase()).filter(Boolean));
+  return (localActive || []).filter((entry) => {
+    const id = String(entry.testId || '').trim().toLowerCase();
+    const title = String(entry.testName || '').trim().toLowerCase();
+    return !ids.has(id) && !titles.has(title);
+  });
+}
+
+function userMayReapplyForNewCycle(resolve, matchedApplication) {
+  if (resolve?.mayReapplyForNewCycle === true && resolve?.alreadyAppliedInCurrentCycle !== true) {
+    return true;
+  }
+  if (
+    matchedApplication?.mayReapplyForNewCycle === true &&
+    !matchedApplication?.alreadyAppliedInCurrentCycle
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function userHasAppliedForCurrentCycle(resolve, matchedApplication) {
+  if (userMayReapplyForNewCycle(resolve, matchedApplication)) return false;
+  if (resolve?.alreadyAppliedInCurrentCycle === true) return true;
+  if (resolve?.canStart === true) return true;
+  if (matchedApplication?.alreadyAppliedInCurrentCycle === true) return true;
+  if (matchedApplication?.mayReapplyForNewCycle === true) return false;
+  return false;
+}
+
 // --- Phase 1 Start preview UI ---
 function deriveStartPreviewUi({
   isListRoute,
@@ -118,6 +150,7 @@ let ok = true;
 // Static: Phase 4 merge in Kotlin
 const syncKt = read('app/src/main/java/com/freemocktest/app/util/AppliedTestSeriesSync.kt');
 ok = line(syncKt.includes('pendingOnServer'), 'Kotlin merge: pendingOnServer catch-up') && ok;
+ok = line(syncKt.includes('filterLocalsEvictingMayReapply'), 'Kotlin merge: evict may-reapply locals') && ok;
 ok = line(syncKt.includes('local.testId.trim().isNotBlank()'), 'Kotlin merge: prune ghosts without testId') && ok;
 ok = line(!syncKt.includes('localOnly'), 'Kotlin merge: removed unscoped localOnly keep-all') && ok;
 
@@ -193,6 +226,19 @@ const homeUi = deriveStartPreviewUi({
   resolveAlreadyApplied: true,
 });
 ok = line(homeUi.showAppliedList === true, 'journey7: home applied list still works') && ok;
+
+// Journey 8: prior-cycle re-apply row evicted from local appliedSeries (Phase 3)
+const mayReapplyLocal = [
+  { testName: 'HP GK', testId: HP_GK_ID },
+  { testName: 'ff', testId: FF_ID },
+];
+const evictedLocals = filterLocalsEvictingMayReapply(mayReapplyLocal, [HP_GK_ID], ['HP GK']);
+ok = line(evictedLocals.length === 1 && evictedLocals[0].testName === 'ff', 'journey8: may-reapply HP GK evicted from local') && ok;
+const reapplyUi = userHasAppliedForCurrentCycle(
+  { mayReapplyForNewCycle: true, alreadyAppliedInCurrentCycle: false },
+  { testId: HP_GK_ID, testTitle: 'HP GK', mayReapplyForNewCycle: true, alreadyAppliedInCurrentCycle: false },
+);
+ok = line(reapplyUi === false, 'journey8: re-apply UI not treated as already applied') && ok;
 
 if (ok) {
   console.log('\nE2E_APPLY_SCREEN_ISOLATION_PHASE4_OK');

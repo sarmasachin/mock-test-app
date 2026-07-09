@@ -213,6 +213,10 @@ function buildTestResolvePayload({
   });
 
   const enrollment = resolveEnrollmentFromTestRow(row);
+  const lastCycleStartedAt = (() => {
+    const ms = Date.parse(String(row?.last_cycle_started_at || ''));
+    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  })();
 
   return {
     found: true,
@@ -234,6 +238,7 @@ function buildTestResolvePayload({
     enrolledCount: enrollment.enrolledCount,
     capacityTotal: enrollment.capacityTotal,
     remainingSeats: enrollment.remainingSeats,
+    lastCycleStartedAt,
   };
 }
 

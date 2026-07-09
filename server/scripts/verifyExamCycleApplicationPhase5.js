@@ -162,10 +162,9 @@ function main() {
     ) && ok;
   ok =
     line(
-      testsSrc.includes('evaluateApplicationCycleState') &&
-        testsSrc.includes('resolveAttemptCycleStartedAtMs') &&
-        testsSrc.includes('cyclePhase'),
-      'my-applications uses Phase 5 cycle helpers',
+      testsSrc.includes('buildMyTestApplicationItem') &&
+        testsSrc.includes('cycleState.mayReapplyForNewCycle'),
+      'my-applications uses Phase 2 item builder + re-apply rows',
     ) && ok;
   ok =
     line(

@@ -301,16 +301,24 @@ object AppPreferencesRepository {
     suspend fun mergeAppliedTestSeriesFromServer(
         items: List<ServerAppliedSyncItem>,
         scheduleTimerEnabled: Boolean,
+        evictLocalTestIds: Set<String> = emptySet(),
+        evictLocalTestTitles: Set<String> = emptySet(),
     ): Boolean {
         if (!::appContext.isInitialized) return false
         val now = System.currentTimeMillis()
         val serverEntries = items.mapNotNull { item ->
             buildAppliedEntryFromServerSyncItem(item, scheduleTimerEnabled, now)
         }
+        val evictIds = evictLocalTestIds.map { it.trim().lowercase(Locale.US) }.filter { it.isNotBlank() }.toSet()
+        val evictTitles = evictLocalTestTitles.map { it.trim().lowercase(Locale.US) }.filter { it.isNotBlank() }.toSet()
         return runCatching {
             store().edit { prefs ->
-                val localActive = parseAppliedTestSeries(prefs[keyAppliedTestSeries])
-                    .filter { it.isActive(now) }
+                val localActive = AppliedTestSeriesSync.filterLocalsEvictingMayReapply(
+                    localActive = parseAppliedTestSeries(prefs[keyAppliedTestSeries])
+                        .filter { it.isActive(now) },
+                    evictTestIds = evictIds,
+                    evictTestTitles = evictTitles,
+                )
                 val merged = AppliedTestSeriesSync.merge(localActive, serverEntries)
                 prefs[keyAppliedTestSeries] = encodeAppliedTestSeries(merged)
             }
@@ -323,7 +331,14 @@ object AppPreferencesRepository {
     suspend fun replaceAppliedTestSeriesFromServer(
         items: List<ServerAppliedSyncItem>,
         scheduleTimerEnabled: Boolean,
-    ): Boolean = mergeAppliedTestSeriesFromServer(items, scheduleTimerEnabled)
+        evictLocalTestIds: Set<String> = emptySet(),
+        evictLocalTestTitles: Set<String> = emptySet(),
+    ): Boolean = mergeAppliedTestSeriesFromServer(
+        items = items,
+        scheduleTimerEnabled = scheduleTimerEnabled,
+        evictLocalTestIds = evictLocalTestIds,
+        evictLocalTestTitles = evictLocalTestTitles,
+    )
 
     data class AppliedTestSeriesEntry(
         val testName: String,
@@ -999,6 +1014,16 @@ object AppPreferencesRepository {
         }.onFailure { Log.e(TAG, "reconcileAppliedTestSeriesForTimerMode failed", it) }
     }
 
+    /** Drop local applied rows when a different user signs in (server sync repopulates). */
+    suspend fun clearAppliedTestSeriesOnAuthSwitch() {
+        if (!::appContext.isInitialized) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyAppliedTestSeries] = "[]"
+            }
+        }.onFailure { Log.e(TAG, "clearAppliedTestSeriesOnAuthSwitch failed", it) }
+    }
+
     suspend fun removeAppliedTestSeriesNow(testName: String) {
         if (!::appContext.isInitialized) return
         val safeName = testName.trim()
@@ -1175,6 +1200,27 @@ object AppPreferencesRepository {
                 prefs[keyInProgressQuizJson] = ""
             }
         }.onFailure { Log.e(TAG, "clearInProgressQuizNow failed", it) }
+    }
+
+    /** Drop a resumable session only when it matches this test (new catalog cycle). */
+    suspend fun clearInProgressQuizForTestName(currentOwnerUserKey: String, testName: String) {
+        val want = testName.trim()
+        if (want.isBlank()) return
+        val snap = getResumableQuizSession(currentOwnerUserKey, want) ?: return
+        if (snap.testName.equals(want, ignoreCase = true)) {
+            clearInProgressQuizNow()
+        }
+    }
+
+    /** Drop submitted review snapshot for this test when user re-enrolls for a new cycle. */
+    suspend fun clearSubmittedAttemptSnapshotForTestName(currentOwnerUserKey: String, testName: String) {
+        if (!::appContext.isInitialized) return
+        val want = testName.trim()
+        if (want.isBlank()) return
+        val owner = currentOwnerUserKey.trim().ifBlank { "guest" }
+        val existing = peekSubmittedAttemptSnapshot(owner, want) ?: return
+        if (!existing.testName.equals(want, ignoreCase = true)) return
+        clearSubmittedAttemptSnapshotNow()
     }
 
     suspend fun saveSubmittedAttemptSnapshotNow(

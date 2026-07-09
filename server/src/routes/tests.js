@@ -49,6 +49,7 @@ const {
   resolveAlreadyAppliedForTarget,
   resolveExamDate,
   resolveAttemptCycleStartedAtMs,
+  buildMyTestApplicationItem,
 } = require('../lib/testApplicationCycle');
 const { resolveApplyWindowState } = require('../lib/testCycleWindow');
 
@@ -539,14 +540,39 @@ router.get('/my-applications', requireAuth, async (req, res) => {
     for (const row of rowsRes.rows) {
       const appliedAtIso = row.applied_at ? new Date(row.applied_at).toISOString() : null;
       const cycleState = evaluateApplicationCycleState(row, appliedAtIso, nowMs);
-      if (!cycleState.alreadyAppliedInCurrentCycle) continue;
-
       const advancedConfig = normalizeTestAdvancedConfig(
         resolveAdvancedConfigForTest(advancedMap, row.id),
       );
       const examDate = resolveExamDate(row);
       const cyclePhase = resolveTestCyclePhase(row, advancedConfig, nowMs, publishScheduleItems);
       const catalogError = catalogVisibilityError(row, advancedConfig, nowMs);
+      const capacityTotal = Math.max(0, Number(row.capacity_total || 0));
+      const enrolledCount = Math.max(0, Number(row.enrolled_count || 0));
+
+      if (cycleState.mayReapplyForNewCycle) {
+        const applyWindow = resolveApplyWindowState(row, nowMs);
+        const canReapply =
+          cyclePhase === 'live' && !catalogError && applyWindow.open;
+        items.push(
+          buildMyTestApplicationItem({
+            row,
+            appliedAtIso,
+            cycleState,
+            cyclePhase,
+            examDate,
+            enrolledCount,
+            capacityTotal,
+            mayReapplyForNewCycle: canReapply,
+            applyBlockReason: canReapply
+              ? null
+              : catalogError || applyWindow.reason || 'Test is not open for applications right now',
+          }),
+        );
+        continue;
+      }
+
+      if (!cycleState.alreadyAppliedInCurrentCycle) continue;
+
       const cycleStartedAtMs = resolveAttemptCycleStartedAtMs(row, nowMs);
       const [attemptCount, lastAttemptAtMs] = await Promise.all([
         countUserTestAttempts(
@@ -583,25 +609,18 @@ router.get('/my-applications', requireAuth, async (req, res) => {
         advancedConfig,
       });
 
-      const capacityTotal = Math.max(0, Number(row.capacity_total || 0));
-      const enrolledCount = Math.max(0, Number(row.enrolled_count || 0));
-      items.push({
-        testId: String(row.id),
-        testTitle: String(row.title || 'Test'),
-        appliedAt: appliedAtIso,
-        isPublished: row.is_published === true,
-        alreadyAppliedInCurrentCycle: true,
-        mayReapplyForNewCycle: false,
-        cyclePhase,
-        enrolledCount,
-        capacityTotal,
-        remainingSeats: Math.max(0, capacityTotal - enrolledCount),
-        slotLabel: String(row.slot_label || ''),
-        examDate,
-        canStart: startAccess.canStart,
-        startBlockReason: startAccess.startBlockReason,
-        joinClosesAt: startAccess.joinClosesAt,
-      });
+      items.push(
+        buildMyTestApplicationItem({
+          row,
+          appliedAtIso,
+          cycleState,
+          cyclePhase,
+          examDate,
+          startAccess,
+          enrolledCount,
+          capacityTotal,
+        }),
+      );
     }
     return res.json({ items });
   } catch (e) {

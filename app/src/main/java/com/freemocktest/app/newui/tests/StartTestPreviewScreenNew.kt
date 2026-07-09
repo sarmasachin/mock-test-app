@@ -65,6 +65,7 @@ import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.data.remote.MyTestApplicationDto
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
+import com.freemocktest.app.util.TestApplyState
 import com.freemocktest.app.util.TestCyclePhase
 import com.freemocktest.app.util.TestScheduleUtils
 import com.freemocktest.app.util.UserInterestUtils
@@ -220,16 +221,15 @@ fun StartTestPreviewScreenNew(
             testSnapshot = loadedCard
             resolveSnapshot = loadResult?.resolveSnapshot
             val apps = runCatching { AuthRepository.loadMyTestApplications() }.getOrNull()?.getOrNull()
-            matchedServerApplication = apps?.firstOrNull { app ->
-                matchesAppliedTestLookup(app, target, loadedCard)
-            }
-            resolveAlreadyApplied = when {
-                loadResult?.resolveSnapshot?.mayReapplyForNewCycle == true -> false
-                loadResult?.resolveSnapshot?.alreadyAppliedInCurrentCycle == true -> true
-                loadResult?.resolveSnapshot?.canStart == true -> true
-                matchedServerApplication != null -> true
-                else -> false
-            }
+            matchedServerApplication = TestApplyState.pickPreferredMyTestApplication(
+                applications = apps.orEmpty(),
+                routeKey = target,
+                card = loadedCard,
+            )
+            resolveAlreadyApplied = TestApplyState.resolveAlreadyAppliedFromSources(
+                resolve = loadResult?.resolveSnapshot,
+                matchedApplication = matchedServerApplication,
+            )
         } catch (e: CancellationException) {
             throw e
         } finally {
@@ -835,6 +835,7 @@ private fun appliedEntryFromServerApplication(
     scheduleTimerEnabled: Boolean,
     nowMs: Long,
 ): AppPreferencesRepository.AppliedTestSeriesEntry? {
+    if (!TestApplyState.shouldSyncApplicationToLocalSeries(app)) return null
     return AppPreferencesRepository.buildAppliedEntryFromServerSyncItem(
         AppPreferencesRepository.ServerAppliedSyncItem(
             testTitle = app.testTitle,
@@ -855,6 +856,7 @@ private fun appliedEntryFromResolveSnapshot(
     scheduleTimerEnabled: Boolean,
     nowMs: Long,
 ): AppPreferencesRepository.AppliedTestSeriesEntry? {
+    if (TestApplyState.userMayReapplyForNewCycle(snap, matchedApplication = null)) return null
     if (!snap.alreadyAppliedInCurrentCycle && !snap.canStart) return null
     val card = snap.card
     return AppPreferencesRepository.buildAppliedEntryFromServerSyncItem(

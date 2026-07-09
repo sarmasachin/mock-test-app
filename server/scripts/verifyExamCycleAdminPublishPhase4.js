@@ -168,8 +168,9 @@ function main() {
     ) && ok;
   ok =
     line(
-      adminSrc.includes('const cycleRenewed = false'),
-      'admin PATCH: cycleRenewed not tied to duration expiry',
+      adminSrc.includes('resolveAdminCycleStartUpdate') &&
+        adminSrc.includes("cycleAction.reason === 'admin_reschedule_new_cycle'"),
+      'admin PATCH: cycle renew on admin_reschedule_new_cycle',
     ) && ok;
   ok =
     line(
