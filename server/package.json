@@ -27,6 +27,7 @@
     "verify:daily-quiz-logout-clear-phase3": "node scripts/verifyDailyQuizLogoutClearPhase3.js",
     "verify:daily-quiz-ui-routing-phase4": "node scripts/verifyDailyQuizUiRoutingPhase4.js",
     "verify:daily-quiz-batch-submit-fix": "node scripts/verifyDailyQuizBatchSubmitFix.js",
+    "apply:daily-quiz-batch-client-submission-fix": "node scripts/applyDailyQuizBatchClientSubmissionFix.js",
     "verify:daily-quiz-scope-phase0": "node scripts/verifyDailyQuizScopePhase0.js",
     "verify:daily-quiz-scope-phase1": "node scripts/verifyDailyQuizScopePhase1.js",
     "verify:daily-quiz-scope-phase2": "node scripts/verifyDailyQuizScopePhase2.js",

@@ -54,10 +54,9 @@ function main() {
   ok =
     line(
       route.includes("router.post('/attempts/batch'") &&
-        route.match(
-          /for \(const v of validatedList\)[\s\S]{0,120}upsertOneAttempt\(req\.userId, quizDay, v, clientSubmissionId\)/,
-        ),
-      'batch route: all answers share one clientSubmissionId (by design)',
+        route.includes('submissionTagged') &&
+        route.includes('batchItemsAllPresent'),
+      'batch route: clientSubmissionId only on first row + full-batch idempotent replay',
     ) && ok;
 
   ok =

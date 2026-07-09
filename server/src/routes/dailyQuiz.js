@@ -276,6 +276,21 @@ router.post('/attempts', async (req, res) => {
   }
 });
 
+async function loadUserDayAttemptIdSet(userId, quizDay) {
+  const attempts = await loadUserDayAttempts(userId, quizDay);
+  return new Set(attempts.map((a) => String(a.itemId || '')));
+}
+
+function batchItemsAllPresent(itemIds, savedIds) {
+  return itemIds.every((id) => savedIds.has(id));
+}
+
+async function buildBatchSuccessResponse(userId, quizDay, userScope) {
+  const attempts = await loadUserDayAttempts(userId, quizDay);
+  const summary = await attachRankForDay(userId, quizDay, buildSummaryFromAttempts(attempts), userScope);
+  return { quizDay, attempts, summary };
+}
+
 /** POST /v1/daily-quiz/attempts/batch — submit all admin questions for one day. */
 router.post('/attempts/batch', async (req, res) => {
   const body = req.body || {};
@@ -315,45 +330,57 @@ router.post('/attempts/batch', async (req, res) => {
 
     if (clientSubmissionId) {
       const existing = await pool.query(
-        `SELECT quiz_day FROM daily_quiz_attempts
+        `SELECT 1 FROM daily_quiz_attempts
          WHERE user_id = $1::uuid AND client_submission_id = $2
          LIMIT 1`,
         [req.userId, clientSubmissionId],
       );
       if (existing.rows[0]) {
-        const day = existing.rows[0].quiz_day instanceof Date
-          ? existing.rows[0].quiz_day.toISOString().slice(0, 10)
-          : String(existing.rows[0].quiz_day || '').slice(0, 10);
-        const attempts = await loadUserDayAttempts(req.userId, day);
-        const summary = await attachRankForDay(
-          req.userId,
-          day,
-          buildSummaryFromAttempts(attempts),
-          scopeParsed.userScope,
-        );
-        res.setHeader('X-Idempotent-Replay', 'true');
-        return res.status(200).json({ quizDay: day, attempts, summary });
+        const savedIds = await loadUserDayAttemptIdSet(req.userId, quizDay);
+        const expectedIds = validatedList.map((v) => v.itemId);
+        if (batchItemsAllPresent(expectedIds, savedIds)) {
+          const payload = await buildBatchSuccessResponse(req.userId, quizDay, scopeParsed.userScope);
+          res.setHeader('X-Idempotent-Replay', 'true');
+          return res.status(200).json(payload);
+        }
       }
     }
 
+    const savedBefore = await loadUserDayAttemptIdSet(req.userId, quizDay);
+    let submissionTagged = false;
     for (const v of validatedList) {
-      await upsertOneAttempt(req.userId, quizDay, v, clientSubmissionId);
+      if (savedBefore.has(v.itemId)) continue;
+      const rowSubmissionId = clientSubmissionId && !submissionTagged ? clientSubmissionId : null;
+      if (rowSubmissionId) submissionTagged = true;
+      await upsertOneAttempt(req.userId, quizDay, v, rowSubmissionId);
     }
 
-    const attempts = await loadUserDayAttempts(req.userId, quizDay);
-    const summary = await attachRankForDay(
-      req.userId,
-      quizDay,
-      buildSummaryFromAttempts(attempts),
-      scopeParsed.userScope,
-    );
-    return res.status(201).json({ quizDay, attempts, summary });
+    const payload = await buildBatchSuccessResponse(req.userId, quizDay, scopeParsed.userScope);
+    return res.status(201).json(payload);
   } catch (e) {
     console.error('daily_quiz_batch_save_error', e);
     if (e && e.code === '23505') {
+      const constraint = String(e.constraint || '');
+      if (constraint.includes('client_submission') && clientSubmissionId) {
+        try {
+          const savedIds = await loadUserDayAttemptIdSet(req.userId, quizDay);
+          const expectedIds = validatedList.map((v) => v.itemId);
+          if (batchItemsAllPresent(expectedIds, savedIds)) {
+            const payload = await buildBatchSuccessResponse(req.userId, quizDay, scopeParsed.userScope);
+            res.setHeader('X-Idempotent-Replay', 'true');
+            return res.status(200).json(payload);
+          }
+        } catch (_replayErr) {
+          /* fall through */
+        }
+        return res.status(409).json({
+          error: 'Daily quiz batch schema outdated — run migration 022 or node scripts/applyDailyQuizBatchClientSubmissionFix.js on the server.',
+          detail: constraint,
+        });
+      }
       return res.status(409).json({
         error: 'Daily quiz batch conflict — retry once. If this persists, contact support.',
-        detail: e.constraint || undefined,
+        detail: constraint || undefined,
       });
     }
     return res.status(500).json({ error: 'Failed to save daily quiz batch' });
