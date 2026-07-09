@@ -103,11 +103,17 @@ const ADMIN_ROUTE_RULES = [
   { method: 'PATCH', pattern: /^\/digest\/[^/]+$/, permission: 'tab_daily_digest' },
   { method: 'DELETE', pattern: /^\/digest\/[^/]+$/, permission: 'tab_daily_digest' },
 
+  { method: 'GET', pattern: /^\/daily-quiz\/categories$/, permission: 'tab_daily_quiz' },
+  { method: 'PUT', pattern: /^\/daily-quiz\/categories$/, permission: 'tab_daily_quiz' },
   { method: 'GET', pattern: /^\/daily-quiz$/, permission: 'tab_daily_quiz' },
   { method: 'POST', pattern: /^\/daily-quiz$/, permission: 'tab_daily_quiz' },
   { method: 'PATCH', pattern: /^\/daily-quiz\/[^/]+$/, permission: 'tab_daily_quiz' },
   { method: 'DELETE', pattern: /^\/daily-quiz\/[^/]+$/, permission: 'tab_daily_quiz' },
   { method: 'GET', pattern: /^\/daily-quiz\/stats$/, permission: 'tab_daily_quiz' },
+  { method: 'GET', pattern: /^\/daily-quiz\/leaderboard$/, permission: 'tab_daily_quiz' },
+  { method: 'GET', pattern: /^\/daily-quiz\/question-analysis$/, permission: 'tab_daily_quiz' },
+  { method: 'GET', pattern: /^\/daily-quiz\/answer-review$/, permission: 'tab_daily_quiz' },
+  { method: 'GET', pattern: /^\/daily-quiz\/answer-review\/session$/, permission: 'tab_daily_quiz' },
 
   { method: 'GET', pattern: /^\/articles\/feed-kinds$/, permission: 'tab_articles' },
   { method: 'PUT', pattern: /^\/articles\/feed-kinds$/, permission: 'tab_articles' },

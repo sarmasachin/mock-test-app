@@ -374,7 +374,10 @@ async function ensureOptionalColumns() {
        ON daily_quiz_attempts (quiz_day, is_correct, time_taken_seconds)`,
     );
     await pool.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_quiz_attempts_client_submission
+      `DROP INDEX IF EXISTS idx_daily_quiz_attempts_client_submission`,
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_daily_quiz_attempts_client_submission_lookup
        ON daily_quiz_attempts (user_id, client_submission_id)
        WHERE client_submission_id IS NOT NULL AND trim(client_submission_id) <> ''`,
     );

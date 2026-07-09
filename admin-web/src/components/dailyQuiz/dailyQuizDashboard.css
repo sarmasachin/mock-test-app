@@ -1,0 +1,426 @@
+/* Daily Quiz dashboard — tab shell (scoped under .dash-analytics) */
+.dash-analytics.dq-dashboard .dq-header-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.dash-analytics.dq-dashboard .dq-quiz-day-input {
+  border: 1px solid var(--dash-border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--dash-text);
+  background: #fff;
+}
+
+.dash-analytics.dq-dashboard .dq-tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--dash-border);
+  margin: 0 0 24px;
+  padding-bottom: 0;
+}
+
+.dash-analytics.dq-dashboard .dq-tab-btn {
+  border: none;
+  background: transparent;
+  padding: 12px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  font-family: inherit;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  border-radius: 8px 8px 0 0;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.dash-analytics.dq-dashboard .dq-tab-btn:hover:not(.dq-tab-btn-active) {
+  color: var(--dash-text);
+  background: #f1f5f9;
+}
+
+.dash-analytics.dq-dashboard .dq-tab-btn-active {
+  color: var(--dash-primary);
+  border-bottom-color: var(--dash-primary);
+  background: #fff;
+}
+
+.dash-analytics.dq-dashboard .dq-tab-panel {
+  min-height: 120px;
+}
+
+.dash-analytics.dq-dashboard .dq-kpi-skeleton {
+  opacity: 0.55;
+}
+
+.dash-analytics.dq-dashboard .dq-placeholder {
+  background: var(--dash-card);
+  border: 1px dashed var(--dash-border);
+  border-radius: 16px;
+  padding: 32px 28px;
+  text-align: center;
+}
+
+.dash-analytics.dq-dashboard .dq-placeholder-icon {
+  font-size: 28px;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.dash-analytics.dq-dashboard .dq-placeholder h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.dash-analytics.dq-dashboard .dq-placeholder p {
+  margin: 0 0 6px;
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.dash-analytics.dq-dashboard .dq-placeholder-meta {
+  margin-top: 16px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.dash-analytics.dq-dashboard .dq-recent-row {
+  cursor: pointer;
+}
+
+.dash-analytics.dq-dashboard .dq-recent-row:hover td {
+  background: #f8fafc;
+}
+
+.dash-analytics.dq-dashboard .dq-recent-hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.dash-analytics.dq-dashboard .dq-analytics-scope-bar {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--dash-border, #e2e8f0);
+  background: #f8fafc;
+}
+
+.dash-analytics.dq-dashboard .dq-delivery-scope-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.dash-analytics.dq-dashboard .dq-delivery-scope-filter select {
+  margin-left: 6px;
+  border: 1px solid var(--dash-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-family: inherit;
+}
+
+.dash-analytics.dq-dashboard .dq-delivery-scope-label {
+  font-size: 12px;
+  color: #475569;
+  font-weight: 600;
+}
+
+.dash-analytics.dq-dashboard .dq-leaderboard-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.dash-analytics.dq-dashboard .dq-leaderboard-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  flex: 1 1 280px;
+}
+
+.dash-analytics.dq-dashboard .dq-leaderboard-search input {
+  flex: 1 1 220px;
+  min-width: 180px;
+  border: 1px solid var(--dash-border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.dash-analytics.dq-dashboard .dq-leaderboard-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.dash-analytics.dq-dashboard .dq-leaderboard-meta select {
+  margin-left: 6px;
+  border: 1px solid var(--dash-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-family: inherit;
+}
+
+.dash-analytics.dq-dashboard .dq-leaderboard-card {
+  margin-top: 0;
+}
+
+.dash-analytics.dq-dashboard .dq-leaderboard-player {
+  font-weight: 600;
+  color: var(--dash-text);
+}
+
+.dash-analytics.dq-dashboard .dq-leaderboard-email {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.dash-analytics.dq-dashboard .dq-badge-perfect {
+  background: #dcfce7 !important;
+  color: #166534 !important;
+}
+
+.dash-analytics.dq-dashboard .dq-qa-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.dash-analytics.dq-dashboard .dq-qa-scope select {
+  margin-left: 6px;
+  border: 1px solid var(--dash-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-family: inherit;
+}
+
+.dash-analytics.dq-dashboard .dq-qa-table .dq-qa-expand {
+  width: 28px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.dash-analytics.dq-dashboard .dq-qa-prompt {
+  font-weight: 600;
+  max-width: 420px;
+  line-height: 1.4;
+}
+
+.dash-analytics.dq-dashboard .dq-qa-review-btn {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.dash-analytics.dq-dashboard .dq-diff-hard {
+  background: #fee2e2 !important;
+  color: #b91c1c !important;
+}
+
+.dash-analytics.dq-dashboard .dq-diff-medium {
+  background: #fef3c7 !important;
+  color: #92400e !important;
+}
+
+.dash-analytics.dq-dashboard .dq-diff-easy {
+  background: #dcfce7 !important;
+  color: #166534 !important;
+}
+
+.dash-analytics.dq-dashboard .dq-qa-detail-row td {
+  background: #f8fafc;
+  padding: 0 !important;
+}
+
+.dash-analytics.dq-dashboard .dq-qa-detail {
+  padding: 16px 20px 20px;
+}
+
+.dash-analytics.dq-dashboard .dq-qa-detail-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  color: #475569;
+}
+
+.dash-analytics.dq-dashboard .dq-option-row {
+  display: grid;
+  grid-template-columns: 88px 1fr 72px;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.dash-analytics.dq-dashboard .dq-option-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.dash-analytics.dq-dashboard .dq-option-bar-track {
+  height: 10px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.dash-analytics.dq-dashboard .dq-option-bar-fill {
+  height: 100%;
+  background: #94a3b8;
+  border-radius: 999px;
+  min-width: 0;
+  transition: width 0.2s ease;
+}
+
+.dash-analytics.dq-dashboard .dq-option-bar-correct {
+  background: #10b981;
+}
+
+.dash-analytics.dq-dashboard .dq-option-pct {
+  font-size: 12px;
+  color: #64748b;
+  text-align: right;
+}
+
+.dash-analytics.dq-dashboard .dq-qa-skipped {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-prefill {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  font-size: 13px;
+  color: #3730a3;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-detail {
+  padding: 14px 16px;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-detail-q {
+  font-weight: 700;
+  margin-bottom: 12px;
+  line-height: 1.45;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-opt {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-opt-tag {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  min-width: 62px;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-opt-correct {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-opt-selected-correct {
+  border-color: #22c55e;
+  background: #dcfce7;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-opt-wrong {
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-explanation {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #475569;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-meta {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-session-card {
+  margin-bottom: 16px;
+  padding: 16px;
+  min-height: 0;
+  height: auto !important;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-session-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-session-item {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 8px;
+  margin-top: 8px;
+}
+
+.dash-analytics.dq-dashboard .dq-ar-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 16px;
+  font-size: 13px;
+  color: #64748b;
+}

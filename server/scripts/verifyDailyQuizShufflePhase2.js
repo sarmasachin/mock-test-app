@@ -17,6 +17,7 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const {
   buildDailyQuizItemsForDay,
+  selectDailyQuizItemsForDay,
   shuffleQuizOptions,
   ensureVisibleShuffle,
   isIdentityOrder,
@@ -96,13 +97,13 @@ function staticWiringAudit() {
   ok = line(utilsJs.includes('identity-fix'), 'seeded identity-fix swap suffix present') && ok;
   ok =
     line(
-      digestJs.includes("router.get('/quiz-today'") && digestJs.includes('buildDailyQuizItemsForDay'),
-      'digest.js GET /quiz-today → buildDailyQuizItemsForDay',
+      digestJs.includes("router.get('/quiz-today'") && digestJs.includes('selectDailyQuizItemsForDay'),
+      'digest.js GET /quiz-today → selectDailyQuizItemsForDay',
     ) && ok;
   ok =
     line(
       !digestJs.includes('ensureVisibleShuffle'),
-      'digest daily quiz path uses buildDailyQuizItemsForDay (not duplicate shuffle)',
+      'digest daily quiz path uses selectDailyQuizItemsForDay (not duplicate shuffle)',
     ) && ok;
 
   const dailyQuizLoadFn = readDailyQuizLoadFn(contentRepo);
@@ -216,10 +217,21 @@ async function optionalLiveApiAudit(apiBase) {
 
   const apiItems = Array.isArray(res.body?.items) ? res.body.items : [];
   const schedule = await loadDailyQuizSettings();
-  const { dayKey } = resolveDailyKey(Date.now(), schedule);
-  const localBuilt = buildDailyQuizItemsForDay(PROD_ITEMS, dayKey);
+  const { dayKey, quizDay } = resolveDailyKey(Date.now(), schedule);
+  const localBuilt = selectDailyQuizItemsForDay(PROD_ITEMS, dayKey, quizDay, schedule);
+  const declaredCount = Number(res.body?.questionCount);
 
   ok = line(apiItems.length > 0, `API returned ${apiItems.length} item(s)`) && ok;
+  ok =
+    line(
+      apiItems.length <= schedule.questionsPerDay,
+      `API delivery <= questionsPerDay (${apiItems.length} <= ${schedule.questionsPerDay})`,
+    ) && ok;
+  ok =
+    line(
+      !Number.isInteger(declaredCount) || declaredCount === apiItems.length,
+      `questionCount metadata matches items (${declaredCount} vs ${apiItems.length})`,
+    ) && ok;
 
   if (localBuilt.length === apiItems.length && apiItems.length > 0) {
     const matches = sameDeliveryFingerprint(localBuilt, apiItems);

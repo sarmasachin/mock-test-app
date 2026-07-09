@@ -7,9 +7,46 @@ const {
   resolveDailyKey,
   loadPublishedDailyQuizItems,
   parseQuizDayInput,
+  loadDailyQuizLeaderboardForDay,
+  loadDailyQuizRankForUserOnDay,
+  selectScopedDailyQuizItemsForDay,
+  parseDailyQuizScopeQueryInput,
+  buildDailyQuizScopeKey,
 } = require('../lib/dailyQuizUtils');
 
 const router = express.Router();
+
+/** GET /v1/daily-quiz/today — scoped delivery for authenticated users. */
+router.get('/today', async (req, res) => {
+  try {
+    const parsedScope = parseDailyQuizScopeQueryInput(req.query || {});
+    if (parsedScope.error) {
+      return res.status(400).json({ error: parsedScope.error });
+    }
+    const userScope = parsedScope.userScope;
+    const items = await loadPublishedDailyQuizItems();
+    if (!items.length) {
+      return res.status(404).json({ error: 'No daily quiz content available' });
+    }
+    const schedule = await loadDailyQuizSettings();
+    const { dayKey, quizDay } = resolveDailyKey(Date.now(), schedule);
+    const quizItems = selectScopedDailyQuizItemsForDay(items, dayKey, quizDay, schedule, userScope);
+    if (!quizItems.length) {
+      return res.status(404).json({ error: 'No daily quiz content available for this scope' });
+    }
+    return res.json({
+      quizDay,
+      questionCount: quizItems.length,
+      items: quizItems,
+      scope: userScope.scope,
+      stateName: userScope.stateName,
+      scopeKey: buildDailyQuizScopeKey(userScope),
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load daily quiz' });
+  }
+});
 
 function mapAttemptRow(row) {
   let options = [];
@@ -59,36 +96,25 @@ function buildSummaryFromAttempts(attempts) {
   };
 }
 
-async function attachRankForDay(userId, quizDay, summary) {
-  const stats = await pool.query(
-    `WITH user_day AS (
-       SELECT user_id,
-         COUNT(*) FILTER (WHERE is_correct)::int AS correct_count,
-         COALESCE(SUM(time_taken_seconds), 0)::bigint AS total_time,
-         MAX(submitted_at) AS last_submitted_at
-       FROM daily_quiz_attempts
-       WHERE quiz_day = $1::date
-       GROUP BY user_id
-     ),
-     ranked AS (
-       SELECT user_id,
-         RANK() OVER (
-           ORDER BY correct_count DESC, total_time ASC, last_submitted_at ASC
-         )::int AS rk
-       FROM user_day
-     )
-     SELECT r.rk AS rank,
-            (SELECT COUNT(*)::int FROM user_day) AS rank_total
-     FROM ranked r
-     WHERE r.user_id = $2::uuid`,
-    [quizDay, userId],
-  );
-  const row = stats.rows[0] || {};
+async function attachRankForDay(userId, quizDay, summary, userScope) {
+  const rankResult = await loadDailyQuizRankForUserOnDay(pool, quizDay, userId, { userScope });
   return {
     ...summary,
-    rank: Number(row.rank) || null,
-    rankTotal: Number(row.rank_total) || 0,
+    rank: rankResult.rank,
+    rankTotal: rankResult.rankTotal,
   };
+}
+
+function parseOptionalUserDeliveryScope(body) {
+  const src = body && typeof body === 'object' ? body : {};
+  const scopeRaw = String(src.scope || '').trim();
+  if (!scopeRaw) return { userScope: null };
+  const parsed = parseDailyQuizScopeQueryInput({
+    scope: scopeRaw,
+    state: src.state || src.stateName,
+  });
+  if (parsed.error) return { error: parsed.error };
+  return { userScope: parsed.userScope };
 }
 
 async function loadUserDayAttempts(userId, quizDay) {
@@ -187,6 +213,8 @@ router.post('/attempts', async (req, res) => {
 
   const validated = validateAnswerPayload(body);
   if (validated.error) return res.status(400).json({ error: validated.error });
+  const scopeParsed = parseOptionalUserDeliveryScope(body);
+  if (scopeParsed.error) return res.status(400).json({ error: scopeParsed.error });
 
   try {
     const schedule = await loadDailyQuizSettings();
@@ -217,7 +245,12 @@ router.post('/attempts', async (req, res) => {
           ? existing.rows[0].quiz_day.toISOString().slice(0, 10)
           : String(existing.rows[0].quiz_day || '').slice(0, 10);
         const attempts = await loadUserDayAttempts(req.userId, day);
-        const summary = await attachRankForDay(req.userId, day, buildSummaryFromAttempts(attempts));
+        const summary = await attachRankForDay(
+          req.userId,
+          day,
+          buildSummaryFromAttempts(attempts),
+          scopeParsed.userScope,
+        );
         res.setHeader('X-Idempotent-Replay', 'true');
         return res.status(200).json({ quizDay: day, attempts, summary });
       }
@@ -225,7 +258,12 @@ router.post('/attempts', async (req, res) => {
 
     const upsert = await upsertOneAttempt(req.userId, quizDay, validated, clientSubmissionId);
     const attempts = await loadUserDayAttempts(req.userId, quizDay);
-    const summary = await attachRankForDay(req.userId, quizDay, buildSummaryFromAttempts(attempts));
+    const summary = await attachRankForDay(
+      req.userId,
+      quizDay,
+      buildSummaryFromAttempts(attempts),
+      scopeParsed.userScope,
+    );
     return res.status(201).json({
       attempt: mapAttemptRow(upsert.rows[0]),
       quizDay,
@@ -253,6 +291,8 @@ router.post('/attempts/batch', async (req, res) => {
     if (validated.error) return res.status(400).json({ error: validated.error });
     validatedList.push(validated);
   }
+  const scopeParsed = parseOptionalUserDeliveryScope(body);
+  if (scopeParsed.error) return res.status(400).json({ error: scopeParsed.error });
 
   try {
     const schedule = await loadDailyQuizSettings();
@@ -285,7 +325,12 @@ router.post('/attempts/batch', async (req, res) => {
           ? existing.rows[0].quiz_day.toISOString().slice(0, 10)
           : String(existing.rows[0].quiz_day || '').slice(0, 10);
         const attempts = await loadUserDayAttempts(req.userId, day);
-        const summary = await attachRankForDay(req.userId, day, buildSummaryFromAttempts(attempts));
+        const summary = await attachRankForDay(
+          req.userId,
+          day,
+          buildSummaryFromAttempts(attempts),
+          scopeParsed.userScope,
+        );
         res.setHeader('X-Idempotent-Replay', 'true');
         return res.status(200).json({ quizDay: day, attempts, summary });
       }
@@ -296,10 +341,21 @@ router.post('/attempts/batch', async (req, res) => {
     }
 
     const attempts = await loadUserDayAttempts(req.userId, quizDay);
-    const summary = await attachRankForDay(req.userId, quizDay, buildSummaryFromAttempts(attempts));
+    const summary = await attachRankForDay(
+      req.userId,
+      quizDay,
+      buildSummaryFromAttempts(attempts),
+      scopeParsed.userScope,
+    );
     return res.status(201).json({ quizDay, attempts, summary });
   } catch (e) {
-    console.error(e);
+    console.error('daily_quiz_batch_save_error', e);
+    if (e && e.code === '23505') {
+      return res.status(409).json({
+        error: 'Daily quiz batch conflict — retry once. If this persists, contact support.',
+        detail: e.constraint || undefined,
+      });
+    }
     return res.status(500).json({ error: 'Failed to save daily quiz batch' });
   }
 });
@@ -330,67 +386,30 @@ router.get('/attempts', async (req, res) => {
 router.get('/leaderboard', async (req, res) => {
   let quizDay = parseQuizDayInput(req.query.quizDay);
   const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 50));
+  const scopeRaw = String(req.query.scope || '').trim();
+  let userScope = null;
+  let scopeKey = null;
+  if (scopeRaw) {
+    const parsedScope = parseDailyQuizScopeQueryInput(req.query || {});
+    if (parsedScope.error) {
+      return res.status(400).json({ error: parsedScope.error });
+    }
+    userScope = parsedScope.userScope;
+    scopeKey = buildDailyQuizScopeKey(userScope);
+  }
   try {
     if (!quizDay) {
       const schedule = await loadDailyQuizSettings();
       quizDay = resolveDailyKey(Date.now(), schedule).quizDay;
     }
-    const { rows } = await pool.query(
-      `WITH user_day AS (
-         SELECT
-           dqa.user_id,
-           COALESCE(NULLIF(trim(u.display_name), ''), 'Player') AS display_name,
-           u.six_digit_public_id AS public_id,
-           COUNT(*)::int AS total_questions,
-           COUNT(*) FILTER (WHERE dqa.is_correct)::int AS correct_count,
-           COALESCE(SUM(dqa.time_taken_seconds), 0)::bigint AS total_time,
-           MAX(dqa.submitted_at) AS last_submitted_at
-         FROM daily_quiz_attempts dqa
-         JOIN users u ON u.id = dqa.user_id
-         WHERE dqa.quiz_day = $1::date
-         GROUP BY dqa.user_id, u.display_name, u.six_digit_public_id
-       ),
-       ranked AS (
-         SELECT *,
-           RANK() OVER (
-             ORDER BY correct_count DESC, total_time ASC, last_submitted_at ASC
-           )::int AS rank
-         FROM user_day
-       )
-       SELECT user_id, display_name, public_id, total_questions, correct_count, total_time, rank
-       FROM ranked
-       ORDER BY rank ASC
-       LIMIT $2`,
-      [quizDay, limit],
-    );
-    const totalRes = await pool.query(
-      `SELECT COUNT(DISTINCT user_id)::int AS c FROM daily_quiz_attempts WHERE quiz_day = $1::date`,
-      [quizDay],
-    );
-    const totalPlayers = Number(totalRes.rows[0]?.c) || 0;
+    const { rows, totalPlayers } = await loadDailyQuizLeaderboardForDay(pool, quizDay, {
+      limit,
+      userScope,
+    });
     let currentUserRank = null;
     if (req.userId) {
-      const meRes = await pool.query(
-        `WITH user_day AS (
-           SELECT user_id,
-             COUNT(*) FILTER (WHERE is_correct)::int AS correct_count,
-             COALESCE(SUM(time_taken_seconds), 0)::bigint AS total_time,
-             MAX(submitted_at) AS last_submitted_at
-           FROM daily_quiz_attempts
-           WHERE quiz_day = $1::date
-           GROUP BY user_id
-         ),
-         ranked AS (
-           SELECT user_id,
-             RANK() OVER (
-               ORDER BY correct_count DESC, total_time ASC, last_submitted_at ASC
-             )::int AS rank
-           FROM user_day
-         )
-         SELECT rank FROM ranked WHERE user_id = $2::uuid`,
-        [quizDay, req.userId],
-      );
-      currentUserRank = meRes.rows[0] ? Number(meRes.rows[0].rank) : null;
+      const rankResult = await loadDailyQuizRankForUserOnDay(pool, quizDay, req.userId, { userScope });
+      currentUserRank = rankResult.rank;
     }
     const entries = rows.map((row) => {
       const pid = Number(row.public_id);
@@ -411,6 +430,9 @@ router.get('/leaderboard', async (req, res) => {
       quizDay,
       totalPlayers,
       currentUserRank,
+      scope: userScope?.scope || null,
+      stateName: userScope?.stateName || null,
+      scopeKey,
       entries,
     });
   } catch (e) {

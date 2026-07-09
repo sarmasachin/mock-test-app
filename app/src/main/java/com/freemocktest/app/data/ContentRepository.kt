@@ -206,6 +206,9 @@ object ContentRepository {
     data class DailyQuizTodayRemote(
         val quizDay: LocalDate,
         val items: List<DailyQuizRemote>,
+        /** Server metadata; delivery list [items] is authoritative for quiz length. */
+        val questionCount: Int = items.size,
+        val scopeKey: String = "all-india",
     )
     data class QuizQuestionRemote(
         val title: String,
@@ -1673,36 +1676,138 @@ object ContentRepository {
         }
     }
 
-    suspend fun loadDailyQuizToday(): DailyQuizTodayRemote? = withContext(Dispatchers.IO) {
-        try {
-            val res = RetrofitProvider.publicApi.getDailyQuizToday()
-            val quizDay = res.quizDay?.let { s ->
-                runCatching { java.time.LocalDate.parse(s) }.getOrNull()
-            } ?: java.time.LocalDate.now()
-            val items = res.items.map { row ->
-                DailyQuizRemote(
-                    id = row.id,
-                    questionPrompt = row.questionPrompt,
-                    options = row.options,
-                    correctIndex = row.correctIndex,
-                    explanation = row.explanation.orEmpty(),
-                )
+    private fun dailyQuizScopeCacheKey(scope: DailyQuizScopeSelection): String {
+        if (!DailyQuizRepository.isLoggedIn()) return "all-india"
+        return scope.cacheKey()
+    }
+
+    private fun mapDailyQuizTodayResponse(
+        res: com.freemocktest.app.data.remote.DailyQuizTodayResponse,
+        fallbackScopeKey: String,
+    ): DailyQuizTodayRemote? {
+        val quizDay = res.quizDay?.let { s ->
+            runCatching { LocalDate.parse(s) }.getOrNull()
+        } ?: LocalDate.now()
+        val items = res.items.map { row ->
+            DailyQuizRemote(
+                id = row.id,
+                questionPrompt = row.questionPrompt,
+                options = row.options,
+                correctIndex = row.correctIndex,
+                explanation = row.explanation.orEmpty(),
+            )
+        }
+        if (items.isEmpty()) return null
+        val declaredCount = res.questionCount?.coerceAtLeast(0) ?: items.size
+        if (declaredCount > 0 && declaredCount != items.size) {
+            Log.w(
+                TAG,
+                "loadDailyQuizToday: server questionCount=$declaredCount but items=${items.size}; using items",
+            )
+        }
+        val scopeKey = res.scopeKey?.trim().orEmpty().ifBlank { fallbackScopeKey }
+        return DailyQuizTodayRemote(
+            quizDay = quizDay,
+            items = items,
+            questionCount = items.size,
+            scopeKey = scopeKey,
+        )
+    }
+
+    private fun encodeDailyQuizTodayRemote(remote: DailyQuizTodayRemote): String {
+        val itemsArr = JSONArray()
+        remote.items.forEach { item ->
+            itemsArr.put(
+                JSONObject()
+                    .put("id", item.id)
+                    .put("questionPrompt", item.questionPrompt)
+                    .put("correctIndex", item.correctIndex)
+                    .put("explanation", item.explanation)
+                    .put("options", JSONArray(item.options)),
+            )
+        }
+        return JSONObject()
+            .put("quizDay", remote.quizDay.toString())
+            .put("questionCount", remote.questionCount)
+            .put("scopeKey", remote.scopeKey)
+            .put("items", itemsArr)
+            .toString()
+    }
+
+    private fun decodeDailyQuizTodayRemote(raw: String): DailyQuizTodayRemote? {
+        return runCatching {
+            val root = JSONObject(raw)
+            val quizDay = LocalDate.parse(root.getString("quizDay"))
+            val scopeKey = root.optString("scopeKey", "all-india").ifBlank { "all-india" }
+            val itemsArr = root.getJSONArray("items")
+            val items = buildList {
+                for (i in 0 until itemsArr.length()) {
+                    val obj = itemsArr.getJSONObject(i)
+                    val optionsArr = obj.getJSONArray("options")
+                    val options = buildList {
+                        for (j in 0 until optionsArr.length()) {
+                            add(optionsArr.getString(j))
+                        }
+                    }
+                    add(
+                        DailyQuizRemote(
+                            id = obj.getString("id"),
+                            questionPrompt = obj.getString("questionPrompt"),
+                            options = options,
+                            correctIndex = obj.getInt("correctIndex"),
+                            explanation = obj.optString("explanation", ""),
+                        ),
+                    )
+                }
             }
-            if (items.isEmpty()) return@withContext null
-            DailyQuizTodayRemote(quizDay = quizDay, items = items)
-        } catch (e: HttpException) {
-            if (e.code() == 404) {
-                Log.w(TAG, "loadDailyQuizToday: not published (404)")
-                null
-            } else {
-                Log.w(TAG, "loadDailyQuizToday http ${e.code()}", e)
+            if (items.isEmpty()) return@runCatching null
+            DailyQuizTodayRemote(
+                quizDay = quizDay,
+                items = items,
+                questionCount = root.optInt("questionCount", items.size),
+                scopeKey = scopeKey,
+            )
+        }.getOrNull()
+    }
+
+    suspend fun peekCachedDailyQuizToday(scope: DailyQuizScopeSelection = DailyQuizScopeSelection.AllIndia): DailyQuizTodayRemote? =
+        withContext(Dispatchers.IO) {
+            val cacheKey = dailyQuizScopeCacheKey(scope)
+            val raw = AppPreferencesRepository.peekCachedDailyQuizToday(cacheKey) ?: return@withContext null
+            decodeDailyQuizTodayRemote(raw)
+        }
+
+    suspend fun loadDailyQuizToday(scope: DailyQuizScopeSelection = DailyQuizScopeSelection.AllIndia): DailyQuizTodayRemote? =
+        withContext(Dispatchers.IO) {
+            val cacheKey = dailyQuizScopeCacheKey(scope)
+            val loggedIn = DailyQuizRepository.isLoggedIn()
+            try {
+                val res = if (loggedIn) {
+                    val scopeParam = if (scope.isState) DailyQuizScopeSelection.MODE_STATE else DailyQuizScopeSelection.MODE_ALL_INDIA
+                    val stateParam = scope.stateName.trim().takeIf { scope.isState && it.isNotBlank() }
+                    RetrofitProvider.appApi.getDailyQuizTodayScoped(
+                        scope = scopeParam,
+                        state = stateParam,
+                    )
+                } else {
+                    RetrofitProvider.publicApi.getDailyQuizToday()
+                }
+                val mapped = mapDailyQuizTodayResponse(res, cacheKey) ?: return@withContext null
+                AppPreferencesRepository.saveCachedDailyQuizToday(cacheKey, encodeDailyQuizTodayRemote(mapped))
+                mapped
+            } catch (e: HttpException) {
+                if (e.code() == 404) {
+                    Log.w(TAG, "loadDailyQuizToday: not published (404) scope=$cacheKey")
+                    null
+                } else {
+                    Log.w(TAG, "loadDailyQuizToday http ${e.code()} scope=$cacheKey", e)
+                    throw e
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "loadDailyQuizToday scope=$cacheKey", e)
                 throw e
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "loadDailyQuizToday", e)
-            throw e
         }
-    }
 
     /**
      * Loads CMS home payload (banners, news slider, sections). Cached in-memory after first success

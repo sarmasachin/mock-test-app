@@ -96,7 +96,7 @@ object TestCyclePhase {
         }
 
         val showApplyButton = !hasAlreadyApplied &&
-            !betweenCycles &&
+            (!betweenCycles || mayReapply) &&
             !testUnavailable &&
             applyBlockedMessage.isNullOrBlank() &&
             (resolve == null || resolve.canApply || mayReapply)

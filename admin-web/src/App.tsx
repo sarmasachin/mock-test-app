@@ -26,7 +26,18 @@ import {
   type AdminDashboardSummary,
   type DashboardRange,
 } from './components/DashboardAnalytics';
-import { DailyQuizAdminStats } from './components/DailyQuizAdminStats';
+import { DailyQuizDashboard } from './components/dailyQuiz/DailyQuizDashboard';
+import {
+  buildDailyQuizScopePostBody,
+  formatDailyQuizScopeLabel,
+  loadDailyQuizActiveTarget,
+  mergeDailyQuizCategoryOptions,
+  mapDailyQuizBankItem,
+  normalizeDailyQuizScopeMode,
+  saveDailyQuizActiveTarget,
+  slugDailyQuizCategoryId,
+  type DailyQuizScopeMode,
+} from './components/dailyQuiz/dailyQuizScopeUi';
 import { AdminPermissionsModal } from './components/AdminPermissionsModal';
 import { TabReadOnlyNotice } from './components/TabReadOnlyNotice';
 import { AdminRbacProvider, useAdminRbac } from './adminRbacContext';
@@ -191,6 +202,9 @@ type DailyQuizItem = {
   correctIndex: number;
   explanation: string;
   isPublished: boolean;
+  scope?: DailyQuizScopeMode;
+  targetStates?: string[];
+  categoryId?: string | null;
 };
 
 
@@ -3615,6 +3629,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
   const [dailyReleaseHour, setDailyReleaseHour] = useState('10');
   const [dailyReleaseMinute, setDailyReleaseMinute] = useState('0');
   const [dailyTimezoneOffset, setDailyTimezoneOffset] = useState('330');
+  const [dailyQuestionsPerDay, setDailyQuestionsPerDay] = useState('20');
   const DIGEST_LIST_PER_PAGE = 15;
   const [digestListPage, setDigestListPage] = useState(1);
 
@@ -3633,6 +3648,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
       setDailyReleaseHour(String(Math.max(0, Math.min(23, Number(schedule.releaseHour ?? 10)))));
       setDailyReleaseMinute(String(Math.max(0, Math.min(59, Number(schedule.releaseMinute ?? 0)))));
       setDailyTimezoneOffset(String(Math.max(-720, Math.min(840, Number(schedule.timezoneOffsetMinutes ?? 330)))));
+      setDailyQuestionsPerDay(String(Math.max(1, Math.min(50, Number(schedule.questionsPerDay ?? 20)))));
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to load daily digest items');
     }
@@ -3649,6 +3665,7 @@ function DailyDigestTab({ apiClient }: { apiClient: typeof api }) {
           releaseHour: Number(dailyReleaseHour || '10'),
           releaseMinute: Number(dailyReleaseMinute || '0'),
           timezoneOffsetMinutes: Number(dailyTimezoneOffset || '330'),
+          questionsPerDay: Number(dailyQuestionsPerDay || '20'),
         },
       });
       await load();
@@ -3972,13 +3989,46 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
   const [isPublished, setIsPublished] = useState(true);
   const [notifyUsers, setNotifyUsers] = useState(true);
   const [editingId, setEditingId] = useState('');
+  const initialActiveTarget = loadDailyQuizActiveTarget();
+  const [activeTargetScope, setActiveTargetScope] = useState<DailyQuizScopeMode>(initialActiveTarget.scope);
+  const [activeTargetState, setActiveTargetState] = useState(initialActiveTarget.stateName);
+  const [activeCategoryId, setActiveCategoryId] = useState(initialActiveTarget.categoryId);
+  const [signupStateOptions, setSignupStateOptions] = useState<string[]>([]);
+  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
+  const [newCategoryInput, setNewCategoryInput] = useState('');
+  const [categoriesSaving, setCategoriesSaving] = useState(false);
+  const [questionsPerDay, setQuestionsPerDay] = useState('20');
+  const [dailyReleaseHour, setDailyReleaseHour] = useState('10');
+  const [dailyReleaseMinute, setDailyReleaseMinute] = useState('0');
+  const [dailyTimezoneOffset, setDailyTimezoneOffset] = useState('330');
   const DAILY_QUIZ_PER_PAGE = 15;
   const [quizListPage, setQuizListPage] = useState(1);
 
   async function load() {
     try {
-      const res = await apiClient.get('/admin/daily-quiz');
-      setItems(res.data?.items || []);
+      const [quizRes, settingsRes, categoriesRes] = await Promise.all([
+        apiClient.get('/admin/daily-quiz'),
+        apiClient.get('/admin/settings'),
+        apiClient.get('/admin/daily-quiz/categories'),
+      ]);
+      const mappedItems = (quizRes.data?.items || []).map((row: DailyQuizItem) =>
+        mapDailyQuizBankItem(row) as DailyQuizItem,
+      );
+      setItems(mappedItems);
+      const apiCategories = Array.isArray(categoriesRes.data?.categories) ? categoriesRes.data.categories : [];
+      setCategoryOptions(mergeDailyQuizCategoryOptions(apiCategories, mappedItems));
+      const schedule = settingsRes.data?.settings?.dailyQuizSettings || {};
+      const rawRegions = settingsRes.data?.settings?.signupRegions?.items;
+      const states = Array.isArray(rawRegions)
+        ? rawRegions
+            .map((row: { state?: string }) => String(row?.state || '').trim())
+            .filter(Boolean)
+        : [];
+      setSignupStateOptions(Array.from(new Set(states)).sort((a, b) => a.localeCompare(b)));
+      setQuestionsPerDay(String(Math.max(1, Math.min(50, Number(schedule.questionsPerDay ?? 20)))));
+      setDailyReleaseHour(String(Math.max(0, Math.min(23, Number(schedule.releaseHour ?? 10)))));
+      setDailyReleaseMinute(String(Math.max(0, Math.min(59, Number(schedule.releaseMinute ?? 0)))));
+      setDailyTimezoneOffset(String(Math.max(-720, Math.min(840, Number(schedule.timezoneOffsetMinutes ?? 330)))));
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to load daily quiz items');
     }
@@ -3988,9 +4038,115 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    saveDailyQuizActiveTarget({
+      scope: activeTargetScope,
+      stateName: activeTargetState,
+      categoryId: activeCategoryId,
+    });
+  }, [activeTargetScope, activeTargetState, activeCategoryId]);
+
+  const stickyCategorySelectOptions = useMemo(() => {
+    const slug = slugDailyQuizCategoryId(activeCategoryId);
+    if (slug && !categoryOptions.includes(slug)) {
+      return [...categoryOptions, slug].sort((a, b) => a.localeCompare(b));
+    }
+    return categoryOptions;
+  }, [categoryOptions, activeCategoryId]);
+
+  async function saveDailyQuizCategories(nextCategories: string[], successMessage: string) {
+    if (!guard('tab_daily_quiz')) return false;
+    try {
+      setCategoriesSaving(true);
+      const res = await apiClient.put('/admin/daily-quiz/categories', { categories: nextCategories });
+      const saved = Array.isArray(res.data?.categories) ? res.data.categories : nextCategories;
+      setCategoryOptions(mergeDailyQuizCategoryOptions(saved, items));
+      pushToast('success', successMessage);
+      return true;
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to save daily quiz categories');
+      return false;
+    } finally {
+      setCategoriesSaving(false);
+    }
+  }
+
+  async function addDailyQuizCategory() {
+    const slug = slugDailyQuizCategoryId(newCategoryInput);
+    if (!slug) {
+      pushToast('error', 'Enter a valid category slug (e.g. hp-gk). Lowercase letters, digits, hyphen, underscore.');
+      return;
+    }
+    if (categoryOptions.includes(slug)) {
+      pushToast('warning', 'Category already exists');
+      setActiveCategoryId(slug);
+      setNewCategoryInput('');
+      return;
+    }
+    const ok = await saveDailyQuizCategories([...categoryOptions, slug], 'Daily quiz category added.');
+    if (ok) {
+      setNewCategoryInput('');
+      setActiveCategoryId(slug);
+    }
+  }
+
+  async function removeDailyQuizCategory(categorySlug: string) {
+    const next = categoryOptions.filter((x) => x !== categorySlug);
+    const ok = await saveDailyQuizCategories(next, 'Daily quiz category removed.');
+    if (ok && activeCategoryId === categorySlug) {
+      setActiveCategoryId('');
+    }
+  }
+
+  const activeTargetSummary = useMemo(() => {
+    if (activeTargetScope === 'state') {
+      const stateLabel = activeTargetState.trim() || '(select state)';
+      const cat = slugDailyQuizCategoryId(activeCategoryId);
+      return cat ? `${stateLabel} · ${cat}` : stateLabel;
+    }
+    const cat = slugDailyQuizCategoryId(activeCategoryId);
+    return cat ? `All India · ${cat}` : 'All India';
+  }, [activeTargetScope, activeTargetState, activeCategoryId]);
+
+  async function saveDailyQuizDeliverySettings() {
+    if (!guard('tab_daily_quiz')) return;
+    const qpd = Number(questionsPerDay);
+    if (!Number.isInteger(qpd) || qpd < 1 || qpd > 50) {
+      pushToast('error', 'Questions per day must be an integer between 1 and 50.');
+      return;
+    }
+    try {
+      await apiClient.patch('/admin/settings', {
+        dailyQuizSettings: {
+          releaseHour: Number(dailyReleaseHour || '10'),
+          releaseMinute: Number(dailyReleaseMinute || '0'),
+          timezoneOffsetMinutes: Number(dailyTimezoneOffset || '330'),
+          questionsPerDay: qpd,
+        },
+      });
+      await load();
+      pushToast('success', 'Daily quiz delivery settings saved.');
+    } catch (err: any) {
+      pushToast('error', err?.response?.data?.error || 'Failed to save daily quiz delivery settings');
+    }
+  }
+
   async function createDailyQuizItem(e: FormEvent) {
     e.preventDefault();
     if (!guard('tab_daily_quiz')) return;
+    if (activeTargetScope === 'state' && !activeTargetState.trim()) {
+      pushToast('error', 'Select a state in Active Target before adding state-scoped questions.');
+      return;
+    }
+    const scopeBody = buildDailyQuizScopePostBody({
+      scope: activeTargetScope,
+      stateName: activeTargetState,
+      categoryId: activeCategoryId,
+    });
+    if (scopeBody.scope === 'state' && (!scopeBody.targetStates || scopeBody.targetStates.length === 0)) {
+      pushToast('error', 'Active Target state is required for state-scoped questions.');
+      return;
+    }
     try {
       await apiClient.post('/admin/daily-quiz', {
         questionPrompt,
@@ -4002,6 +4158,9 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
         explanation,
         isPublished,
         notifyUsers,
+        scope: scopeBody.scope,
+        targetStates: scopeBody.targetStates,
+        categoryId: scopeBody.categoryId,
       });
       setQuestionPrompt('');
       setOptionA('');
@@ -4032,6 +4191,9 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
         explanation: item.explanation,
         isPublished: item.isPublished,
         notifyUsers,
+        scope: normalizeDailyQuizScopeMode(item.scope),
+        targetStates: normalizeDailyQuizScopeMode(item.scope) === 'state' ? item.targetStates || [] : [],
+        categoryId: item.categoryId ?? null,
       });
       setEditingId('');
       await load();
@@ -4071,13 +4233,155 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
 
   return (
     <>
-      <DailyQuizAdminStats apiClient={apiClient} />
+      <DailyQuizDashboard apiClient={apiClient} />
+      <section className="panel-card" style={{ marginTop: 8 }}>
+        <div className="panel-head">
+          <h3>Daily Quiz delivery</h3>
+        </div>
+        {!canEdit ? <TabReadOnlyNotice tabLabel="Daily Quiz" /> : null}
+        <fieldset disabled={!canEdit} className="rbac-fieldset">
+          <p className="muted" style={{ marginTop: 0 }}>
+            Users receive up to this many published questions per calendar day (newer uploads are weighted higher).
+            Question bank size is unlimited — add as many items as you need below.
+            Release time is configured on the Daily Digest tab.
+          </p>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Bank size: <strong>{items.length}</strong> question{items.length === 1 ? '' : 's'} stored
+            ({items.filter((x) => x.isPublished).length} published).
+          </p>
+          <div className="inline-form" style={{ marginBottom: 8 }}>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={questionsPerDay}
+              onChange={(e) => setQuestionsPerDay(e.target.value)}
+              placeholder="Questions per day (1–50)"
+              aria-label="Questions per day"
+            />
+            <button type="button" onClick={saveDailyQuizDeliverySettings}>
+              Save delivery settings
+            </button>
+          </div>
+        </fieldset>
+      </section>
       <section className="panel-card">
       <div className="panel-head">
         <h3>Daily Quiz (separate from Daily Digest)</h3>
       </div>
       {!canEdit ? <TabReadOnlyNotice tabLabel="Daily Quiz" /> : null}
       <fieldset disabled={!canEdit} className="rbac-fieldset">
+      <div
+        className="panel-card"
+        style={{
+          marginBottom: 12,
+          padding: '12px 14px',
+          border: '1px solid var(--border, #d8dee9)',
+          borderRadius: 8,
+          background: 'var(--panel-soft, #f8fafc)',
+        }}
+      >
+        <div className="panel-head" style={{ marginBottom: 8 }}>
+          <h4 style={{ margin: 0 }}>Active Target</h4>
+        </div>
+        <p className="muted" style={{ marginTop: 0, marginBottom: 10 }}>
+          Set once — each Add clears question fields only, not this target. New questions tag as:{' '}
+          <strong>{activeTargetSummary}</strong>
+        </p>
+        <div className="inline-form" style={{ flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          <label className="check-wrap">
+            <input
+              type="radio"
+              name="dailyQuizActiveTargetScope"
+              checked={activeTargetScope === 'all_india'}
+              onChange={() => setActiveTargetScope('all_india')}
+            />
+            All India
+          </label>
+          <label className="check-wrap">
+            <input
+              type="radio"
+              name="dailyQuizActiveTargetScope"
+              checked={activeTargetScope === 'state'}
+              onChange={() => setActiveTargetScope('state')}
+            />
+            State-specific
+          </label>
+          {activeTargetScope === 'state' ? (
+            <select
+              value={activeTargetState}
+              onChange={(e) => setActiveTargetState(e.target.value)}
+              aria-label="Active target state"
+              required
+            >
+              <option value="">Select state…</option>
+              {signupStateOptions.map((stateName) => (
+                <option key={stateName} value={stateName}>
+                  {stateName}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          <select
+            value={slugDailyQuizCategoryId(activeCategoryId) || ''}
+            onChange={(e) => setActiveCategoryId(e.target.value)}
+            aria-label="Active target category"
+            style={{ minWidth: 220 }}
+          >
+            <option value="">No category</option>
+            {stickyCategorySelectOptions.map((categorySlug) => (
+              <option key={categorySlug} value={categorySlug}>
+                {categorySlug}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
+            Manage category slugs — sticky selection above applies to each Add. Removing a slug does not delete existing
+            questions.
+          </p>
+          <div className="inline-form article-feed-kind-add" style={{ flexWrap: 'wrap', gap: 8 }}>
+            <input
+              value={newCategoryInput}
+              onChange={(e) => setNewCategoryInput(e.target.value)}
+              placeholder="New category slug (e.g. hp-gk)"
+              aria-label="New daily quiz category slug"
+              disabled={categoriesSaving}
+            />
+            <button type="button" onClick={() => void addDailyQuizCategory()} disabled={categoriesSaving}>
+              {categoriesSaving ? 'Saving…' : 'Add category'}
+            </button>
+          </div>
+          {categoryOptions.length > 0 ? (
+            <div className="feed-kind-chips-wrap" aria-label="Daily quiz categories">
+              {categoryOptions.map((categorySlug) => (
+                <span key={categorySlug} className="feed-kind-chip">
+                  <code>{categorySlug}</code>
+                  <button
+                    type="button"
+                    className="feed-kind-chip-remove"
+                    disabled={categoriesSaving}
+                    aria-label={`Remove ${categorySlug}`}
+                    onClick={() => void removeDailyQuizCategory(categorySlug)}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="muted" style={{ marginBottom: 0 }}>
+              No categories yet — add one above (optional).
+            </p>
+          )}
+        </div>
+        {activeTargetScope === 'state' && signupStateOptions.length === 0 ? (
+          <p className="muted" style={{ marginBottom: 0, marginTop: 8 }}>
+            No states configured — add them under State &amp; Distt first.
+          </p>
+        ) : null}
+      </div>
       <form onSubmit={createDailyQuizItem} className="question-form">
         <input value={questionPrompt} onChange={(e) => setQuestionPrompt(e.target.value)} placeholder="Quiz question prompt" required />
         <input value={optionA} onChange={(e) => setOptionA(e.target.value)} placeholder="Option A" required />
@@ -4110,6 +4414,7 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
       <div className="list table tests-table">
         <div className="row row-head">
           <span>Question</span>
+          <span>Scope</span>
           <span>Correct</span>
           <span>Published</span>
           <span>A</span>
@@ -4126,6 +4431,7 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
                   value={item.questionPrompt}
                   onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, questionPrompt: e.target.value } : x)))}
                 />
+                <span>{formatDailyQuizScopeLabel(item)}</span>
                 <select
                   value={String(item.correctIndex)}
                   onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, correctIndex: Number(e.target.value) } : x)))}
@@ -4155,6 +4461,10 @@ function DailyQuizTab({ apiClient }: { apiClient: typeof api }) {
             ) : (
               <>
                 <span>{item.questionPrompt}</span>
+                <span title={item.categoryId ? `Category: ${item.categoryId}` : undefined}>
+                  {formatDailyQuizScopeLabel(item)}
+                  {item.categoryId ? ` (${item.categoryId})` : ''}
+                </span>
                 <span>{['A', 'B', 'C', 'D'][item.correctIndex]}</span>
                 <span>{item.isPublished ? 'Published' : 'Hidden'}</span>
                 <span>{item.optionA}</span>

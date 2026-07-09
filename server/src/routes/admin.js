@@ -7,6 +7,7 @@ const { pool } = require('../db');
 const { normalizeFeedKindSlug, FEED_KIND_INVALID_HINT } = require('../constants/articleFeeds');
 const { getArticleFeedKindList, setArticleFeedKindList } = require('../lib/articleFeedKindOptions');
 const { getArticleCategoryList, setArticleCategoryList } = require('../lib/articleCategoryOptions');
+const { getDailyQuizCategoryList, setDailyQuizCategoryList } = require('../lib/dailyQuizCategoryOptions');
 const {
   buildCampaignDedupeKey,
   sendPushToAudience,
@@ -73,6 +74,26 @@ const { resolveAdminCycleStartUpdate } = require('../lib/testCycleWindow');
 const { loadPublishScheduleItemsSafe } = require('../lib/testResolve');
 const { republishTestNow } = require('../lib/testRepublishNow');
 const { buildPublishSchedulingDiagnostics } = require('../lib/publishScheduleDiagnostics');
+const {
+  normalizeDailyQuizSettingsFields,
+  DEFAULT_DAILY_QUIZ_SETTINGS,
+  parseQuizDayInput,
+  loadDailyQuizLeaderboardForDay,
+  loadDailyQuizRankForUserOnDay,
+  loadDailyQuizQuestionAnalysis,
+  mapDailyQuizQuestionAnalysisRow,
+  parseQuestionAnalysisScope,
+  parseQuestionAnalysisRangeDays,
+  parseAnswerReviewResultFilter,
+  mapDailyQuizAttemptAdminRow,
+  loadDailyQuizAnswerReview,
+  loadDailyQuizAnswerReviewSession,
+  parseOptionalDailyQuizDeliveryScope,
+  buildDailyQuizScopeKey,
+  mergeDailyQuizItemScopeFields,
+  getAdminDailyQuizItemScopeError,
+  normalizeAdminDailyQuizItem,
+} = require('../lib/dailyQuizUtils');
 
 const router = express.Router();
 router.use(adminPermissionGuard);
@@ -589,13 +610,14 @@ function normalizePushNotificationSettings(value) {
 
 function normalizeDailyQuizSettings(value) {
   const safe = value || {};
-  return {
-    value: {
-      releaseHour: Math.max(0, Math.min(23, Number(safe.releaseHour ?? 10))),
-      releaseMinute: Math.max(0, Math.min(59, Number(safe.releaseMinute ?? 0))),
-      timezoneOffsetMinutes: Math.max(-720, Math.min(840, Number(safe.timezoneOffsetMinutes ?? 330))),
-    },
-  };
+  const qpd = Number(safe.questionsPerDay ?? DEFAULT_DAILY_QUIZ_SETTINGS.questionsPerDay);
+  if (
+    safe.questionsPerDay != null
+    && (!Number.isInteger(qpd) || qpd < 1 || qpd > 50)
+  ) {
+    return { error: 'dailyQuizSettings.questionsPerDay must be an integer between 1 and 50' };
+  }
+  return { value: normalizeDailyQuizSettingsFields(safe) };
 }
 
 function normalizeSubmitApplicationContent(value) {
@@ -933,34 +955,6 @@ async function assertQuestionSubjectAllowed(testId, subjectKey) {
   return null;
 }
 
-function normalizeDailyQuizItem(raw, fallbackId) {
-  const src = raw && typeof raw === 'object' ? raw : {};
-  const id = String(src.id || fallbackId || '').trim() || `dq-${Date.now()}-${Math.floor(Math.random() * 9999)}`;
-  const questionPrompt = String(src.questionPrompt || '').trim().slice(0, 500);
-  const optionA = String(src.optionA || '').trim().slice(0, 180);
-  const optionB = String(src.optionB || '').trim().slice(0, 180);
-  const optionC = String(src.optionC || '').trim().slice(0, 180);
-  const optionD = String(src.optionD || '').trim().slice(0, 180);
-  const correctIndex = Number(src.correctIndex);
-  const explanation = String(src.explanation || '').trim().slice(0, 1500);
-  const isPublished = src.isPublished !== false;
-  if (!questionPrompt || !optionA || !optionB || !optionC || !optionD) return null;
-  if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3) return null;
-  return {
-    id,
-    questionPrompt,
-    optionA,
-    optionB,
-    optionC,
-    optionD,
-    correctIndex,
-    explanation,
-    isPublished,
-    createdAt: String(src.createdAt || new Date().toISOString()),
-    updatedAt: new Date().toISOString(),
-  };
-}
-
 async function enqueueNotification(userId, payload) {
   return enqueueNotificationSchedulingItem(payload, userId);
 }
@@ -1201,16 +1195,9 @@ async function getSettingsMap() {
     dailyQuizSettings: (() => {
       try {
         const parsed = JSON.parse(String(map.dailyQuizSettings || '{}'));
-        if (!parsed || typeof parsed !== 'object') {
-          return { releaseHour: 10, releaseMinute: 0, timezoneOffsetMinutes: 330 };
-        }
-        return {
-          releaseHour: Math.max(0, Math.min(23, Number(parsed.releaseHour ?? 10))),
-          releaseMinute: Math.max(0, Math.min(59, Number(parsed.releaseMinute ?? 0))),
-          timezoneOffsetMinutes: Math.max(-720, Math.min(840, Number(parsed.timezoneOffsetMinutes ?? 330))),
-        };
+        return normalizeDailyQuizSettingsFields(parsed);
       } catch (_e) {
-        return { releaseHour: 10, releaseMinute: 0, timezoneOffsetMinutes: 330 };
+        return { ...DEFAULT_DAILY_QUIZ_SETTINGS };
       }
     })(),
     submitApplicationContent: (() => {
@@ -2206,6 +2193,9 @@ router.patch('/settings', async (req, res) => {
     body.pushNotificationSettings === undefined ? null : normalizePushNotificationSettings(body.pushNotificationSettings);
   const normalizedDailyQuizSettings =
     body.dailyQuizSettings === undefined ? null : normalizeDailyQuizSettings(body.dailyQuizSettings);
+  if (normalizedDailyQuizSettings && normalizedDailyQuizSettings.error) {
+    return res.status(400).json({ error: normalizedDailyQuizSettings.error });
+  }
   const normalizedSubmitApplicationContent =
     body.submitApplicationContent === undefined ? null : normalizeSubmitApplicationContent(body.submitApplicationContent);
   const normalizedInstructionContent =
@@ -3514,10 +3504,36 @@ router.delete('/digest/:id', async (req, res) => {
   }
 });
 
+router.get('/daily-quiz/categories', async (_req, res) => {
+  try {
+    const categories = await getDailyQuizCategoryList();
+    return res.json({ categories });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load daily quiz categories' });
+  }
+});
+
+router.put('/daily-quiz/categories', async (req, res) => {
+  const body = req.body || {};
+  if (!Array.isArray(body.categories)) {
+    return res.status(400).json({ error: 'categories must be an array of strings' });
+  }
+  try {
+    const result = await setDailyQuizCategoryList(body.categories, req.userId);
+    if (result.error) return res.status(400).json({ error: result.error });
+    return res.json({ categories: result.categories });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to save daily quiz categories' });
+  }
+});
+
 router.get('/daily-quiz', async (_req, res) => {
   try {
     const payload = await getJsonSetting('dailyQuizItems', { items: [] });
-    const items = Array.isArray(payload.items) ? payload.items : [];
+    const rawItems = Array.isArray(payload.items) ? payload.items : [];
+    const items = rawItems.map((x) => mergeDailyQuizItemScopeFields(x));
     return res.json({ items });
   } catch (e) {
     console.error(e);
@@ -3528,14 +3544,18 @@ router.get('/daily-quiz', async (_req, res) => {
 router.post('/daily-quiz', async (req, res) => {
   try {
     const body = req.body || {};
-    const normalized = normalizeDailyQuizItem(body);
+    const scopeError = getAdminDailyQuizItemScopeError(body);
+    if (scopeError) {
+      return res.status(400).json({ error: scopeError });
+    }
+    const normalized = normalizeAdminDailyQuizItem(body);
     const notifyUsers = body.notifyUsers === true;
     if (!normalized) {
       return res.status(400).json({ error: 'Question, four options, and valid correctIndex are required' });
     }
     const current = await getJsonSetting('dailyQuizItems', { items: [] });
     const items = Array.isArray(current.items) ? current.items : [];
-    const next = { items: [normalized, ...items].slice(0, 500) };
+    const next = { items: [normalized, ...items] };
     await setJsonSetting('dailyQuizItems', next, req.userId);
     if (normalized.isPublished && notifyUsers) {
       await enqueueNotification(req.userId, {
@@ -3562,15 +3582,17 @@ router.patch('/daily-quiz/:id', async (req, res) => {
     const items = Array.isArray(current.items) ? current.items : [];
     const idx = items.findIndex((x) => String(x.id || '') === id);
     if (idx < 0) return res.status(404).json({ error: 'Daily quiz item not found' });
-    const normalized = normalizeDailyQuizItem(
-      {
-        ...items[idx],
-        ...(req.body || {}),
-        id,
-        createdAt: items[idx].createdAt,
-      },
+    const merged = {
+      ...items[idx],
+      ...(req.body || {}),
       id,
-    );
+      createdAt: items[idx].createdAt,
+    };
+    const scopeError = getAdminDailyQuizItemScopeError(merged);
+    if (scopeError) {
+      return res.status(400).json({ error: scopeError });
+    }
+    const normalized = normalizeAdminDailyQuizItem(merged, id);
     if (!normalized) {
       return res.status(400).json({ error: 'Question, four options, and valid correctIndex are required' });
     }
@@ -3776,6 +3798,242 @@ router.get('/daily-quiz/stats', async (req, res) => {
     }
     console.error(e);
     return res.status(500).json({ error: 'Failed to load daily quiz stats' });
+  }
+});
+
+router.get('/daily-quiz/leaderboard', async (req, res) => {
+  const quizDay = parseQuizDayInput(req.query.quizDay);
+  if (!quizDay) {
+    return res.status(400).json({ error: 'quizDay required (yyyy-MM-dd)' });
+  }
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 100));
+  const searchQ = String(req.query.q || '').trim().slice(0, 80);
+  const deliveryScopeParsed = parseOptionalDailyQuizDeliveryScope(req.query);
+  if (deliveryScopeParsed.error) {
+    return res.status(400).json({ error: deliveryScopeParsed.error });
+  }
+  try {
+    const { rows, totalPlayers } = await loadDailyQuizLeaderboardForDay(pool, quizDay, {
+      limit,
+      maxLimit: 200,
+      searchQ,
+      userScope: deliveryScopeParsed.userScope,
+    });
+    const entries = rows.map((row) => {
+      const pid = Number(row.public_id);
+      const correctCount = Number(row.correct_count) || 0;
+      const totalQuestions = Number(row.total_questions) || 0;
+      return {
+        rank: Number(row.rank) || 0,
+        userId: String(row.user_id || ''),
+        displayName: String(row.display_name || 'Player').slice(0, 80),
+        email: row.email ? String(row.email).slice(0, 120) : null,
+        publicId: Number.isFinite(pid) && pid >= 100000 ? String(pid) : null,
+        correctCount,
+        totalQuestions,
+        isPerfect: totalQuestions > 0 && correctCount === totalQuestions,
+        timeTakenSeconds: Number(row.total_time) || 0,
+      };
+    });
+    return res.json({
+      quizDay,
+      totalPlayers,
+      searchQ: searchQ || null,
+      tableReady: true,
+      deliveryScope: deliveryScopeParsed.userScope?.scope || null,
+      deliveryStateName: deliveryScopeParsed.userScope?.stateName || null,
+      deliveryScopeKey: deliveryScopeParsed.scopeKey,
+      entries,
+    });
+  } catch (e) {
+    if (e && e.code === '42P01') {
+      return res.json({
+        quizDay,
+        totalPlayers: 0,
+        searchQ: searchQ || null,
+        tableReady: false,
+        deliveryScope: deliveryScopeParsed.userScope?.scope || null,
+        deliveryStateName: deliveryScopeParsed.userScope?.stateName || null,
+        deliveryScopeKey: deliveryScopeParsed.scopeKey,
+        entries: [],
+      });
+    }
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load daily quiz leaderboard' });
+  }
+});
+
+router.get('/daily-quiz/question-analysis', async (req, res) => {
+  const quizDay = parseQuizDayInput(req.query.quizDay);
+  if (!quizDay) {
+    return res.status(400).json({ error: 'quizDay required (yyyy-MM-dd)' });
+  }
+  const scope = parseQuestionAnalysisScope(req.query.scope);
+  const rangeDays = parseQuestionAnalysisRangeDays(req.query.rangeDays ?? req.query.range);
+  const deliveryScopeParsed = parseOptionalDailyQuizDeliveryScope(req.query);
+  if (deliveryScopeParsed.error) {
+    return res.status(400).json({ error: deliveryScopeParsed.error });
+  }
+  try {
+    const analysis = await loadDailyQuizQuestionAnalysis(pool, {
+      quizDay,
+      scope,
+      rangeDays,
+      userScope: deliveryScopeParsed.userScope,
+    });
+    const items = analysis.rows.map((row) => mapDailyQuizQuestionAnalysisRow(row));
+    return res.json({
+      quizDay,
+      scope: analysis.scope,
+      rangeDays: analysis.scope === 'range' ? analysis.rangeDays : 1,
+      startDay: analysis.startDay,
+      endDay: analysis.endDay,
+      tableReady: true,
+      totalQuestions: items.length,
+      deliveryScope: deliveryScopeParsed.userScope?.scope || null,
+      deliveryStateName: deliveryScopeParsed.userScope?.stateName || null,
+      deliveryScopeKey: deliveryScopeParsed.scopeKey,
+      items,
+    });
+  } catch (e) {
+    if (e && e.code === '42P01') {
+      return res.json({
+        quizDay,
+        scope,
+        rangeDays: scope === 'range' ? rangeDays : 1,
+        startDay: quizDay,
+        endDay: quizDay,
+        tableReady: false,
+        totalQuestions: 0,
+        deliveryScope: deliveryScopeParsed.userScope?.scope || null,
+        deliveryStateName: deliveryScopeParsed.userScope?.stateName || null,
+        deliveryScopeKey: deliveryScopeParsed.scopeKey,
+        items: [],
+      });
+    }
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load daily quiz question analysis' });
+  }
+});
+
+router.get('/daily-quiz/answer-review/session', async (req, res) => {
+  const quizDay = parseQuizDayInput(req.query.quizDay);
+  const userId = String(req.query.userId || '').trim();
+  if (!quizDay) {
+    return res.status(400).json({ error: 'quizDay required (yyyy-MM-dd)' });
+  }
+  if (!userId) {
+    return res.status(400).json({ error: 'userId required' });
+  }
+  const deliveryScopeParsed = parseOptionalDailyQuizDeliveryScope(req.query);
+  if (deliveryScopeParsed.error) {
+    return res.status(400).json({ error: deliveryScopeParsed.error });
+  }
+  try {
+    const session = await loadDailyQuizAnswerReviewSession(
+      pool,
+      userId,
+      quizDay,
+      { userScope: deliveryScopeParsed.userScope },
+    );
+    return res.json({
+      tableReady: true,
+      deliveryScope: deliveryScopeParsed.userScope?.scope || null,
+      deliveryStateName: deliveryScopeParsed.userScope?.stateName || null,
+      deliveryScopeKey: deliveryScopeParsed.scopeKey,
+      ...session,
+    });
+  } catch (e) {
+    if (e && e.message === 'Invalid userId') {
+      return res.status(400).json({ error: 'Invalid userId' });
+    }
+    if (e && e.code === '42P01') {
+      return res.json({
+        tableReady: false,
+        userId,
+        quizDay,
+        displayName: 'Player',
+        clientSubmissionId: null,
+        summary: {
+          correctCount: 0,
+          wrongCount: 0,
+          skippedCount: 0,
+          totalQuestions: 0,
+          timeTakenSeconds: 0,
+        },
+        attempts: [],
+      });
+    }
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load daily quiz answer review session' });
+  }
+});
+
+router.get('/daily-quiz/answer-review', async (req, res) => {
+  const quizDay = parseQuizDayInput(req.query.quizDay);
+  if (!quizDay) {
+    return res.status(400).json({ error: 'quizDay required (yyyy-MM-dd)' });
+  }
+  const page = Math.max(1, Math.floor(Number(req.query.page) || 1));
+  const limit = Math.max(1, Math.min(100, Math.floor(Number(req.query.limit) || 50)));
+  const result = parseAnswerReviewResultFilter(req.query.result);
+  const userId = String(req.query.userId || '').trim();
+  const itemId = String(req.query.itemId || '').trim().slice(0, 80);
+  const searchQ = String(req.query.q || '').trim().slice(0, 80);
+  const deliveryScopeParsed = parseOptionalDailyQuizDeliveryScope(req.query);
+  if (deliveryScopeParsed.error) {
+    return res.status(400).json({ error: deliveryScopeParsed.error });
+  }
+  try {
+    const review = await loadDailyQuizAnswerReview(pool, {
+      quizDay,
+      page,
+      limit,
+      result,
+      userId,
+      itemId,
+      searchQ,
+      userScope: deliveryScopeParsed.userScope,
+    });
+    const attempts = review.rows.map((row) => mapDailyQuizAttemptAdminRow(row));
+    const totalPages = review.total > 0 ? Math.ceil(review.total / review.limit) : 0;
+    return res.json({
+      quizDay,
+      page: review.page,
+      limit: review.limit,
+      total: review.total,
+      totalPages,
+      result,
+      searchQ: searchQ || null,
+      userId: userId || null,
+      itemId: itemId || null,
+      tableReady: true,
+      deliveryScope: deliveryScopeParsed.userScope?.scope || null,
+      deliveryStateName: deliveryScopeParsed.userScope?.stateName || null,
+      deliveryScopeKey: deliveryScopeParsed.scopeKey,
+      attempts,
+    });
+  } catch (e) {
+    if (e && e.code === '42P01') {
+      return res.json({
+        quizDay,
+        page,
+        limit,
+        total: 0,
+        totalPages: 0,
+        result,
+        searchQ: searchQ || null,
+        userId: userId || null,
+        itemId: itemId || null,
+        tableReady: false,
+        deliveryScope: deliveryScopeParsed.userScope?.scope || null,
+        deliveryStateName: deliveryScopeParsed.userScope?.stateName || null,
+        deliveryScopeKey: deliveryScopeParsed.scopeKey,
+        attempts: [],
+      });
+    }
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load daily quiz answer review' });
   }
 });
 

@@ -470,29 +470,6 @@ fun ApplyForTestScreenNew(
                     Spacer(Modifier.height(10.dp))
 
                     when {
-                        mayReapplyForNewCycle && !hasAlreadyApplied -> {
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                text = "New cycle — you can apply again for this test.",
-                                color = Color(0xFF166534),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Button(
-                                onClick = { revealSubmitSection = true },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp),
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = p.systemBlue,
-                                    contentColor = Color.White,
-                                ),
-                            ) {
-                                Text(text = "Apply for new cycle", fontWeight = FontWeight.Bold)
-                            }
-                        }
                         hasAlreadyApplied && !isWaitlisted -> {
                             Spacer(Modifier.height(6.dp))
                             Text(
@@ -516,7 +493,30 @@ fun ApplyForTestScreenNew(
                                 Text(text = "Back to Start Test", fontWeight = FontWeight.Bold)
                             }
                         }
-                        testBetweenCycles && !hasAlreadyApplied -> {
+                        mayReapplyForNewCycle && !hasAlreadyApplied && !revealSubmitSection -> {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = "New cycle — you can apply again for this test.",
+                                color = Color(0xFF166534),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = { revealSubmitSection = true },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = p.systemBlue,
+                                    contentColor = Color.White,
+                                ),
+                            ) {
+                                Text(text = "Apply for new cycle", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        testBetweenCycles && !hasAlreadyApplied && !mayReapplyForNewCycle -> {
                             Spacer(Modifier.height(6.dp))
                             Text(
                                 text = applyBlockedMessage

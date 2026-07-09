@@ -114,6 +114,15 @@ interface AppApiService {
     suspend fun getDailyQuizLeaderboard(
         @Query("quizDay") quizDay: String,
         @Query("limit") limit: Int = 50,
+        @Query("scope") scope: String? = null,
+        @Query("state") state: String? = null,
     ): DailyQuizLeaderboardResponse
+
+    /** Scoped daily delivery — requires auth (Phase 4+). */
+    @GET("daily-quiz/today")
+    suspend fun getDailyQuizTodayScoped(
+        @Query("scope") scope: String,
+        @Query("state") state: String? = null,
+    ): DailyQuizTodayResponse
 
 }

@@ -100,7 +100,17 @@ object DailyQuizRepository {
 
     fun isLoggedIn(): Boolean = !AuthRepository.peekAccessToken().isNullOrBlank()
 
-
+    /**
+     * Phase 2 — Logged-in users: server attempt for [day] is source of truth (404 ⇒ not attempted).
+     * Guests: local owner-scoped cache only.
+     */
+    suspend fun loadDayResultForCurrentUser(day: LocalDate): AppPreferencesRepository.DailyQuizDayResult? =
+        withContext(Dispatchers.IO) {
+            if (isLoggedIn()) {
+                return@withContext loadDayFromServer(day)
+            }
+            AppPreferencesRepository.loadDailyQuizDayResult(day)
+        }
 
     suspend fun syncHistoryFromServer(): SyncedHistory? = withContext(Dispatchers.IO) {
 
@@ -128,15 +138,17 @@ object DailyQuizRepository {
 
                     attemptsByDay[day] = session
 
-                    AppPreferencesRepository.saveDailyQuizDayResult(session)
-
                 }
+
+            AppPreferencesRepository.replaceDailyQuizResultsForCurrentUser(attemptsByDay)
 
             SyncedHistory(attemptedDates = dates, attemptsByDay = attemptsByDay)
 
         } catch (e: HttpException) {
 
             if (e.code() == 404) {
+
+                AppPreferencesRepository.replaceDailyQuizResultsForCurrentUser(emptyMap())
 
                 SyncedHistory(emptySet(), emptyMap())
 
@@ -178,13 +190,19 @@ object DailyQuizRepository {
 
             } catch (e: HttpException) {
 
-                if (e.code() != 404) {
+                if (e.code() == 404) {
+
+                    AppPreferencesRepository.clearDailyQuizDayResult(day)
+
+                    null
+
+                } else {
 
                     Log.w(TAG, "loadDayFromServer http ${e.code()}: ${parseHttpError(e)}", e)
 
-                }
+                    null
 
-                null
+                }
 
             } catch (e: Exception) {
 
@@ -198,13 +216,24 @@ object DailyQuizRepository {
 
 
 
-    suspend fun loadLeaderboard(day: LocalDate, limit: Int = 50): Leaderboard? = withContext(Dispatchers.IO) {
+    suspend fun loadLeaderboard(
+        day: LocalDate,
+        limit: Int = 50,
+        scope: DailyQuizScopeSelection? = null,
+    ): Leaderboard? = withContext(Dispatchers.IO) {
 
         if (!isLoggedIn()) return@withContext null
 
         try {
 
-            val res = RetrofitProvider.appApi.getDailyQuizLeaderboard(day.toString(), limit)
+            val scopeMode = scope?.mode
+            val scopeState = scope?.stateName?.takeIf { it.isNotBlank() }
+            val res = RetrofitProvider.appApi.getDailyQuizLeaderboard(
+                quizDay = day.toString(),
+                limit = limit,
+                scope = scopeMode,
+                state = if (scope?.isState == true) scopeState else null,
+            )
 
             val quizDay = runCatching { LocalDate.parse(res.quizDay) }.getOrElse { day }
 
@@ -368,6 +397,8 @@ object DailyQuizRepository {
 
         snapshot: AppPreferencesRepository.DailyQuizDayResult,
 
+        scope: DailyQuizScopeSelection? = null,
+
     ): ServerResult = withContext(Dispatchers.IO) {
 
         if (!isLoggedIn()) {
@@ -421,6 +452,10 @@ object DailyQuizRepository {
                 answers = answers,
 
                 clientSubmissionId = UUID.randomUUID().toString(),
+
+                scope = scope?.mode,
+
+                state = scope?.stateName?.takeIf { scope.isState && it.isNotBlank() },
 
             )
 

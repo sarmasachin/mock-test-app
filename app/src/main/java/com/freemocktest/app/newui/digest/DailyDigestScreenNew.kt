@@ -63,6 +63,8 @@ import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.ContentRepository
 import android.util.Log
 import com.freemocktest.app.data.DailyQuizRepository
+import com.freemocktest.app.data.DailyQuizScopeSelection
+import com.freemocktest.app.newui.auth.SignupRegionData
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -144,6 +146,32 @@ private fun resolveDailyShareTemplate(
         .replace("{result}", result)
 }
 
+private fun dailyQuizProfileInitials(displayName: String): String {
+    val cleaned = displayName.trim()
+    if (cleaned.isBlank() || cleaned.equals("Guest", ignoreCase = true)) return "G"
+    val parts = cleaned.split(Regex("\\s+")).filter { it.isNotBlank() }
+    return when {
+        parts.size >= 2 -> {
+            "${parts.first().first().uppercaseChar()}${parts.last().first().uppercaseChar()}"
+        }
+        else -> {
+            val word = parts.first()
+            word.take(2).uppercase(Locale.US).ifBlank { "G" }
+        }
+    }
+}
+
+/** Phase 4 — identity key so quiz UI resets when account / guest mode changes. */
+private fun buildDailyQuizSessionKey(
+    isLoggedIn: Boolean,
+    drawerProfile: AppPreferencesRepository.DrawerUserProfile,
+): String {
+    if (!isLoggedIn) return "guest"
+    val uid = drawerProfile.userIdFormatted.orEmpty().trim()
+    val email = drawerProfile.emailLine.trim().lowercase(Locale.US)
+    return listOf(uid, email).filter { it.isNotBlank() }.joinToString("|").ifBlank { "signed-in" }
+}
+
 private fun buildDailyQuizQuestionResult(
     q: ContentRepository.DailyQuizRemote,
     selected: Int?,
@@ -191,6 +219,11 @@ fun DailyDigestScreenNew(
     var quizLoading by remember { mutableStateOf(true) }
     var quizStatusMessage by remember { mutableStateOf<String?>(null) }
     var quizReloadTick by remember { mutableStateOf(0) }
+    var dailyQuizQuestionCount by remember { mutableStateOf(0) }
+    var selectedQuizScope by remember { mutableStateOf(DailyQuizScopeSelection.AllIndia) }
+    var featuredScopeStates by remember { mutableStateOf(emptyList<String>()) }
+    var expandedScopeStates by remember { mutableStateOf(emptyList<String>()) }
+    var showAllScopeStates by remember { mutableStateOf(false) }
     var selectedOptionIndex by remember { mutableStateOf<Int?>(null) }
     var quizStartedAtMillis by remember { mutableStateOf<Long?>(null) }
     var questionStartedAtMillis by remember { mutableStateOf<Long?>(null) }
@@ -207,40 +240,93 @@ fun DailyDigestScreenNew(
         mutableStateOf("My Daily Quiz result on {date}\n\n{question}\nScore: {score}\n\nDownload: {storeUrl}")
     }
 
-    LaunchedEffect(Unit) {
-        val localDates = withContext(Dispatchers.IO) {
-            AppPreferencesRepository.loadDailyQuizAttemptedDates()
-        }
-        attemptedDates = localDates
-        if (DailyQuizRepository.isLoggedIn()) {
-            val synced = withContext(Dispatchers.IO) { DailyQuizRepository.syncHistoryFromServer() }
-            if (synced != null) {
-                attemptedDates = localDates + synced.attemptedDates
-            }
-        }
-    }
+    val dailyQuizSessionKey = buildDailyQuizSessionKey(
+        isLoggedIn = DailyQuizRepository.isLoggedIn(),
+        drawerProfile = drawerProfile,
+    )
 
-    LaunchedEffect(selectedDate) {
-        var result = withContext(Dispatchers.IO) {
-            AppPreferencesRepository.loadDailyQuizDayResult(selectedDate)
-        }
-        if (result == null && DailyQuizRepository.isLoggedIn()) {
-            result = withContext(Dispatchers.IO) {
-                DailyQuizRepository.loadDayFromServer(selectedDate)
+    // Phase 4 — drop in-flight quiz/result UI when user logs out or switches account.
+    LaunchedEffect(dailyQuizSessionKey) {
+        showQuiz = false
+        showResult = false
+        savedDayResult = null
+        pendingQuestionResults = emptyList()
+        currentQuestionIndex = 0
+        selectedOptionIndex = null
+        submittedAtMillis = null
+        quizStartedAtMillis = null
+        questionStartedAtMillis = null
+        showSolution = false
+        isSubmitting = false
+        resultSyncMessage = null
+        dailyQuizRank = null
+        dailyQuizRankTotal = null
+        showAllScopeStates = false
+        val scopeSetup = withContext(Dispatchers.IO) {
+            runCatching { ContentRepository.loadSignupRegions() }.onSuccess { rows ->
+                SignupRegionData.replaceFromAdmin(rows.map { it.state to it.districts })
             }
+            val allStates = SignupRegionData.indianStates
+            val signupState = AppPreferencesRepository.peekSignupStateNow()
+            val savedScope = AppPreferencesRepository.loadDailyQuizScopeSelection()
+            val initialScope = DailyQuizScopeUi.resolveInitialSelection(signupState, savedScope, allStates)
+            val lists = DailyQuizScopeUi.buildStateLists(signupState, allStates)
+            Triple(initialScope, lists.first, lists.second)
+        }
+        selectedQuizScope = scopeSetup.first
+        featuredScopeStates = scopeSetup.second
+        expandedScopeStates = scopeSetup.third
+        attemptedDates = withContext(Dispatchers.IO) {
+            if (DailyQuizRepository.isLoggedIn()) {
+                val synced = DailyQuizRepository.syncHistoryFromServer()
+                synced?.attemptedDates
+                    ?: AppPreferencesRepository.loadDailyQuizAttemptedDates()
+            } else {
+                AppPreferencesRepository.loadDailyQuizAttemptedDates()
+            }
+        }
+        val result = withContext(Dispatchers.IO) {
+            DailyQuizRepository.loadDayResultForCurrentUser(selectedDate)
         }
         savedDayResult = result
         dailyQuizRank = result?.rank
         dailyQuizRankTotal = result?.rankTotal
     }
 
-    LaunchedEffect(quizReloadTick) {
+    LaunchedEffect(selectedDate, dailyQuizSessionKey) {
+        val result = withContext(Dispatchers.IO) {
+            DailyQuizRepository.loadDayResultForCurrentUser(selectedDate)
+        }
+        savedDayResult = result
+        dailyQuizRank = result?.rank
+        dailyQuizRankTotal = result?.rankTotal
+    }
+
+    // Phase 4 — never keep dashboard route open without a verified day snapshot.
+    LaunchedEffect(showResult, savedDayResult, dailyQuizSessionKey) {
+        if (showResult && savedDayResult == null) {
+            showResult = false
+            showQuiz = false
+        }
+    }
+
+    LaunchedEffect(quizReloadTick, selectedQuizScope, dailyQuizSessionKey) {
         quizLoading = true
         quizError = false
         quizStatusMessage = "Loading today's quiz..."
-        runCatching { ContentRepository.loadDailyQuizToday() }
+        val cached = ContentRepository.peekCachedDailyQuizToday(selectedQuizScope)
+        if (cached != null) {
+            quizItems = cached.items
+            dailyQuizQuestionCount = cached.questionCount
+            currentQuizDay = cached.quizDay
+            selectedDate = cached.quizDay
+            quizError = cached.items.isEmpty()
+            quizLoading = false
+        }
+        runCatching { ContentRepository.loadDailyQuizToday(selectedQuizScope) }
             .onSuccess { payload ->
                 quizItems = payload?.items.orEmpty()
+                dailyQuizQuestionCount = payload?.questionCount ?: payload?.items.orEmpty().size
                 currentQuizDay = payload?.quizDay
                 // Align calendar with server "today's quiz" day (schedule TZ) so TAKE TEST / dashboard unlock.
                 if (payload?.quizDay != null) {
@@ -256,6 +342,7 @@ fun DailyDigestScreenNew(
             }
             .onFailure { e ->
                 quizItems = emptyList()
+                dailyQuizQuestionCount = 0
                 quizError = true
                 quizStatusMessage = when (e) {
                     is HttpException -> when (e.code()) {
@@ -304,6 +391,24 @@ fun DailyDigestScreenNew(
             scoreVisible = scoreVisible,
             showSelectTodayHint = !isSelectedQuizDay && !hasSavedResultForSelectedDay,
             quizStatusMessage = quizStatusMessage,
+            todayQuestionCount = if (isSelectedQuizDay) dailyQuizQuestionCount else 0,
+            selectedScope = selectedQuizScope,
+            featuredScopeStates = featuredScopeStates,
+            expandedScopeStates = expandedScopeStates,
+            showAllScopeStates = showAllScopeStates,
+            onSelectAllIndiaScope = {
+                selectedQuizScope = DailyQuizScopeSelection.AllIndia
+                scope.launch(Dispatchers.IO) {
+                    AppPreferencesRepository.saveDailyQuizScopeSelection(selectedQuizScope)
+                }
+            },
+            onSelectStateScope = { stateName ->
+                selectedQuizScope = DailyQuizScopeSelection.state(stateName)
+                scope.launch(Dispatchers.IO) {
+                    AppPreferencesRepository.saveDailyQuizScopeSelection(selectedQuizScope)
+                }
+            },
+            onToggleSeeAllScopeStates = { showAllScopeStates = !showAllScopeStates },
             onBack = onBack,
             onShare = {
                 val dateStr = selectedDate.format(DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.US))
@@ -331,26 +436,40 @@ fun DailyDigestScreenNew(
             },
             onSelectDate = { selectedDate = it },
             onTakeTest = {
-                if (hasSavedResultForSelectedDay && savedDayResult != null) {
-                    submittedAtMillis = savedDayResult?.savedAtMillis
-                    dailyQuizRank = savedDayResult?.rank
-                    dailyQuizRankTotal = savedDayResult?.rankTotal
-                    resultSyncMessage = null
-                    showResult = true
-                } else if (quizItems.isEmpty()) {
-                    quizError = true
-                    if (quizStatusMessage.isNullOrBlank()) {
-                        quizStatusMessage = "Today's quiz is not available. Tap RETRY or check back later."
+                scope.launch {
+                    // Phase 4 — re-verify server truth before routing to dashboard (prevents stale UI).
+                    val verified = withContext(Dispatchers.IO) {
+                        DailyQuizRepository.loadDayResultForCurrentUser(selectedDate)
                     }
-                } else {
-                    currentQuestionIndex = 0
-                    pendingQuestionResults = emptyList()
-                    selectedOptionIndex = null
-                    submittedAtMillis = null
-                    val now = System.currentTimeMillis()
-                    quizStartedAtMillis = now
-                    questionStartedAtMillis = now
-                    showQuiz = true
+                    savedDayResult = verified
+                    dailyQuizRank = verified?.rank
+                    dailyQuizRankTotal = verified?.rankTotal
+                    if (verified != null) {
+                        submittedAtMillis = verified.savedAtMillis
+                        resultSyncMessage = null
+                        showResult = true
+                    } else if (quizItems.isEmpty()) {
+                        quizError = true
+                        if (quizStatusMessage.isNullOrBlank()) {
+                            quizStatusMessage =
+                                "Today's quiz is not available. Tap RETRY or check back later."
+                        }
+                    } else if (!quizLoading && quizItems.isNotEmpty() && selectedDate == effectiveQuizDay) {
+                        currentQuestionIndex = 0
+                        pendingQuestionResults = emptyList()
+                        selectedOptionIndex = null
+                        submittedAtMillis = null
+                        val now = System.currentTimeMillis()
+                        quizStartedAtMillis = now
+                        questionStartedAtMillis = now
+                        showQuiz = true
+                    } else {
+                        Toast.makeText(
+                            context,
+                            "Select today's quiz date to take the test.",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
                 }
             },
             onRetryLoad = { quizReloadTick++ },
@@ -413,7 +532,7 @@ fun DailyDigestScreenNew(
                     isSubmitting = true
                     scope.launch(Dispatchers.IO) {
                         val saveOk = AppPreferencesRepository.saveDailyQuizDayResult(snapshot)
-                        val serverResult = DailyQuizRepository.submitBatchToServer(snapshot)
+                        val serverResult = DailyQuizRepository.submitBatchToServer(snapshot, selectedQuizScope)
                         withContext(Dispatchers.Main) {
                             isSubmitting = false
                             if (!saveOk) {
@@ -452,6 +571,7 @@ fun DailyDigestScreenNew(
         DailyQuizResultScreen(
             modifier = modifier,
             quizShareDay = selectedDate,
+            quizScope = selectedQuizScope,
             displayName = drawerProfile.displayName.ifBlank { "Guest" },
             userIdFormatted = drawerProfile.userIdFormatted,
             rank = dailyQuizRank,
@@ -691,6 +811,14 @@ private fun DailyQuizDatePickerScreen(
     scoreVisible: Boolean,
     showSelectTodayHint: Boolean,
     quizStatusMessage: String?,
+    todayQuestionCount: Int,
+    selectedScope: DailyQuizScopeSelection,
+    featuredScopeStates: List<String>,
+    expandedScopeStates: List<String>,
+    showAllScopeStates: Boolean,
+    onSelectAllIndiaScope: () -> Unit,
+    onSelectStateScope: (String) -> Unit,
+    onToggleSeeAllScopeStates: () -> Unit,
     onBack: () -> Unit,
     onShare: () -> Unit,
     onSelectDate: (LocalDate) -> Unit,
@@ -820,6 +948,9 @@ private fun DailyQuizDatePickerScreen(
                 }
             }
 
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
             Button(
                 onClick = onTakeTest,
                 enabled = isTakeTestEnabled || hasSavedResultForDay,
@@ -842,11 +973,29 @@ private fun DailyQuizDatePickerScreen(
                     fontSize = 19.sp,
                 )
             }
+            DailyQuizScopeSelectorCard(
+                selection = selectedScope,
+                featuredStates = featuredScopeStates,
+                expandedStates = expandedScopeStates,
+                showAllStates = showAllScopeStates,
+                enabled = !isQuizLoading,
+                onSelectAllIndia = onSelectAllIndiaScope,
+                onSelectState = onSelectStateScope,
+                onToggleSeeAll = onToggleSeeAllScopeStates,
+            )
             if (showSelectTodayHint) {
                 val hintDay = effectiveQuizDay.format(DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.US))
                 Text(
                     text = "Tap the highlighted quiz day ($hintDay) on the calendar to take today's Daily Quiz.",
                     color = Color(0xFF6B7280),
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+            if (todayQuestionCount > 0 && !hasSavedResultForDay && !isQuizLoading) {
+                Text(
+                    text = "Today's quiz has $todayQuestionCount question${if (todayQuestionCount == 1) "" else "s"}.",
+                    color = Color(0xFF4B5563),
                     fontSize = 13.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
@@ -916,6 +1065,7 @@ private fun DailyQuizDatePickerScreen(
             Spacer(Modifier.height(8.dp))
             LegendRow(label = "Selected", color = DailyBlue)
             Spacer(Modifier.height(12.dp))
+            }
         }
     }
 }
@@ -1016,6 +1166,7 @@ private fun LegendRow(label: String, color: Color) {
 private fun DailyQuizResultScreen(
     modifier: Modifier,
     quizShareDay: LocalDate,
+    quizScope: DailyQuizScopeSelection,
     displayName: String,
     userIdFormatted: String?,
     rank: Int?,
@@ -1072,13 +1223,13 @@ private fun DailyQuizResultScreen(
             if (questions.size > 1) "Q${index + 1}: $exp" else exp
         }
     }.joinToString("\n\n")
-    var leaderboard by remember(quizShareDay) { mutableStateOf<DailyQuizRepository.Leaderboard?>(null) }
-    var leaderboardLoading by remember(quizShareDay) { mutableStateOf(true) }
+    var leaderboard by remember(quizShareDay, quizScope) { mutableStateOf<DailyQuizRepository.Leaderboard?>(null) }
+    var leaderboardLoading by remember(quizShareDay, quizScope) { mutableStateOf(true) }
 
-    LaunchedEffect(quizShareDay, rank, rankTotal) {
+    LaunchedEffect(quizShareDay, quizScope, rank, rankTotal) {
         leaderboardLoading = true
         leaderboard = withContext(Dispatchers.IO) {
-            DailyQuizRepository.loadLeaderboard(quizShareDay)
+            DailyQuizRepository.loadLeaderboard(quizShareDay, scope = quizScope)
         }
         leaderboardLoading = false
     }
@@ -1142,7 +1293,12 @@ private fun DailyQuizResultScreen(
                     modifier = Modifier.size(28.dp).clip(CircleShape).background(Color(0xFF1DBF73)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("WA", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = dailyQuizProfileInitials(displayName),
+                        color = Color.White,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
                 IconButton(
                     onClick = {

@@ -84,8 +84,10 @@ function main() {
     line(
       applyScreen.includes('pickPreferredMyTestApplication') &&
         applyScreen.includes('reenrolledForNewCycle') &&
-        applyScreen.includes('refreshTick += 1'),
-      'Apply screen re-enroll submit + refresh',
+        applyScreen.includes('refreshTick += 1') &&
+        applyScreen.includes('mayReapplyForNewCycle && !hasAlreadyApplied && !revealSubmitSection') &&
+        applyScreen.includes('testBetweenCycles && !hasAlreadyApplied && !mayReapplyForNewCycle'),
+      'Apply screen re-enroll submit + refresh + reveal submit on re-apply CTA',
     ) && ok;
 
   ok =

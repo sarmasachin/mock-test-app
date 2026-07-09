@@ -148,6 +148,8 @@ object AuthRepository {
                 gender = me.user.gender,
                 birthdayDate = me.user.birthdayDate,
                 accountCreatedAtIso = me.user.createdAt,
+                signupState = me.user.signupState,
+                signupDistrict = me.user.signupDistrict,
             )
             val status = if (me.user.needsProfileCompletion()) {
                 RestoreSessionStatus.ProfileIncomplete
@@ -191,6 +193,8 @@ object AuthRepository {
                     gender = me.user.gender,
                     birthdayDate = me.user.birthdayDate,
                     accountCreatedAtIso = me.user.createdAt,
+                    signupState = me.user.signupState,
+                    signupDistrict = me.user.signupDistrict,
                 )
                 val status = if (me.user.needsProfileCompletion()) {
                     RestoreSessionStatus.ProfileIncomplete
@@ -247,6 +251,8 @@ object AuthRepository {
                 gender = resp.user.gender,
                 birthdayDate = resp.user.birthdayDate,
                 accountCreatedAtIso = resp.user.createdAt,
+                signupState = resp.user.signupState,
+                signupDistrict = resp.user.signupDistrict,
             )
             AppPreferencesRepository.setAuthBootstrapState(
                 if (resp.user.needsProfileCompletion()) {
@@ -282,6 +288,8 @@ object AuthRepository {
                 gender = resp.user.gender,
                 birthdayDate = resp.user.birthdayDate,
                 accountCreatedAtIso = resp.user.createdAt,
+                signupState = resp.user.signupState,
+                signupDistrict = resp.user.signupDistrict,
             )
             AppPreferencesRepository.setAuthBootstrapState(
                 if (resp.user.needsProfileCompletion()) {
@@ -331,6 +339,8 @@ object AuthRepository {
                 gender = resp.user.gender,
                 birthdayDate = resp.user.birthdayDate,
                 accountCreatedAtIso = resp.user.createdAt,
+                signupState = resp.user.signupState,
+                signupDistrict = resp.user.signupDistrict,
             )
             AppPreferencesRepository.setAuthBootstrapState(
                 if (resp.user.needsProfileCompletion()) {
@@ -381,6 +391,8 @@ object AuthRepository {
                 gender = me.user.gender,
                 birthdayDate = me.user.birthdayDate,
                 accountCreatedAtIso = me.user.createdAt,
+                signupState = me.user.signupState,
+                signupDistrict = me.user.signupDistrict,
             )
             Result.success(Unit)
         } catch (e: HttpException) {
@@ -440,6 +452,8 @@ object AuthRepository {
                 gender = u.gender,
                 birthdayDate = u.birthdayDate,
                 accountCreatedAtIso = u.createdAt,
+                signupState = u.signupState,
+                signupDistrict = u.signupDistrict,
             )
             Result.success(Unit)
         } catch (e: HttpException) {

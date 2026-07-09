@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.freemocktest.app.BuildConfig
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -63,6 +64,11 @@ object AppPreferencesRepository {
     private val keyProfileGender = stringPreferencesKey("profile_gender")
     /** Cached from server `birthdayDate` (YYYY-MM-DD). */
     private val keyProfileBirthdayDate = stringPreferencesKey("profile_birthday_date")
+    private val keyProfileSignupState = stringPreferencesKey("profile_signup_state")
+    private val keyProfileSignupDistrict = stringPreferencesKey("profile_signup_district")
+    private val keyDailyQuizScopeMode = stringPreferencesKey("daily_quiz_scope_mode_v1")
+    private val keyDailyQuizScopeState = stringPreferencesKey("daily_quiz_scope_state_v1")
+    private val keyDailyQuizTodayByScopeJson = stringPreferencesKey("daily_quiz_today_by_scope_v1")
     /** Cached from server `createdAt` on the user row (ISO string). */
     private val keyAccountCreatedAtIso = stringPreferencesKey("account_created_at_iso")
     private val keyProfileNotificationsEnabled = intPreferencesKey("profile_notifications_enabled")
@@ -119,6 +125,8 @@ object AppPreferencesRepository {
     private val keyInterestCatalogDefaultsV1 = intPreferencesKey("interest_catalog_defaults_v1")
     /** Daily Quiz only — not mock-test attempts. JSON object: date (yyyy-MM-dd) → result blob. */
     private val keyDailyQuizResultsByDayJson = stringPreferencesKey("daily_quiz_results_by_day_v1")
+    /** Owner for [keyDailyQuizResultsByDayJson] — email / uid / guest (mirrors poll owner scoping). */
+    private val keyDailyQuizResultsOwner = stringPreferencesKey("daily_quiz_results_owner_v1")
 
     private const val NO_TIMER_SERIES_TTL_MS = 90L * 24 * 60 * 60 * 1000
     private const val HourMs = 60 * 60 * 1000L
@@ -562,6 +570,8 @@ object AppPreferencesRepository {
         gender: String? = null,
         birthdayDate: String? = null,
         accountCreatedAtIso: String? = null,
+        signupState: String? = null,
+        signupDistrict: String? = null,
     ) {
         if (!::appContext.isInitialized) return
         runCatching {
@@ -573,6 +583,12 @@ object AppPreferencesRepository {
                 prefs[keyProfileGender] = g
                 prefs[keyProfileBirthdayDate] = normalizeStoredBirthdayDate(birthdayDate)
                 prefs[keyProfileContact] = email.trim()
+                if (signupState != null) {
+                    prefs[keyProfileSignupState] = signupState.trim()
+                }
+                if (signupDistrict != null) {
+                    prefs[keyProfileSignupDistrict] = signupDistrict.trim()
+                }
                 if (isSixDigitPublicId(sixDigitPublicId)) {
                     prefs[keyProfileUserCode] = sixDigitPublicId
                 }
@@ -584,6 +600,60 @@ object AppPreferencesRepository {
                 prefs[keyEmailVerified] = if (isEmailVerified) 1 else 0
             }
         }.onFailure { Log.e(TAG, "applyServerAuthProfile failed", it) }
+    }
+
+    suspend fun peekSignupStateNow(): String {
+        if (!::appContext.isInitialized) return ""
+        return runCatching {
+            store().data.first()[keyProfileSignupState].orEmpty().trim()
+        }.getOrDefault("")
+    }
+
+    suspend fun loadDailyQuizScopeSelection(): DailyQuizScopeSelection? {
+        if (!::appContext.isInitialized) return null
+        return runCatching {
+            val prefs = store().data.first()
+            val mode = prefs[keyDailyQuizScopeMode].orEmpty().trim()
+            val state = prefs[keyDailyQuizScopeState].orEmpty().trim()
+            if (mode.isBlank()) return@runCatching null
+            if (mode == DailyQuizScopeSelection.MODE_ALL_INDIA) {
+                DailyQuizScopeSelection.AllIndia
+            } else {
+                DailyQuizScopeSelection.state(state)
+            }
+        }.getOrNull()
+    }
+
+    suspend fun saveDailyQuizScopeSelection(selection: DailyQuizScopeSelection) {
+        if (!::appContext.isInitialized) return
+        runCatching {
+            store().edit { prefs ->
+                prefs[keyDailyQuizScopeMode] = selection.mode
+                prefs[keyDailyQuizScopeState] = selection.stateName.trim()
+            }
+        }.onFailure { Log.e(TAG, "saveDailyQuizScopeSelection failed", it) }
+    }
+
+    suspend fun saveCachedDailyQuizToday(scopeKey: String, json: String) {
+        if (!::appContext.isInitialized) return
+        if (scopeKey.isBlank() || json.isBlank()) return
+        runCatching {
+            store().edit { prefs ->
+                val root = runCatching {
+                    JSONObject(prefs[keyDailyQuizTodayByScopeJson].orEmpty().ifBlank { "{}" })
+                }.getOrElse { JSONObject() }
+                root.put(scopeKey, json)
+                prefs[keyDailyQuizTodayByScopeJson] = root.toString()
+            }
+        }.onFailure { Log.e(TAG, "saveCachedDailyQuizToday failed", it) }
+    }
+
+    suspend fun peekCachedDailyQuizToday(scopeKey: String): String? {
+        if (!::appContext.isInitialized || scopeKey.isBlank()) return null
+        return runCatching {
+            val root = JSONObject(store().data.first()[keyDailyQuizTodayByScopeJson].orEmpty().ifBlank { "{}" })
+            root.optString(scopeKey, "").trim().takeIf { it.isNotBlank() }
+        }.getOrNull()
     }
 
     /**
@@ -1397,8 +1467,7 @@ object AppPreferencesRepository {
     suspend fun loadDailyQuizAttemptedDates(): Set<LocalDate> {
         if (!::appContext.isInitialized) return emptySet()
         return runCatching {
-            val raw = store().data.first()[keyDailyQuizResultsByDayJson].orEmpty()
-            val root = parseDailyQuizResultsRoot(raw)
+            val root = readDailyQuizResultsRootForCurrentUser()
             val keyIter = root.keys()
             val dates = mutableSetOf<LocalDate>()
             while (keyIter.hasNext()) {
@@ -1415,8 +1484,7 @@ object AppPreferencesRepository {
     suspend fun loadDailyQuizDayResult(day: LocalDate): DailyQuizDayResult? {
         if (!::appContext.isInitialized) return null
         return runCatching {
-            val raw = store().data.first()[keyDailyQuizResultsByDayJson].orEmpty()
-            parseDailyQuizDayResult(day, parseDailyQuizResultsRoot(raw))
+            parseDailyQuizDayResult(day, readDailyQuizResultsRootForCurrentUser())
         }.getOrElse { e ->
             Log.e(TAG, "loadDailyQuizDayResult failed", e)
             null
@@ -1427,33 +1495,8 @@ object AppPreferencesRepository {
         if (!::appContext.isInitialized) return false
         return runCatching {
             store().edit { prefs ->
-                val root = parseDailyQuizResultsRoot(prefs[keyDailyQuizResultsByDayJson].orEmpty())
-                val dayKey = result.day.toString()
-                val questionsArr = JSONArray()
-                result.questions.forEach { q ->
-                    val optionsArr = JSONArray()
-                    q.options.forEach { optionsArr.put(it) }
-                    questionsArr.put(
-                        JSONObject()
-                            .put("itemId", q.itemId)
-                            .put("selectedOptionIndex", q.selectedOptionIndex ?: JSONObject.NULL)
-                            .put("correctIndex", q.correctIndex)
-                            .put("isCorrect", q.isCorrect)
-                            .put("timeTakenSeconds", q.timeTakenSeconds)
-                            .put("questionPrompt", q.questionPrompt)
-                            .put("options", optionsArr)
-                            .put("explanation", q.explanation),
-                    )
-                }
-                root.put(
-                    dayKey,
-                    JSONObject()
-                        .put("questions", questionsArr)
-                        .put("totalTimeTakenSeconds", result.totalTimeTakenSeconds)
-                        .put("savedAtMillis", result.savedAtMillis)
-                        .put("rank", result.rank ?: JSONObject.NULL)
-                        .put("rankTotal", result.rankTotal ?: JSONObject.NULL),
-                )
+                val root = prepareDailyQuizResultsRootForWrite(prefs)
+                putDailyQuizDayEntry(root, result)
                 prefs[keyDailyQuizResultsByDayJson] = root.toString()
             }
             true
@@ -1461,6 +1504,123 @@ object AppPreferencesRepository {
             Log.e(TAG, "saveDailyQuizDayResult failed", e)
             false
         }
+    }
+
+    /** Phase 2 — Remove one calendar day from the current user's local daily quiz cache. */
+    suspend fun clearDailyQuizDayResult(day: LocalDate): Boolean {
+        if (!::appContext.isInitialized) return false
+        return runCatching {
+            store().edit { prefs ->
+                val root = prepareDailyQuizResultsRootForWrite(prefs)
+                root.remove(day.toString())
+                prefs[keyDailyQuizResultsByDayJson] = root.toString()
+            }
+            true
+        }.getOrElse { e ->
+            Log.e(TAG, "clearDailyQuizDayResult failed", e)
+            false
+        }
+    }
+
+    /**
+     * Phase 2 — Replace local daily quiz cache with server history for the current user.
+     * Drops any local-only dates not present on the server (prevents cross-user bleed).
+     */
+    suspend fun replaceDailyQuizResultsForCurrentUser(
+        resultsByDay: Map<LocalDate, DailyQuizDayResult>,
+    ): Boolean {
+        if (!::appContext.isInitialized) return false
+        return runCatching {
+            store().edit { prefs ->
+                val ownerNow = currentContentStateOwnerId(prefs)
+                prefs[keyDailyQuizResultsOwner] = ownerNow
+                val root = JSONObject()
+                resultsByDay.values.forEach { putDailyQuizDayEntry(root, it) }
+                prefs[keyDailyQuizResultsByDayJson] = root.toString()
+            }
+            true
+        }.getOrElse { e ->
+            Log.e(TAG, "replaceDailyQuizResultsForCurrentUser failed", e)
+            false
+        }
+    }
+
+    private fun putDailyQuizDayEntry(root: JSONObject, result: DailyQuizDayResult) {
+        val dayKey = result.day.toString()
+        val questionsArr = JSONArray()
+        result.questions.forEach { q ->
+            val optionsArr = JSONArray()
+            q.options.forEach { optionsArr.put(it) }
+            questionsArr.put(
+                JSONObject()
+                    .put("itemId", q.itemId)
+                    .put("selectedOptionIndex", q.selectedOptionIndex ?: JSONObject.NULL)
+                    .put("correctIndex", q.correctIndex)
+                    .put("isCorrect", q.isCorrect)
+                    .put("timeTakenSeconds", q.timeTakenSeconds)
+                    .put("questionPrompt", q.questionPrompt)
+                    .put("options", optionsArr)
+                    .put("explanation", q.explanation),
+            )
+        }
+        root.put(
+            dayKey,
+            JSONObject()
+                .put("questions", questionsArr)
+                .put("totalTimeTakenSeconds", result.totalTimeTakenSeconds)
+                .put("savedAtMillis", result.savedAtMillis)
+                .put("rank", result.rank ?: JSONObject.NULL)
+                .put("rankTotal", result.rankTotal ?: JSONObject.NULL),
+        )
+    }
+
+    /**
+     * Phase 1 — Load daily quiz cache only when it belongs to the current signed-in/guest user.
+     * Orphan legacy blobs (no owner) or another user's blob are discarded on read.
+     */
+    private suspend fun readDailyQuizResultsRootForCurrentUser(): JSONObject {
+        if (!::appContext.isInitialized) return JSONObject()
+        val prefs = store().data.first()
+        val ownerNow = currentContentStateOwnerId(prefs)
+        val ownerStored = prefs[keyDailyQuizResultsOwner].orEmpty().trim()
+        val raw = prefs[keyDailyQuizResultsByDayJson].orEmpty()
+
+        if (raw.isBlank()) {
+            if (ownerStored.isNotBlank() && !ownerStored.equals(ownerNow, ignoreCase = true)) {
+                store().edit { it[keyDailyQuizResultsOwner] = ownerNow }
+            }
+            return JSONObject()
+        }
+
+        val ownerMismatch = ownerStored.isNotBlank() && !ownerStored.equals(ownerNow, ignoreCase = true)
+        val orphanLegacy = ownerStored.isBlank()
+        if (ownerMismatch || orphanLegacy) {
+            store().edit {
+                it[keyDailyQuizResultsOwner] = ownerNow
+                it[keyDailyQuizResultsByDayJson] = ""
+            }
+            return JSONObject()
+        }
+
+        return parseDailyQuizResultsRoot(raw)
+    }
+
+    /** Pins owner and returns writable root for the current user (write path). */
+    private fun prepareDailyQuizResultsRootForWrite(prefs: MutablePreferences): JSONObject {
+        val ownerNow = currentContentStateOwnerId(prefs)
+        val ownerStored = prefs[keyDailyQuizResultsOwner].orEmpty().trim()
+        val raw = prefs[keyDailyQuizResultsByDayJson].orEmpty()
+
+        val ownerMismatch = ownerStored.isNotBlank() && !ownerStored.equals(ownerNow, ignoreCase = true)
+        val orphanLegacy = ownerStored.isBlank() && raw.isNotBlank()
+        if (ownerMismatch || orphanLegacy) {
+            prefs[keyDailyQuizResultsOwner] = ownerNow
+            prefs[keyDailyQuizResultsByDayJson] = ""
+            return JSONObject()
+        }
+
+        prefs[keyDailyQuizResultsOwner] = ownerNow
+        return parseDailyQuizResultsRoot(raw)
     }
 
     private fun parseDailyQuizResultsRoot(raw: String): JSONObject {
@@ -1922,6 +2082,21 @@ object AppPreferencesRepository {
         )
     }
 
+    /** Phase 3 — Wipe daily quiz local cache on logout / account switch cleanup. */
+    suspend fun clearDailyQuizResultsCache(): Boolean {
+        if (!::appContext.isInitialized) return false
+        return runCatching {
+            store().edit { prefs ->
+                prefs[keyDailyQuizResultsByDayJson] = ""
+                prefs[keyDailyQuizResultsOwner] = ""
+            }
+            true
+        }.getOrElse { e ->
+            Log.e(TAG, "clearDailyQuizResultsCache failed", e)
+            false
+        }
+    }
+
     /** Clears sign-in profile fields; keeps streak, digest, feed URLs, and seen/voted notification state. */
     suspend fun clearAuthSessionPrefs() {
         if (!::appContext.isInitialized) return
@@ -1933,6 +2108,11 @@ object AppPreferencesRepository {
                 prefs[keyProfileMobile] = ""
                 prefs[keyProfileGender] = ""
                 prefs[keyProfileBirthdayDate] = ""
+                prefs[keyProfileSignupState] = ""
+                prefs[keyProfileSignupDistrict] = ""
+                prefs[keyDailyQuizScopeMode] = ""
+                prefs[keyDailyQuizScopeState] = ""
+                prefs[keyDailyQuizTodayByScopeJson] = ""
                 prefs[keyProfileUserCode] = 0
                 prefs[keyEmailVerified] = 0
                 prefs[keyPhoneVerified] = 0
@@ -1954,6 +2134,9 @@ object AppPreferencesRepository {
                 prefs[keySeenNotificationIdsOwner] = ""
                 prefs[keySeenPollIdsOwner] = ""
                 prefs[keyVotedPollIdsOwner] = ""
+                // Phase 3 — daily quiz completion must not survive logout for the next account.
+                prefs[keyDailyQuizResultsByDayJson] = ""
+                prefs[keyDailyQuizResultsOwner] = ""
                 prefs[keyAccountCreatedAtIso] = ""
                 prefs[keyLoginTestPickDone] = 0
                 prefs[keyLoginTestPickTitles] = "[]"

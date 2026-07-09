@@ -79,6 +79,22 @@ Redeploy after git push
   cp -r dist/* /var/www/admin-admin.govmocktest.com/site/admin/
   systemctl reload nginx
 
+Daily quiz scope release (Phases 0–8, v1.0.9 / versionCode 10)
+-------------------------------------------------------------
+  No new SQL migration — scope fields live in app_settings dailyQuizItems JSON.
+  Ensure migrations 017, 018, 022 already applied (daily_quiz_attempts table).
+
+  Offline gate (Windows, from server/):
+    npm run verify:daily-quiz-scope-all-phase8
+
+  After VPS redeploy + admin-web upload:
+    npm run verify:daily-quiz-scope-live-phase8
+    npm run verify:daily-quiz-scope-all-phase8 -- --live-api
+
+  Android release APK (scope selector + scoped API v1.0.9):
+    cd app && ./gradlew assembleRelease
+    Upload APK to Play Store / distribution channel.
+
 Default admin login (after SQL migration 009)
 -------------------------------------------
   Email   : sharma.sachinctr@gmail.com
