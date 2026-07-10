@@ -40,6 +40,19 @@ function formatStartBlockExamLabel(examDate, slotLabel) {
 }
 
 /**
+ * Phase 1 — Tests with exam_date + slot always use schedule timer semantics,
+ * even when the global home CMS timer flag is OFF (HP GK 9 PM rule).
+ * Manual tests without a full schedule are unaffected.
+ */
+function isScheduledExamTest(examDate, slotLabel) {
+  return Boolean(String(examDate || '').trim()) && Boolean(String(slotLabel || '').trim());
+}
+
+function resolveEffectiveScheduleTimerEnabled(scheduleTimerEnabled, examDate, slotLabel) {
+  return scheduleTimerEnabled === true || isScheduledExamTest(examDate, slotLabel);
+}
+
+/**
  * Whether an already-applied user may enter the quiz now.
  * Apply (canApply) and start (canStart) are intentionally separate.
  */
@@ -56,11 +69,17 @@ function evaluateTestStartAccess({
   row,
   advancedConfig,
 }) {
-  const cycleEndMs = resolveSchedulerCycleEndMs(row);  const joinClosesAtMs = resolveJoinClosesAtMs({
+  const effectiveTimerEnabled = resolveEffectiveScheduleTimerEnabled(
+    scheduleTimerEnabled,
+    examDate,
+    slotLabel,
+  );
+  const cycleEndMs = resolveSchedulerCycleEndMs(row);
+  const joinClosesAtMs = resolveJoinClosesAtMs({
     examDate,
     slotLabel,
     lateJoinMinutes,
-    scheduleTimerEnabled,
+    scheduleTimerEnabled: effectiveTimerEnabled,
     cycleEndMs,
     nowMs,
   });
@@ -109,7 +128,7 @@ function evaluateTestStartAccess({
     };
   }
 
-  if (scheduleTimerEnabled === true && buildExamStartMs(examDate, slotLabel) != null) {
+  if (effectiveTimerEnabled && buildExamStartMs(examDate, slotLabel) != null) {
     if (isBeforeExamStart(examDate, slotLabel, nowMs)) {
       return {
         canStart: false,
@@ -158,6 +177,8 @@ module.exports = {
   DEFAULT_NO_SCHEDULE_TTL_MS,
   DEFAULT_SCHEDULED_JOIN_MS,
   resolveJoinClosesAtMs,
+  isScheduledExamTest,
+  resolveEffectiveScheduleTimerEnabled,
   evaluateTestStartAccess,
   loadScheduleTimerEnabled,
 };

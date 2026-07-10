@@ -50,6 +50,7 @@ const {
   resolveExamDate,
   resolveAttemptCycleStartedAtMs,
   buildMyTestApplicationItem,
+  resolveApplyResponseScheduleFields,
 } = require('../lib/testApplicationCycle');
 const { resolveApplyWindowState } = require('../lib/testCycleWindow');
 
@@ -165,6 +166,41 @@ function normalizeTestAdvancedConfig(rawValue) {
         ? null
         : Math.max(0, Math.min(10080, Math.floor(Number(raw.cycleRepublishGapMinutes)))),
   };
+}
+
+/** Phase 1 — apply API body with schedule snapshot for Android countdown sync. */
+function buildApplyJsonBody({
+  test,
+  advancedConfig,
+  scheduleTimerEnabled,
+  enrolledCount,
+  capacityTotal,
+  flags = {},
+  publishScheduleItems = [],
+  nowMs = Date.now(),
+}) {
+  const cyclePhase = resolveTestCyclePhase(test, advancedConfig, nowMs, publishScheduleItems);
+  const catalogError = catalogVisibilityError(test, advancedConfig, nowMs);
+  const inCurrentCycle =
+    flags.waitlisted === true
+      ? false
+      : flags.alreadyAppliedInCurrentCycle === true || flags.reenrolledForNewCycle === true;
+  const schedule = resolveApplyResponseScheduleFields({
+    test,
+    scheduleTimerEnabled,
+    advancedConfig,
+    cyclePhase,
+    catalogError,
+    alreadyAppliedInCurrentCycle: inCurrentCycle,
+    nowMs,
+  });
+  return buildApplyResponseBody({
+    test,
+    enrolledCount,
+    capacityTotal,
+    ...flags,
+    ...schedule,
+  });
 }
 
 function hashStringToSeed(text) {
@@ -761,6 +797,11 @@ router.get('/:id/questions-attempt', requireAuth, async (req, res) => {
 router.post('/:id/apply', requireAuth, async (req, res) => {
   const id = String(req.params.id || '').trim();
   if (!id) return res.status(400).json({ error: 'test id required' });
+  const nowMs = Date.now();
+  const [scheduleTimerEnabled, publishScheduleItems] = await Promise.all([
+    loadScheduleTimerEnabled(pool),
+    loadPublishScheduleItemsSafe(pool),
+  ]);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -804,17 +845,26 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
       const responseTest = eligibility.testRow || test;
       const responseEnrolled = Math.max(0, Number(responseTest.enrolled_count ?? currentEnrolled));
       const responseCapacity = Math.max(0, Number(responseTest.capacity_total ?? capacity));
+      const responseAdvancedConfig = normalizeTestAdvancedConfig(
+        resolveAdvancedConfigForTest(advancedMap, responseTest.id),
+      );
       return res.json(
-        buildApplyResponseBody({
+        buildApplyJsonBody({
           test: responseTest,
+          advancedConfig: responseAdvancedConfig,
+          scheduleTimerEnabled,
           enrolledCount: responseEnrolled,
           capacityTotal: responseCapacity,
-          alreadyApplied: true,
-          alreadyAppliedInCurrentCycle: true,
-          message:
-            eligibility.kind === 'already_applied_sibling_subcategory'
-              ? 'You already applied for a test in this category'
-              : 'You already applied for this test',
+          publishScheduleItems,
+          nowMs,
+          flags: {
+            alreadyApplied: true,
+            alreadyAppliedInCurrentCycle: true,
+            message:
+              eligibility.kind === 'already_applied_sibling_subcategory'
+                ? 'You already applied for a test in this category'
+                : 'You already applied for this test',
+          },
         }),
       );
     }
@@ -838,14 +888,20 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
         const waitSnapshot = await enqueueUserWaitlist(client, req.userId, id);
         await client.query('COMMIT');
         return res.status(202).json(
-          buildApplyResponseBody({
+          buildApplyJsonBody({
             test,
+            advancedConfig,
+            scheduleTimerEnabled,
             enrolledCount: currentEnrolled,
             capacityTotal: capacity,
-            waitlisted: true,
-            message: 'All seats are filled. You are added to waiting list.',
-            waitingPosition: waitSnapshot.waitingPosition,
-            waitingTotal: waitSnapshot.waitingTotal,
+            publishScheduleItems,
+            nowMs,
+            flags: {
+              waitlisted: true,
+              message: 'All seats are filled. You are added to waiting list.',
+              waitingPosition: waitSnapshot.waitingPosition,
+              waitingTotal: waitSnapshot.waitingTotal,
+            },
           }),
         );
       }
@@ -858,13 +914,19 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
       const updated = await incrementTestEnrolledCount(client, id);
       await client.query('COMMIT');
       return res.status(201).json(
-        buildApplyResponseBody({
+        buildApplyJsonBody({
           test: updated || test,
+          advancedConfig,
+          scheduleTimerEnabled,
           enrolledCount: updated?.enrolled_count ?? currentEnrolled + 1,
           capacityTotal: updated?.capacity_total ?? capacity,
-          alreadyAppliedInCurrentCycle: true,
-          reenrolledForNewCycle: true,
-          message: 'Re-enrolled for new test cycle',
+          publishScheduleItems,
+          nowMs,
+          flags: {
+            alreadyAppliedInCurrentCycle: true,
+            reenrolledForNewCycle: true,
+            message: 'Re-enrolled for new test cycle',
+          },
         }),
       );
     }
@@ -873,14 +935,20 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
       const waitSnapshot = await enqueueUserWaitlist(client, req.userId, id);
       await client.query('COMMIT');
       return res.status(202).json(
-        buildApplyResponseBody({
+        buildApplyJsonBody({
           test,
+          advancedConfig,
+          scheduleTimerEnabled,
           enrolledCount: currentEnrolled,
           capacityTotal: capacity,
-          waitlisted: true,
-          message: 'All seats are filled. You are added to waiting list.',
-          waitingPosition: waitSnapshot.waitingPosition,
-          waitingTotal: waitSnapshot.waitingTotal,
+          publishScheduleItems,
+          nowMs,
+          flags: {
+            waitlisted: true,
+            message: 'All seats are filled. You are added to waiting list.',
+            waitingPosition: waitSnapshot.waitingPosition,
+            waitingTotal: waitSnapshot.waitingTotal,
+          },
         }),
       );
     }
@@ -897,12 +965,18 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
     const updated = await incrementTestEnrolledCount(client, id);
     await client.query('COMMIT');
     return res.status(201).json(
-      buildApplyResponseBody({
+      buildApplyJsonBody({
         test: updated || test,
+        advancedConfig,
+        scheduleTimerEnabled,
         enrolledCount: updated?.enrolled_count,
         capacityTotal: updated?.capacity_total ?? capacity,
-        alreadyAppliedInCurrentCycle: true,
-        message: 'Application submitted successfully',
+        publishScheduleItems,
+        nowMs,
+        flags: {
+          alreadyAppliedInCurrentCycle: true,
+          message: 'Application submitted successfully',
+        },
       }),
     );
   } catch (e) {

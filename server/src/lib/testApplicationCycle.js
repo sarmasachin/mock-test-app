@@ -10,25 +10,85 @@ function toIsoDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
+function addDaysToIsoDate(isoDate, days) {
+  const raw = String(isoDate || '').trim();
+  const parts = raw.split('-').map((x) => Number(x));
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+  const d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+  d.setUTCDate(d.getUTCDate() + Math.max(0, Number(days) || 0));
+  return d.toISOString().slice(0, 10);
+}
+
+function resolveExamTimezoneOffsetMinutes() {
+  return Number(process.env.EXAM_TIMEZONE_OFFSET_MINUTES || 330);
+}
+
+/** Calendar date (YYYY-MM-DD) in exam timezone for [nowMs]. */
+function resolveExamTodayIso(nowMs = Date.now()) {
+  const offsetMin = resolveExamTimezoneOffsetMinutes();
+  return new Date(nowMs + offsetMin * 60 * 1000).toISOString().slice(0, 10);
+}
+
 function loadCycleWindowHelpers() {
   return require('./testCycleWindow');
 }
 
-function resolveExamDate(row) {
+function loadExamScheduleHelpers() {
+  return require('./examSchedule');
+}
+
+/**
+ * Resolve catalog exam date for a test row.
+ * Dynamic date shifts forward by date_cycle_days; after the current window ends,
+ * advances to the next cycle day (Phase 1 — fixes same-night stale date after rollover).
+ *
+ * @param {object|null|undefined} row
+ * @param {number} [nowMs]
+ */
+function resolveExamDate(row, nowMs = Date.now()) {
   if (!row) return null;
   const base = row.exam_date ? new Date(row.exam_date) : null;
   if (!base || Number.isNaN(base.getTime())) return null;
   if (!row.dynamic_date_enabled) return toIsoDate(base);
   const cycleDays = Math.max(0, Number(row.date_cycle_days || 0));
   if (!cycleDays) return toIsoDate(base);
-  const today = new Date();
-  const diffMs = today.setHours(0, 0, 0, 0) - new Date(base).setHours(0, 0, 0, 0);
-  if (diffMs <= 0) return toIsoDate(base);
-  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
-  const jump = Math.ceil(diffDays / cycleDays) * cycleDays;
-  const shifted = new Date(base);
-  shifted.setDate(shifted.getDate() + jump);
-  return toIsoDate(shifted);
+
+  const baseIso = toIsoDate(base);
+  const examTodayIso = resolveExamTodayIso(nowMs);
+  const baseUtc = Date.parse(`${baseIso}T00:00:00Z`);
+  const todayUtc = Date.parse(`${examTodayIso}T00:00:00Z`);
+  const diffDays = Math.floor((todayUtc - baseUtc) / (24 * 60 * 60 * 1000));
+  let candidate;
+  if (diffDays <= 0) {
+    candidate = baseIso;
+  } else {
+    const jump = Math.ceil(diffDays / cycleDays) * cycleDays;
+    candidate = addDaysToIsoDate(baseIso, jump);
+  }
+
+  const { buildExamStartMs } = loadExamScheduleHelpers();
+  const { parseCycleStartedMs } = loadCycleWindowHelpers();
+  const slotLabel = row.slot_label;
+  const durationMinutes = Math.max(0, Number(row.duration_minutes || 0));
+  const cycleStartedMs = parseCycleStartedMs(row);
+  let guard = 0;
+  while (candidate && guard < 400) {
+    guard += 1;
+    const startMs = buildExamStartMs(candidate, slotLabel);
+    if (!Number.isFinite(startMs)) break;
+    const examEndMs =
+      durationMinutes > 0 ? startMs + durationMinutes * 60 * 1000 : startMs;
+    if (nowMs < examEndMs) break;
+
+    const rolloverDone = Number.isFinite(cycleStartedMs) && cycleStartedMs >= examEndMs;
+    const calendarMoved = examTodayIso > candidate;
+    if (!rolloverDone && !calendarMoved) break;
+
+    const nextIso = addDaysToIsoDate(candidate, cycleDays);
+    if (!nextIso || nextIso === candidate) break;
+    candidate = nextIso;
+  }
+  return candidate;
 }
 
 /**
@@ -256,6 +316,45 @@ function shouldSyncMyApplicationToLocalAppliedSeries(item) {
 }
 
 /**
+ * Phase 1 — schedule snapshot for POST /tests/:id/apply responses.
+ */
+function resolveApplyResponseScheduleFields({
+  test,
+  scheduleTimerEnabled = false,
+  advancedConfig = {},
+  cyclePhase = 'live',
+  catalogError = null,
+  alreadyAppliedInCurrentCycle = true,
+  attemptAccess = { allowed: true },
+  nowMs = Date.now(),
+}) {
+  const { evaluateTestStartAccess } = require('./testStartAccess');
+  const examDate = resolveExamDate(test, nowMs);
+  const slotLabel = String(test?.slot_label || '');
+  const startAccess = evaluateTestStartAccess({
+    alreadyAppliedInCurrentCycle,
+    scheduleTimerEnabled,
+    cyclePhase,
+    catalogError,
+    examDate,
+    slotLabel,
+    lateJoinMinutes: Math.max(0, Number(advancedConfig.lateJoinMinutes || 0)),
+    attemptAccess,
+    nowMs,
+    row: test,
+    advancedConfig,
+  });
+  return {
+    examDate: examDate || null,
+    slotLabel,
+    canStart: startAccess.canStart,
+    startBlockReason: startAccess.startBlockReason,
+    joinClosesAt: startAccess.joinClosesAt,
+    lastCycleStartedAt: normalizeCycleStartedAtIso(test),
+  };
+}
+
+/**
  * Stable JSON body for POST /tests/:id/apply (all branches).
  */
 function buildApplyResponseBody({
@@ -270,10 +369,16 @@ function buildApplyResponseBody({
   message = '',
   waitingPosition = 0,
   waitingTotal = 0,
+  examDate = null,
+  slotLabel = null,
+  canStart = null,
+  startBlockReason = null,
+  joinClosesAt = null,
+  lastCycleStartedAt = null,
 }) {
   const counts = normalizeEnrollmentCounts(test, enrolledCount, capacityTotal);
   const enrolledInCurrentCycle = alreadyAppliedInCurrentCycle && !waitlisted;
-  return {
+  const body = {
     ok: true,
     alreadyApplied,
     alreadyAppliedInCurrentCycle,
@@ -290,6 +395,13 @@ function buildApplyResponseBody({
     waitingPosition: Math.max(0, Number(waitingPosition || 0)),
     waitingTotal: Math.max(0, Number(waitingTotal || 0)),
   };
+  if (examDate != null) body.examDate = examDate;
+  if (slotLabel != null) body.slotLabel = String(slotLabel);
+  if (canStart != null) body.canStart = canStart === true;
+  if (startBlockReason != null) body.startBlockReason = startBlockReason;
+  if (joinClosesAt != null) body.joinClosesAt = joinClosesAt;
+  if (lastCycleStartedAt != null) body.lastCycleStartedAt = lastCycleStartedAt;
+  return body;
 }
 
 /**
@@ -313,5 +425,6 @@ module.exports = {
   shouldSyncMyApplicationToLocalAppliedSeries,
   normalizeCycleStartedAtIso,
   buildApplyResponseBody,
+  resolveApplyResponseScheduleFields,
   resolveAttemptCycleStartedAtMs,
 };

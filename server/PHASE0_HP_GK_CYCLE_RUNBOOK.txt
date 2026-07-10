@@ -1,0 +1,70 @@
+Phase 0 — HP GK daily 9 PM cycle (safe admin setup)
+==================================================
+
+GOAL
+----
+Enable schedule timer so HP GK follows:
+  apply → countdown until 9 PM → start → result → next-day cycle
+
+SCOPE (Phase 0 only)
+--------------------
+✓ Enable homeContent.startSeriesScheduleTimerEnabled = true
+✓ Verify HP GK row (exam_date, 09:00 PM, dynamic_date ON, date_cycle_days=1)
+✓ Print cycle diagnostics snapshot (read-only)
+✗ Does NOT change HP GK test row
+✗ Does NOT change resultVisibility (immediate vs after_result_time)
+✗ Does NOT change Bihar GK / manual tests
+
+WHY SAFE FOR OTHER TESTS
+------------------------
+Schedule timer ON only locks tests that have exam_date + slot_label.
+Tests without schedule (Bihar GK, ff, etc.) keep immediate start after apply.
+
+OFFLINE VERIFY (no DB)
+----------------------
+  cd server
+  node scripts/verifyPhase0HpGkCycle.js
+
+PRODUCTION AUDIT (read-only)
+----------------------------
+  cd server
+  # DATABASE_URL must point to production Postgres
+  node scripts/phase0HpGkCycleSetup.js
+
+APPLY (single change)
+---------------------
+  node scripts/phase0HpGkCycleSetup.js --apply
+
+Script aborts if:
+  - HP GK row missing or misconfigured
+  - homeContent cannot be sanitized
+  - schedule timer already ON (no-op)
+
+POST-APPLY CHECKS
+-----------------
+1. GET /home/content → startSeriesScheduleTimerEnabled: true
+2. Admin → HP GK → Cycle Diagnostics (rolloverWouldExecute after exam end)
+3. App: apply HP GK before 9 PM → locked countdown (not instant Start)
+4. App: Bihar GK / manual test → still instant start after apply
+
+OPTIONAL (manual admin — not Phase 0 script)
+--------------------------------------------
+- resultVisibility = after_result_time  → 3h result countdown after submit
+- resultVisibility = immediate        → View Result right away (current HP GK default)
+
+DEPLOY ORDER
+------------
+1. Run verifyPhase0HpGkCycle.js (CI/offline)
+2. Run phase0HpGkCycleSetup.js --apply on production DB
+3. No server code deploy required if scripts already on VPS
+4. Users may need app refresh (pull Home) to pick up timer flag
+
+ROLLBACK
+--------
+  Admin → Home Content → uncheck "Schedule timer" → Save
+  OR set startSeriesScheduleTimerEnabled false in homeContent JSON
+
+NEXT PHASES (not Phase 0)
+-------------------------
+Phase 1: server enforces slot even if global timer OFF (scheduled tests)
+Phase 2: Android re-enroll date sync + View Result button fix

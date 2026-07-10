@@ -1,0 +1,39 @@
+Phase 1 — HP GK server cycle fixes (scheduled timer + date + apply fields)
+============================================================================
+
+WHAT CHANGED
+------------
+1. testStartAccess.js
+   - Scheduled tests (exam_date + slot_label) always enforce slot lock,
+     even when global startSeriesScheduleTimerEnabled is OFF.
+   - Manual tests without full schedule unchanged (instant start).
+
+2. testApplicationCycle.js — resolveExamDate(row, nowMs)
+   - After current exam window ends, dynamic-date tests advance to the
+     next cycle day (fixes same-night stale Jul-10 after 9:30 PM rollover).
+
+3. testApplicationCycle.js — buildApplyResponseBody + resolveApplyResponseScheduleFields
+   - POST /tests/:id/apply now returns:
+     examDate, slotLabel, canStart, startBlockReason, joinClosesAt, lastCycleStartedAt
+
+4. tests.js — all apply branches use buildApplyJsonBody (schedule snapshot).
+
+SAFE / NO REGRESSION
+--------------------
+- ff / Bihar GK (no exam_date or slot): canStart still true when timer OFF
+- Static exam_date (dynamic OFF): no auto date advance loop
+- Waitlist apply: schedule fields included; canStart false (not in cycle)
+
+VERIFY (offline)
+----------------
+  cd server
+  node scripts/verifyPhase1HpGkCycle.js
+  node scripts/verifyPhase0HpGkCycle.js
+  node scripts/verifyStartAccessPhase3.js
+  node scripts/e2eHpGkRescheduleProof.js
+
+DEPLOY
+------
+  git pull && cd server && npm install --omit=dev && pm2 restart mocktest-api
+
+NEXT: Phase 2 (Android re-enroll sync + View Result button)

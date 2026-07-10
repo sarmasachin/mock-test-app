@@ -65,6 +65,7 @@ import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import com.freemocktest.app.newui.tests.TestCardNew
 import com.freemocktest.app.util.TestApplyState
 import com.freemocktest.app.util.TestCyclePhase
+import com.freemocktest.app.util.TestScheduleUtils
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -92,7 +93,7 @@ fun ApplyForTestScreenNew(
         )
     }
     var showSuccessDialog by remember { mutableStateOf(false) }
-    var revealSubmitSection by remember { mutableStateOf(false) }
+    var showApplyConfirmDialog by remember { mutableStateOf(false) }
     var testId by remember { mutableStateOf("") }
     var resolvedTestName by remember { mutableStateOf(title) }
     var resolvedExamDate by remember { mutableStateOf<String?>(null) }
@@ -119,6 +120,7 @@ fun ApplyForTestScreenNew(
     var cyclePhaseLabel by remember { mutableStateOf<String?>(null) }
     var applyBlockedMessage by remember { mutableStateOf<String?>(null) }
     var mayReapplyForNewCycle by remember { mutableStateOf(false) }
+    var revealSubmitSection by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -433,7 +435,7 @@ fun ApplyForTestScreenNew(
                         ) {
                             Text(
                                 text = if (testBetweenCycles) {
-                                    "This test is between cycles. Check back when it is republished."
+                                    "Next cycle is preparing — please wait and apply again when the new date opens."
                                 } else {
                                     "Couldn't load test details."
                                 },
@@ -628,17 +630,35 @@ fun ApplyForTestScreenNew(
                                                 val idToSave = response.testId?.trim()
                                                     ?.takeIf { it.isNotBlank() }
                                                     ?: testId.trim()
-                                                if (!reenrolled) {
-                                                    localApplySeriesSaved = runCatching {
-                                                        AppPreferencesRepository.addAppliedTestSeriesNow(
-                                                            testName = titleToSave,
-                                                            testId = idToSave,
-                                                            scheduleTimerEnabled = scheduleTimerEnabled,
-                                                            examDate = resolvedExamDate,
-                                                            slotLabel = resolvedSlotLabel,
-                                                            lateJoinMinutes = resolvedLateJoinMinutes,
-                                                        )
-                                                    }.getOrDefault(false) || localApplySeriesSaved
+                                                val examToSave = response.examDate?.trim()
+                                                    ?.takeIf { it.isNotBlank() }
+                                                    ?: resolvedExamDate
+                                                val slotToSave = response.slotLabel?.trim()
+                                                    ?.takeIf { it.isNotBlank() }
+                                                    ?: resolvedSlotLabel
+                                                val effectiveTimer =
+                                                    TestScheduleUtils.effectiveScheduleTimerEnabled(
+                                                        scheduleTimerEnabled = scheduleTimerEnabled,
+                                                        examDate = examToSave,
+                                                        slotLabel = slotToSave,
+                                                    )
+                                                localApplySeriesSaved = runCatching {
+                                                    AppPreferencesRepository.addAppliedTestSeriesNow(
+                                                        testName = titleToSave,
+                                                        testId = idToSave,
+                                                        scheduleTimerEnabled = effectiveTimer,
+                                                        examDate = examToSave,
+                                                        slotLabel = slotToSave,
+                                                        lateJoinMinutes = resolvedLateJoinMinutes,
+                                                        joinClosesAtMillis = TestScheduleUtils.parseIsoMillis(
+                                                            response.joinClosesAt,
+                                                        ),
+                                                        serverCanStart = response.canStart,
+                                                        startBlockReason = response.startBlockReason,
+                                                    )
+                                                }.getOrDefault(false) || localApplySeriesSaved
+                                                if (reenrolled) {
+                                                    AppPreferencesRepository.markPendingResultViewedAndClear()
                                                 }
                                                 runCatching {
                                                     AuthRepository.syncAppliedTestSeriesFromServer(

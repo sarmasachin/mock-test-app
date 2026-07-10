@@ -98,7 +98,7 @@ object TestScheduleUtils {
         lateJoinMinutes: Int = 0,
         nowMs: Long = System.currentTimeMillis(),
     ): Boolean {
-        if (!scheduleTimerEnabled) return true
+        if (!effectiveScheduleTimerEnabled(scheduleTimerEnabled, examDate, slotLabel)) return true
         return isExamJoinAllowed(examDate, slotLabel, lateJoinMinutes, nowMs)
     }
 
@@ -109,9 +109,20 @@ object TestScheduleUtils {
         lateJoinMinutes: Int = 0,
         nowMs: Long = System.currentTimeMillis(),
     ): String? {
-        if (!scheduleTimerEnabled) return null
+        if (!effectiveScheduleTimerEnabled(scheduleTimerEnabled, examDate, slotLabel)) return null
         return examJoinBlockMessage(examDate, slotLabel, lateJoinMinutes, nowMs)
     }
+
+    /** Phase 1/2 — HP GK-style tests with exam date + slot always use schedule semantics. */
+    fun isScheduledExamTest(examDate: String?, slotLabel: String?): Boolean {
+        return !examDate.isNullOrBlank() && !slotLabel.isNullOrBlank()
+    }
+
+    fun effectiveScheduleTimerEnabled(
+        scheduleTimerEnabled: Boolean,
+        examDate: String?,
+        slotLabel: String?,
+    ): Boolean = scheduleTimerEnabled || isScheduledExamTest(examDate, slotLabel)
 
     /**
      * Resolve unlock/expiry for a locally stored applied test entry.
@@ -248,6 +259,14 @@ object TestScheduleUtils {
     /** True when home / preview UI should treat the pending result as unlocked. */
     fun isPendingResultReleaseReady(publishAtMillis: Long, nowMs: Long = System.currentTimeMillis()): Boolean =
         publishAtMillis <= 0L || nowMs >= publishAtMillis
+
+    fun formatPendingResultReleaseLabel(publishAtMillis: Long): String {
+        if (publishAtMillis <= 0L) return "Available now"
+        return runCatching {
+            val formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a", Locale.getDefault())
+            formatter.format(java.time.Instant.ofEpochMilli(publishAtMillis).atZone(EXAM_ZONE))
+        }.getOrDefault("-")
+    }
 
     private fun parseLocalExamDate(raw: String): LocalDate? {
         val trimmed = raw.trim()

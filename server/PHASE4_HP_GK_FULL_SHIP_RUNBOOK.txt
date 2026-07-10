@@ -1,0 +1,81 @@
+PHASE 4 — HP GK Full Cycle Ship (E2E verify + production deploy)
+================================================================
+
+Goal
+----
+Ship Phases 0–3 together with one offline E2E gate before production.
+No new feature code in Phase 4 — verification + deploy checklist only.
+
+What Phases 0–3 deliver
+-----------------------
+Phase 0  Admin: enable schedule timer (safe for manual tests)
+Phase 1  Server: 9 PM lock even if global timer OFF; date advance; apply fields
+Phase 2  Android: re-enroll sync, effective timer, View Result on preview
+Phase 3  Android: immediate result fix (no fake 3h countdown)
+
+Offline verify (run before any deploy)
+--------------------------------------
+  cd server
+  node scripts/verifyPhase4HpGkFullShip.js
+
+  Or step by step:
+  node scripts/verifyPhase0HpGkCycle.js
+  node scripts/verifyPhase1HpGkCycle.js
+  node scripts/verifyPhase2AndroidHpGk.js
+  node scripts/verifyPhase3ResultFlow.js
+  node scripts/e2eHpGkFullCyclePhase4.js
+
+Expected final line:
+  VERIFY_PHASE4_HP_GK_FULL_SHIP_OK
+
+Build Android APK
+-----------------
+  cd MockTestApp
+  .\gradlew.bat :app:assembleDebug
+
+  Copy to Desktop:
+  MockTestApp-debug-v1.0.9-PHASE4-HPGK-FULLSHIP.apk
+
+Production deploy order (safe)
+------------------------------
+1. OFFLINE: verifyPhase4HpGkFullShip.js → PASS
+2. SERVER: push code + restart API
+     ssh VPS
+     cd /var/www/mocktestapp && git pull
+     cd server && npm install --omit=dev
+     pm2 restart mocktest-api
+3. DB (one-time, if timer still OFF):
+     cd server
+     node scripts/phase0HpGkCycleSetup.js        # audit
+     node scripts/phase0HpGkCycleSetup.js --apply  # enable timer only
+4. APP: install PHASE4 APK on test device, then roll out
+5. SMOKE on device (HP GK):
+     a. Apply before 9 PM → countdown, no Start
+     b. At/after 9 PM → Start Test
+     c. Submit → View Result ready (immediate)
+     d. View result → cleared pending
+     e. Next day after rollover → can re-apply
+6. SMOKE isolation:
+     Bihar GK / ff → still instant start after apply
+
+Optional live API (read-only)
+-----------------------------
+  node scripts/e2eHpGkRescheduleProof.js
+  node scripts/verifyApplyStartPhase3.js
+
+Manual admin (NOT auto-changed)
+-------------------------------
+- resultVisibility: immediate (default) OR after_result_time (deferred countdown)
+- HP GK row: exam_date + 09:00 PM + dynamic_date ON + date_cycle_days=1
+
+Rollback
+--------
+- App: reinstall previous APK
+- Server: git revert + pm2 restart
+- Timer: Admin → Home Content → disable schedule timer
+
+Files added in Phase 4
+----------------------
+  server/scripts/e2eHpGkFullCyclePhase4.js
+  server/scripts/verifyPhase4HpGkFullShip.js
+  server/PHASE4_HP_GK_FULL_SHIP_RUNBOOK.txt

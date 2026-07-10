@@ -1,0 +1,70 @@
+PHASE 3 — HP GK Result Flow (immediate vs after_result_time)
+============================================================
+
+Goal
+----
+Fix Android pending-result storage/UI so:
+  • resultVisibility = immediate  → View Result ready right after submit (no fake 3h countdown)
+  • resultVisibility = after_result_time → home/preview countdown until release time
+
+Code changes (Android)
+----------------------
+1. AppPreferencesRepository.markPendingResultSubmittedNow
+   Uses TestScheduleUtils.resolvePendingResultPublishAtMillis — publishAt=0 stays 0.
+
+2. AppPreferencesRepository.pendingResultState
+   Returns a row when test name is set; publishAt=0 is valid (immediate).
+
+3. HomeScreenNew PendingResultCard
+   isImmediateRelease → ready UI, "Available now", no epoch date / no countdown.
+
+4. TestScheduleUtils.formatPendingResultReleaseLabel
+   Shared label for immediate vs scheduled release.
+
+Verify (local, no device)
+-------------------------
+  cd server
+  node scripts/verifyPhase3ResultFlow.js
+  node scripts/e2eImmediateResultCountdownProof.js
+
+Build APK
+---------
+  cd MockTestApp
+  .\gradlew.bat :app:assembleDebug
+
+  Suggested output name:
+  MockTestApp-debug-v1.0.9-PHASE3-HPGK-RESULT.apk
+
+Manual QA
+---------
+A) HP GK with resultVisibility = immediate (current production default)
+   1. Apply → Start Test (or direct start if timer off)
+   2. Submit quiz
+   3. Home: pending card shows "Ready to view" + View Result (no 3h timer)
+   4. Tap View Result → result screen opens
+   5. Same test cannot restart until result viewed/cleared
+
+B) Admin sets after_result_time (optional)
+   1. In admin test advanced config: resultVisibility = after_result_time
+   2. Submit → home shows countdown until release (~3h default or resultReleaseAt)
+   3. Preview applied card: "Result pending" until time elapses
+   4. After release: View Result enabled
+
+Admin note
+----------
+Phase 0 does NOT auto-change resultVisibility. Set after_result_time only if you want
+deferred results for HP GK. Immediate path must keep working for existing users.
+
+Deploy order
+------------
+1. Server Phase 1 already deployed (schedule/apply fields)
+2. Install Phase 3 APK on test device
+3. Optional: change HP GK resultVisibility in admin when ready for deferred mode
+
+Rollback
+--------
+Reinstall previous Phase 2 APK. No server migration required for Phase 3.
+
+Next: Phase 4 — full E2E verify + ship
+  node scripts/verifyPhase4HpGkFullShip.js
+  See server/PHASE4_HP_GK_FULL_SHIP_RUNBOOK.txt

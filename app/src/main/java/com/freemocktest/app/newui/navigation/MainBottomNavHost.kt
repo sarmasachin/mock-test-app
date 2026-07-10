@@ -640,6 +640,12 @@ fun MainBottomNavHost(
                             mainNavController.navigateMainTab(MainTabRoutes.Tests)
                         }
                     },
+                    onOpenPendingResult = { testName, answered, correct, wrong, total, publishAtMillis ->
+                        val safeName = testName.ifBlank { "Test" }
+                        mainNavController.navigate(
+                            "${RoutesNew.RESULT}/$safeName?answered=$answered&correct=$correct&wrong=$wrong&total=$total&publishAt=$publishAtMillis",
+                        )
+                    },
                 )
             }
 
@@ -756,7 +762,7 @@ fun MainBottomNavHost(
                                     wrong = wrong,
                                     total = total,
                                 )
-                                // Keep applied status until the user views their result (Phase 4).
+                                AppPreferencesRepository.removeAppliedTestSeriesNow(testTitle)
                                 mainNavController.goToHomeTab()
                             } catch (e: CancellationException) {
                                 throw e

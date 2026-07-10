@@ -49,8 +49,9 @@ function isPendingResultReleaseReady(publishAtMillis, nowMs) {
 }
 
 function pendingResultCardState(publishAtMillis, nowMs) {
-  const isReady = isPendingResultReleaseReady(publishAtMillis, nowMs);
-  const remainingMs = isReady ? 0 : Math.max(0, publishAtMillis - nowMs);
+  const isImmediateRelease = publishAtMillis <= 0;
+  const isReady = isImmediateRelease || nowMs >= publishAtMillis;
+  const remainingMs = isImmediateRelease ? 0 : Math.max(0, publishAtMillis - nowMs);
   const hours = Math.floor(remainingMs / 3_600_000);
   const mins = Math.floor((remainingMs % 3_600_000) / 60_000);
   const secs = Math.floor((remainingMs % 60_000) / 1_000);

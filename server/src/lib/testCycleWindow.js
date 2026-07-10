@@ -74,7 +74,7 @@ function parseCycleStartedMs(row) {
  * @returns {{ examStartMs: number, examEndMs: number, resolvedExamDate: string|null }}
  */
 function resolveExamWindowMs(row, nowMs = Date.now()) {
-  const resolvedExamDate = resolveExamDate(row);
+  const resolvedExamDate = resolveExamDate(row, nowMs);
   if (!resolvedExamDate) {
     return { examStartMs: Number.NaN, examEndMs: Number.NaN, resolvedExamDate: null };
   }

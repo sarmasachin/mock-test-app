@@ -579,6 +579,12 @@ data class ApplyTestResponse(
     @SerializedName("remainingSeats") val remainingSeats: Int = 0,
     @SerializedName("waitingPosition") val waitingPosition: Int = 0,
     @SerializedName("waitingTotal") val waitingTotal: Int = 0,
+    @SerializedName("examDate") val examDate: String? = null,
+    @SerializedName("slotLabel") val slotLabel: String? = null,
+    @SerializedName("canStart") val canStart: Boolean? = null,
+    @SerializedName("startBlockReason") val startBlockReason: String? = null,
+    @SerializedName("joinClosesAt") val joinClosesAt: String? = null,
+    @SerializedName("lastCycleStartedAt") val lastCycleStartedAt: String? = null,
 )
 
 data class TestWaitlistStatusResponse(

@@ -868,13 +868,12 @@ object AppPreferencesRepository {
     val pendingResultState: Flow<PendingResultState?>
         get() = storeOrNull()?.data?.map { prefs ->
             val name = prefs[keyPendingResultTestName].orEmpty().trim()
-            val publishAt = prefs[keyPendingResultPublishAt] ?: 0L
             if (name.isBlank()) {
                 null
             } else {
                 PendingResultState(
                     testName = name,
-                    publishAtMillis = publishAt.coerceAtLeast(0L),
+                    publishAtMillis = (prefs[keyPendingResultPublishAt] ?: 0L).coerceAtLeast(0L),
                     answered = (prefs[keyPendingResultAnswered] ?: 0).coerceAtLeast(0),
                     correct = (prefs[keyPendingResultCorrect] ?: 0).coerceAtLeast(0),
                     wrong = (prefs[keyPendingResultWrong] ?: 0).coerceAtLeast(0),
@@ -1056,7 +1055,9 @@ object AppPreferencesRepository {
                     lateJoinMinutes = lateJoinMinutes,
                 )
                 val unlockAt = when {
-                    !scheduleTimerEnabled && serverCanStart == true -> now
+                    serverCanStart == false -> timing.unlockAtMillis
+                    serverCanStart == true -> now
+                    !scheduleTimerEnabled -> now
                     else -> timing.unlockAtMillis
                 }
                 val expiresAt = joinClosesAtMillis?.takeIf { it > unlockAt }
@@ -1092,13 +1093,16 @@ object AppPreferencesRepository {
                     .filter { it.expiresAtMillis > now }
                 if (existing.isEmpty()) return@edit
                 val updated = existing.map { entry ->
-                    entry.copy(
-                        unlockAtMillis = now,
-                        scheduledStartAtMillis = 0L,
-                        expiresAtMillis = now + ttl,
-                        serverCanStart = true,
-                        startBlockReason = null,
-                    )
+                    // Phase 2: keep scheduled / server-gated rows when global CMS timer is off.
+                    if (entry.serverCanStart != null || entry.unlockAtMillis > now) {
+                        entry
+                    } else {
+                        entry.copy(
+                            unlockAtMillis = now,
+                            scheduledStartAtMillis = 0L,
+                            expiresAtMillis = now + ttl,
+                        )
+                    }
                 }
                 prefs[keyAppliedTestSeries] = encodeAppliedTestSeries(updated)
             }
@@ -1134,9 +1138,6 @@ object AppPreferencesRepository {
     fun markPendingResultViewedAndClear() {
         if (!::appContext.isInitialized) return
         scope.launch {
-            val viewedTestName = runCatching {
-                store().data.first()[keyPendingResultTestName].orEmpty().trim()
-            }.getOrDefault("")
             runCatching {
                 store().edit { prefs ->
                     prefs[keyPendingResultViewed] = 1
@@ -1149,9 +1150,6 @@ object AppPreferencesRepository {
                     prefs[keySubmittedAttemptJson] = ""
                 }
             }.onFailure { Log.e(TAG, "markPendingResultViewedAndClear failed", it) }
-            if (viewedTestName.isNotBlank()) {
-                removeAppliedTestSeriesNow(viewedTestName)
-            }
         }
     }
 

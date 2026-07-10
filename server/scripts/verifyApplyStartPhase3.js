@@ -137,10 +137,18 @@ async function auditPublishedTests(db) {
     });
 
     if (!scheduleTimerEnabled) {
-      ok = line(
-        startAccess.canStart === true,
-        `"${title}": timer OFF + applied → canStart=${startAccess.canStart}`,
-      ) && ok;
+      const scheduled = Boolean(String(examDate || '').trim()) && Boolean(slotLabel);
+      if (!scheduled) {
+        ok = line(
+          startAccess.canStart === true,
+          `"${title}": timer OFF + no schedule → canStart=${startAccess.canStart}`,
+        ) && ok;
+      } else {
+        ok = line(
+          typeof startAccess.canStart === 'boolean',
+          `"${title}": timer OFF + scheduled → canStart=${startAccess.canStart} (${startAccess.startBlockReason || 'ready'})`,
+        ) && ok;
+      }
     } else {
       ok = line(
         typeof startAccess.canStart === 'boolean',

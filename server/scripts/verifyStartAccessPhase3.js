@@ -67,6 +67,21 @@ ok = line(
 ) && ok;
 ok = line(beforeStart.joinClosesAt != null, 'timer on → joinClosesAt set') && ok;
 
+const scheduledGlobalOff = evaluateTestStartAccess({
+  alreadyAppliedInCurrentCycle: true,
+  scheduleTimerEnabled: false,
+  cyclePhase: 'live',
+  catalogError: null,
+  examDate: '2026-07-02',
+  slotLabel: '10:00 am',
+  lateJoinMinutes: 30,
+  attemptAccess: { allowed: true },
+  nowMs,
+  row: liveRow,
+  advancedConfig: {},
+});
+ok = line(scheduledGlobalOff.canStart === false, 'Phase 1: scheduled + global timer off → blocked before exam') && ok;
+
 const afterLateJoin = evaluateTestStartAccess({
   alreadyAppliedInCurrentCycle: true,
   scheduleTimerEnabled: true,

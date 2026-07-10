@@ -126,7 +126,14 @@
     "verify:reschedule-reapply-integrated-phase4": "node scripts/verifyRescheduleReapplyIntegratedPhase4.js",
     "verify:reschedule-reapply-all-phase4": "node scripts/verifyRescheduleReapplyAllPhase4.js",
     "e2e:reschedule-reapply-live-phase4": "node scripts/e2eRescheduleReapplyLivePhase4.js",
-    "verify:admin-reschedule-warning-phase5": "node scripts/verifyAdminRescheduleWarningPhase5.js"
+    "verify:admin-reschedule-warning-phase5": "node scripts/verifyAdminRescheduleWarningPhase5.js",
+    "verify:hp-gk-phase0": "node scripts/verifyPhase0HpGkCycle.js",
+    "verify:hp-gk-phase1": "node scripts/verifyPhase1HpGkCycle.js",
+    "verify:hp-gk-phase2": "node scripts/verifyPhase2AndroidHpGk.js",
+    "verify:hp-gk-phase3": "node scripts/verifyPhase3ResultFlow.js",
+    "e2e:hp-gk-full-cycle-phase4": "node scripts/e2eHpGkFullCyclePhase4.js",
+    "verify:hp-gk-phase4": "node scripts/verifyPhase4HpGkFullShip.js",
+    "verify:hp-gk-all": "node scripts/verifyPhase4HpGkFullShip.js"
   },
   "engines": {
     "node": ">=18"

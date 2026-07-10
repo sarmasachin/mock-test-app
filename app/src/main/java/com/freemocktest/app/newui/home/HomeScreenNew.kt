@@ -106,6 +106,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import com.freemocktest.app.BuildConfig
 import com.freemocktest.app.MockTestApp
+import com.freemocktest.app.util.TestScheduleUtils
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.data.ContentRepository
@@ -304,10 +305,11 @@ fun HomeScreenNew(
             )
         } else {
             val serverAuthoritative = eligible.serverCanStart != null
+            val effectiveTimer = scheduleTimerEnabled || eligible.scheduledStartAtMillis > 0L
             val remainingMs = when {
                 eligible.serverCanStart == true -> 0L
-                !scheduleTimerEnabled -> 0L
                 serverAuthoritative && eligible.serverCanStart == false -> 0L
+                !effectiveTimer -> 0L
                 else -> (eligible.startUnlockAtMillis(nowMs) - nowMs).coerceAtLeast(0L)
             }
             val hours = (remainingMs / 3_600_000L).toInt()
@@ -317,7 +319,7 @@ fun HomeScreenNew(
             val isLocked = when {
                 eligible.serverCanStart == true -> false
                 eligible.serverCanStart == false -> true
-                !scheduleTimerEnabled -> false
+                !effectiveTimer -> false
                 else -> remainingMs > 0L
             }
             val statusSubtitle = when {
@@ -1073,24 +1075,15 @@ private fun PendingResultCard(
 ) {
     val p = mockTestPalette()
     val shape = RoundedCornerShape(18.dp)
-    val isReady = com.freemocktest.app.util.TestScheduleUtils.isPendingResultReleaseReady(
-        publishAtMillis = publishAtMillis,
-        nowMs = nowMillis,
-    )
-    val remainingMs = if (isReady) 0L else (publishAtMillis - nowMillis).coerceAtLeast(0L)
+    val isImmediateRelease = publishAtMillis <= 0L
+    val remainingMs = if (isImmediateRelease) 0L else (publishAtMillis - nowMillis).coerceAtLeast(0L)
+    val isReady = isImmediateRelease || remainingMs <= 0L
     val hours = (remainingMs / 3_600_000L).toInt()
     val mins = ((remainingMs % 3_600_000L) / 60_000L).toInt()
     val secs = ((remainingMs % 60_000L) / 1_000L).toInt()
     val countdownText = String.format("%02d:%02d:%02d", hours, mins, secs)
     val releaseText = remember(publishAtMillis) {
-        if (publishAtMillis <= 0L) {
-            "Now"
-        } else {
-            runCatching {
-                val at = Instant.ofEpochMilli(publishAtMillis).atZone(ZoneId.systemDefault())
-                DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a").format(at)
-            }.getOrDefault("-")
-        }
+        TestScheduleUtils.formatPendingResultReleaseLabel(publishAtMillis)
     }
     val statusBg = if (isReady) Color(0xFFDCFCE7) else Color(0xFFEDE9FE)
     val statusText = if (isReady) Color(0xFF166534) else Color(0xFF5B21B6)
@@ -1168,7 +1161,7 @@ private fun PendingResultCard(
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = if (isReady) {
+                text = if (isImmediateRelease) {
                     "Your result is ready to view."
                 } else {
                     "Your result will be available on $releaseText."

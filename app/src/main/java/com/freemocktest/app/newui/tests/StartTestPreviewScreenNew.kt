@@ -108,6 +108,7 @@ fun StartTestPreviewScreenNew(
     onStartTest: (String) -> Unit,
     onApplyForTest: (String) -> Unit,
     onBrowseTests: () -> Unit = {},
+    onOpenPendingResult: (String, Int, Int, Int, Int, Long) -> Unit = { _, _, _, _, _, _ -> },
 ) {
     val p = mockTestPalette()
     val bg = Brush.verticalGradient(colors = p.gradientColors())
@@ -387,6 +388,7 @@ fun StartTestPreviewScreenNew(
                             lastPrimaryNavAt = now
                             onStartTest(title)
                         },
+                        onOpenPendingResult = onOpenPendingResult,
                     )
                 }
             } else if (showLoading) {
@@ -413,6 +415,7 @@ fun StartTestPreviewScreenNew(
                         lastPrimaryNavAt = now
                         onStartTest(title)
                     },
+                    onOpenPendingResult = onOpenPendingResult,
                 )
             } else if (showSpecificApply || showSpecificApplyBlocked) {
                 val test = specificTest!!
@@ -832,16 +835,22 @@ private fun AppliedTestStartCardSection(
     nowMs: Long,
     pendingResult: AppPreferencesRepository.PendingResultState?,
     onRequestStart: (String) -> Unit,
+    onOpenPendingResult: (String, Int, Int, Int, Int, Long) -> Unit,
 ) {
     val p = mockTestPalette()
     val name = entry.testName.trim()
+    val effectiveTimer = TestScheduleUtils.effectiveScheduleTimerEnabled(
+        scheduleTimerEnabled = scheduleTimerEnabled,
+        examDate = card.examDate,
+        slotLabel = card.slotLabel,
+    )
     val cardScheduledMs = TestScheduleUtils.parseExamStartMillis(card.examDate, card.slotLabel)
     val serverAuthoritative = entry.serverCanStart != null
     val effectiveUnlockMs = when {
-        serverAuthoritative && entry.serverCanStart == true && !scheduleTimerEnabled -> nowMs
-        scheduleTimerEnabled && cardScheduledMs != null && cardScheduledMs > nowMs -> cardScheduledMs
-        scheduleTimerEnabled && entry.scheduledStartAtMillis > nowMs -> entry.scheduledStartAtMillis
-        else -> if (scheduleTimerEnabled) entry.startUnlockAtMillis(nowMs) else nowMs
+        serverAuthoritative && entry.serverCanStart == true -> nowMs
+        effectiveTimer && cardScheduledMs != null && cardScheduledMs > nowMs -> cardScheduledMs
+        effectiveTimer && entry.scheduledStartAtMillis > nowMs -> entry.scheduledStartAtMillis
+        else -> if (effectiveTimer) entry.startUnlockAtMillis(nowMs) else nowMs
     }
     val remainingMs = (effectiveUnlockMs - nowMs).coerceAtLeast(0L)
     val totalLockMs = (entry.expiresAtMillis - effectiveUnlockMs).coerceAtLeast(1L)
@@ -852,6 +861,7 @@ private fun AppliedTestStartCardSection(
     val isLocked = when {
         serverAuthoritative && entry.serverCanStart == true -> false
         serverAuthoritative && entry.serverCanStart == false -> true
+        !effectiveTimer -> false
         else -> remainingMs > 0L
     }
     val joinAllowed = when {
@@ -864,10 +874,13 @@ private fun AppliedTestStartCardSection(
             nowMs = nowMs,
         )
     }
-    val lateJoinClosed = !serverAuthoritative && scheduleTimerEnabled && !isLocked && !joinAllowed &&
+    val lateJoinClosed = !serverAuthoritative && effectiveTimer && !isLocked && !joinAllowed &&
         TestScheduleUtils.isExamStartAllowed(card.examDate, card.slotLabel, nowMs)
     val isPendingResult = AppPreferencesRepository.isTestBlockedByPendingResult(name, pendingResult)
-    val isPendingResultWaiting = isPendingResult && !AppPreferencesRepository.isPendingResultReady(pendingResult)
+    val isPendingResultWaiting = isPendingResult && !AppPreferencesRepository.isPendingResultReady(pendingResult, nowMs)
+    val canViewResult = isPendingResult &&
+        pendingResult != null &&
+        AppPreferencesRepository.isPendingResultReady(pendingResult, nowMs)
     val canStartNow = !isPendingResult && joinAllowed && !isLocked && card.title.isNotBlank()
     val progress = if (isLocked) {
         1f - (remainingMs.toFloat() / totalLockMs.toFloat()).coerceIn(0f, 1f)
@@ -881,7 +894,7 @@ private fun AppliedTestStartCardSection(
             entry.startBlockReason!!
         lateJoinClosed ->
             "Late join closed at ${TestScheduleUtils.formatLateJoinClosedLabel(card.examDate, card.slotLabel, card.lateJoinMinutes)}"
-        isLocked && scheduleTimerEnabled && cardScheduledMs != null && cardScheduledMs > nowMs ->
+        isLocked && effectiveTimer && cardScheduledMs != null && cardScheduledMs > nowMs ->
             "Locked until ${TestScheduleUtils.formatExamStartLabel(card.examDate, card.slotLabel)}"
         isLocked -> "Starts in $countdown"
         else -> "Ready to start"
@@ -921,10 +934,22 @@ private fun AppliedTestStartCardSection(
     Spacer(Modifier.height(8.dp))
     Button(
         onClick = {
-            if (!canStartNow) return@Button
-            onRequestStart(card.title)
+            when {
+                canViewResult && pendingResult != null -> {
+                    AppPreferencesRepository.markPendingResultViewedAndClear()
+                    onOpenPendingResult(
+                        pendingResult.testName,
+                        pendingResult.answered,
+                        pendingResult.correct,
+                        pendingResult.wrong,
+                        pendingResult.total,
+                        pendingResult.publishAtMillis,
+                    )
+                }
+                canStartNow -> onRequestStart(card.title)
+            }
         },
-        enabled = canStartNow,
+        enabled = canViewResult || canStartNow,
         modifier = Modifier
             .fillMaxWidth()
             .height(52.dp),
@@ -938,7 +963,8 @@ private fun AppliedTestStartCardSection(
     ) {
         Icon(
             imageVector = when {
-                isPendingResult -> Icons.Outlined.Lock
+                canViewResult -> Icons.Outlined.PlayArrow
+                isPendingResultWaiting -> Icons.Outlined.Lock
                 isLocked || lateJoinClosed -> Icons.Outlined.Lock
                 else -> Icons.Outlined.PlayArrow
             },

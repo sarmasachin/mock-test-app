@@ -1,0 +1,51 @@
+Phase 2 — Android HP GK cycle UX
+=================================
+
+WHAT CHANGED
+------------
+1. TestScheduleUtils.kt
+   - effectiveScheduleTimerEnabled() — scheduled tests lock even if CMS timer OFF
+   - isScheduledExamTest() helper
+
+2. ApiModels.kt — ApplyTestResponse
+   - examDate, slotLabel, canStart, startBlockReason, joinClosesAt, lastCycleStartedAt
+
+3. ApplyForTestScreenNew.kt
+   - Always persist applied series after apply/re-enroll (server fields)
+   - Clear pending result on re-enroll for new cycle
+   - Clearer between-cycles message
+
+4. StartTestPreviewScreenNew.kt
+   - View Result button enabled when result ready (navigates to result)
+   - Effective timer on start cards
+
+5. AppliedTestHomeUi.kt + HomeScreenNew.kt
+   - Same effective timer + server canStart logic on Home cards
+
+6. AppPreferencesRepository.kt
+   - reconcileAppliedTestSeriesForTimerMode no longer wipes server locks
+   - addAppliedTestSeriesNow respects serverCanStart=false
+
+VERIFY (offline)
+----------------
+  cd server
+  node scripts/verifyPhase2AndroidHpGk.js
+
+BUILD APK
+---------
+  cd MockTestApp
+  .\gradlew :app:assembleDebug
+  Copy to Desktop: MockTestApp-debug-v1.0.9-PHASE2-HPGK.apk
+
+MANUAL QA
+---------
+1. HP GK apply before 9 PM → countdown locked (even if CMS timer OFF)
+2. 9 PM → Start Test works
+3. After submit → View Result button works on preview screen
+4. Re-apply after new cycle → date/countdown refresh
+5. ff / Bihar GK → still instant start after apply
+
+DEPLOY ORDER
+------------
+1. Phase 1 server deployed first (apply API schedule fields)
+2. Install Phase 2 APK on device
