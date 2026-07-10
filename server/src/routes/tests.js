@@ -50,7 +50,6 @@ const {
   resolveExamDate,
   resolveAttemptCycleStartedAtMs,
   buildMyTestApplicationItem,
-  buildMyTestApplicationItem,
 } = require('../lib/testApplicationCycle');
 const { resolveApplyWindowState } = require('../lib/testCycleWindow');
 
@@ -540,6 +539,7 @@ router.get('/my-applications', requireAuth, async (req, res) => {
     const items = [];
     for (const row of rowsRes.rows) {
       const appliedAtIso = row.applied_at ? new Date(row.applied_at).toISOString() : null;
+      const cycleState = evaluateApplicationCycleState(row, appliedAtIso, nowMs);
       const advancedConfig = normalizeTestAdvancedConfig(
         resolveAdvancedConfigForTest(advancedMap, row.id),
       );
@@ -621,7 +621,6 @@ router.get('/my-applications', requireAuth, async (req, res) => {
           capacityTotal,
         }),
       );
-      });
     }
     return res.json({ items });
   } catch (e) {
