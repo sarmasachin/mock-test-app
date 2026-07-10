@@ -46,6 +46,16 @@ const {
 } = require('./lib/testVisibility');
 const { cycleRepublishAtMs } = require('./lib/cycleRepublishGap');
 const {
+  loadResultUnlockEmailSettings,
+  isResultVisibilityDeferred,
+  isCycleRolloverDeferEnabled,
+  hasPendingDeferredResultsInCycle,
+} = require('./lib/resultUnlock');
+const {
+  logCycleSchedulerSkip,
+  logCycleSchedulerRollover,
+} = require('./lib/cycleSchedulerLog');
+const {
   shouldRunSchedulerRollover,
   resolveSchedulerCycleEndMs,
   resolveAdminCycleStartUpdate,
@@ -789,6 +799,8 @@ async function processTestCycleAutoReschedule() {
   try {
     const nowMs = Date.now();
     const advancedMap = await getSettingJson('testAdvancedConfigs', {});
+    const resultUnlockSettings = await loadResultUnlockEmailSettings(pool);
+    const deferRolloverForResults = isCycleRolloverDeferEnabled();
 
     const testsRes = await pool.query(
       `SELECT id, duration_minutes, last_cycle_started_at, exam_date, slot_label,
@@ -823,16 +835,19 @@ async function processTestCycleAutoReschedule() {
         );
         const locked = lockedRes.rows[0];
         if (!locked || locked.is_published !== true) {
+          logCycleSchedulerSkip(testId, 'not_published');
           await client.query('COMMIT');
           continue;
         }
         const lockedNowMs = Date.now();
         if (!shouldRunSchedulerRollover(locked, lockedNowMs)) {
+          logCycleSchedulerSkip(testId, 'cycle_not_ended_after_lock');
           await client.query('COMMIT');
           continue;
         }
         const lockedCycleEndMs = resolveSchedulerCycleEndMs(locked);
         if (!Number.isFinite(lockedCycleEndMs)) {
+          logCycleSchedulerSkip(testId, 'no_scheduler_cycle_end');
           await client.query('COMMIT');
           continue;
         }
@@ -842,8 +857,34 @@ async function processTestCycleAutoReschedule() {
           Number.isFinite(lockedCycleEndMs) &&
           lockedUpdatedMs > lockedCycleEndMs
         ) {
+          logCycleSchedulerSkip(testId, 'admin_updated_after_cycle_end', {
+            updatedAt: locked.updated_at,
+            cycleEndAt: new Date(lockedCycleEndMs).toISOString(),
+          });
           await client.query('COMMIT');
           continue;
+        }
+
+        const resultVisibility = String(adv?.resultVisibility || 'immediate').trim().toLowerCase();
+        if (
+          deferRolloverForResults &&
+          isResultVisibilityDeferred(resultVisibility)
+        ) {
+          const hasPendingResults = await hasPendingDeferredResultsInCycle({
+            db: client,
+            testId,
+            lastCycleStartedAt: locked.last_cycle_started_at,
+            delayHours: resultUnlockSettings.delayHours,
+            now: new Date(lockedNowMs),
+          });
+          if (hasPendingResults) {
+            logCycleSchedulerSkip(testId, 'pending_deferred_results', {
+              resultVisibility,
+              delayHours: resultUnlockSettings.delayHours,
+            });
+            await client.query('COMMIT');
+            continue;
+          }
         }
 
         await client.query(
@@ -856,6 +897,7 @@ async function processTestCycleAutoReschedule() {
         if (useLegacyCatalogUnpublish) {
           const republishAtMs = cycleRepublishAtMs(lockedCycleEndMs, adv);
           if (!Number.isFinite(republishAtMs)) {
+            logCycleSchedulerSkip(testId, 'legacy_republish_gap_invalid');
             await client.query('COMMIT');
             continue;
           }
@@ -866,6 +908,9 @@ async function processTestCycleAutoReschedule() {
             [testId],
           );
           await client.query('COMMIT');
+          logCycleSchedulerRollover(testId, 'legacy_unpublish', {
+            scheduleAtIso: new Date(republishAtMs).toISOString(),
+          });
           legacyCycleActions.push({
             testId,
             scheduleAtIso: new Date(republishAtMs).toISOString(),
@@ -878,6 +923,7 @@ async function processTestCycleAutoReschedule() {
             [testId],
           );
           await client.query('COMMIT');
+          logCycleSchedulerRollover(testId, 'standard_rollover');
           rolloverTestIds.push(testId);
         }
       } catch (e) {
@@ -1009,21 +1055,7 @@ async function processProfileReminderEmails() {
 async function processUnlockedResultEmails() {
   if (!isMailConfigured()) return;
   try {
-    const settingsRes = await pool.query(
-      `SELECT setting_value FROM app_settings WHERE setting_key = 'resultUnlockEmailSettings' LIMIT 1`,
-    );
-    let settings = { enabled: true, delayHours: 3 };
-    if (settingsRes.rows[0]) {
-      try {
-        const parsed = JSON.parse(String(settingsRes.rows[0].setting_value || '{}')) || {};
-        settings = {
-          enabled: parsed.enabled !== false,
-          delayHours: Math.max(0, Math.min(168, Number(parsed.delayHours ?? 3))),
-        };
-      } catch (_e) {
-        settings = { enabled: true, delayHours: 3 };
-      }
-    }
+    const settings = await loadResultUnlockEmailSettings(pool);
     if (!settings.enabled) return;
     const delayHours = settings.delayHours;
     const stateKey = 'resultUnlockEmailState';

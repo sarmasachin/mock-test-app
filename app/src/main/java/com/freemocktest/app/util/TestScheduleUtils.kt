@@ -232,6 +232,23 @@ object TestScheduleUtils {
         return resultReleaseAtMs?.takeIf { it > 0L } ?: defaultReleaseAtMs
     }
 
+    /**
+     * Persisted pending-result release time after submit.
+     * [submitPublishAtMillis] == 0 means immediate (ready now); must not be rewritten to a default delay.
+     */
+    fun resolvePendingResultPublishAtMillis(
+        submitPublishAtMillis: Long,
+        defaultDeferredReleaseAtMs: Long,
+    ): Long = when {
+        submitPublishAtMillis > 0L -> submitPublishAtMillis
+        submitPublishAtMillis == 0L -> 0L
+        else -> defaultDeferredReleaseAtMs
+    }
+
+    /** True when home / preview UI should treat the pending result as unlocked. */
+    fun isPendingResultReleaseReady(publishAtMillis: Long, nowMs: Long = System.currentTimeMillis()): Boolean =
+        publishAtMillis <= 0L || nowMs >= publishAtMillis
+
     private fun parseLocalExamDate(raw: String): LocalDate? {
         val trimmed = raw.trim()
         val patterns = listOf(

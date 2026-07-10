@@ -66,7 +66,7 @@ private fun defaultDynamicProfileMenuItems() = listOf(
     DynamicProfileMenuItem("edit-mobile", "Mobile number", "{value}", "/edit-mobile", true),
     DynamicProfileMenuItem("edit-dob", "Date of birth", "{value}", "/edit-dob", true),
     DynamicProfileMenuItem("edit-gender", "Gender", "{value}", "/edit-gender", true),
-    DynamicProfileMenuItem("edit-interests", "Meri interests", "{value}", "/edit-interests", true),
+    DynamicProfileMenuItem("edit-interests", "My interest", "{value}", "/edit-interests", true),
     DynamicProfileMenuItem("edit-password", "Password", "Change password (current + new + confirm)", "/edit-password", true),
     DynamicProfileMenuItem("verify-email", "Email verification", "Not verified", "/verify-email", true),
     DynamicProfileMenuItem("verify-phone", "Phone verification", "Not verified", "/verify-phone", true),
@@ -82,6 +82,14 @@ private fun defaultDynamicProfileMenuItems() = listOf(
     DynamicProfileMenuItem("delete-account", "Delete account", "Removes your account on the server and clears this device", "/delete-account", true),
 )
 
+/** Keep interests menu label consistent even when remote config uses legacy Hindi title. */
+private fun normalizeProfileMenuItemTitles(
+    items: List<DynamicProfileMenuItem>,
+): List<DynamicProfileMenuItem> =
+    items.map { item ->
+        if (item.path == "/edit-interests") item.copy(title = "My interest") else item
+    }
+
 /** When remote profile menu omits `/edit-interests`, insert after gender. */
 private fun mergeRemoteMenuWithInterestsIfMissing(
     mapped: List<DynamicProfileMenuItem>,
@@ -89,7 +97,7 @@ private fun mergeRemoteMenuWithInterestsIfMissing(
     if (mapped.any { it.path == "/edit-interests" }) return mapped
     val interestsItem = DynamicProfileMenuItem(
         id = "edit-interests",
-        title = "Meri interests",
+        title = "My interest",
         subtitle = "{value}",
         path = "/edit-interests",
         enabled = true,
@@ -183,34 +191,38 @@ fun ProfileScreenNew(
             profileStable = AppPreferencesRepository.peekEditableProfileNow()
             val cachedMenu = runCatching { ContentRepository.loadCachedProfileMenuItems() }.getOrDefault(emptyList())
             if (cachedMenu.isNotEmpty()) {
-                menuItems = mergeRemoteMenuWithInterestsIfMissing(
-                    mergeRemoteMenuWithDobIfMissing(
-                    cachedMenu.map {
-                        DynamicProfileMenuItem(
-                            id = it.id,
-                            title = it.title,
-                            subtitle = it.subtitle,
-                            path = it.path,
-                            enabled = it.enabled,
-                        )
-                    },
+                menuItems = normalizeProfileMenuItemTitles(
+                    mergeRemoteMenuWithInterestsIfMissing(
+                        mergeRemoteMenuWithDobIfMissing(
+                            cachedMenu.map {
+                                DynamicProfileMenuItem(
+                                    id = it.id,
+                                    title = it.title,
+                                    subtitle = it.subtitle,
+                                    path = it.path,
+                                    enabled = it.enabled,
+                                )
+                            },
+                        ),
                     ),
                 )
             }
             val remote = runCatching { ContentRepository.loadProfileMenuItems(forceRefresh = true) }.getOrDefault(emptyList())
             when {
                 remote.isNotEmpty() -> {
-                    menuItems = mergeRemoteMenuWithInterestsIfMissing(
-                        mergeRemoteMenuWithDobIfMissing(
-                        remote.map {
-                            DynamicProfileMenuItem(
-                                id = it.id,
-                                title = it.title,
-                                subtitle = it.subtitle,
-                                path = it.path,
-                                enabled = it.enabled,
-                            )
-                        },
+                    menuItems = normalizeProfileMenuItemTitles(
+                        mergeRemoteMenuWithInterestsIfMissing(
+                            mergeRemoteMenuWithDobIfMissing(
+                                remote.map {
+                                    DynamicProfileMenuItem(
+                                        id = it.id,
+                                        title = it.title,
+                                        subtitle = it.subtitle,
+                                        path = it.path,
+                                        enabled = it.enabled,
+                                    )
+                                },
+                            ),
                         ),
                     )
                 }

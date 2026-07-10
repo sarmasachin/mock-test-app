@@ -211,13 +211,18 @@ fun MainBottomNavHost(
     val showTestPendingBlockMessage: (String) -> Unit = { testName ->
         val pending = pendingResult
         if (pending != null && AppPreferencesRepository.isTestBlockedByPendingResult(testName, pending)) {
-            val formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a")
-            val whenText = runCatching {
-                formatter.format(Instant.ofEpochMilli(pending.publishAtMillis).atZone(ZoneId.systemDefault()))
-            }.getOrDefault("the scheduled time")
+            val message = if (AppPreferencesRepository.isPendingResultReady(pending)) {
+                "You have successfully submitted ${pending.testName}. View your result from Home."
+            } else {
+                val formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a")
+                val whenText = runCatching {
+                    formatter.format(Instant.ofEpochMilli(pending.publishAtMillis).atZone(ZoneId.systemDefault()))
+                }.getOrDefault("the scheduled time")
+                "You have successfully submitted ${pending.testName}. Your result will be available on $whenText."
+            }
             Toast.makeText(
                 context,
-                "You have successfully submitted ${pending.testName}. Your result will be available on $whenText.",
+                message,
                 Toast.LENGTH_LONG,
             ).show()
         }
@@ -751,7 +756,7 @@ fun MainBottomNavHost(
                                     wrong = wrong,
                                     total = total,
                                 )
-                                AppPreferencesRepository.removeAppliedTestSeriesNow(testTitle)
+                                // Keep applied status until the user views their result (Phase 4).
                                 mainNavController.goToHomeTab()
                             } catch (e: CancellationException) {
                                 throw e

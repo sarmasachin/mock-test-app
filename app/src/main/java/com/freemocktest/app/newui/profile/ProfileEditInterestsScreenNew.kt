@@ -136,7 +136,7 @@ fun ProfileEditInterestsScreen(
                 }
                 Spacer(Modifier.size(4.dp))
                 Text(
-                    text = "Meri interests",
+                    text = "My interest",
                     color = p.textPrimary,
                     fontSize = 22.sp,
                     fontWeight = FontWeight.ExtraBold,

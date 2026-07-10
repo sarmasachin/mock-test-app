@@ -68,7 +68,6 @@ import com.freemocktest.app.newui.theme.palette.mockTestPalette
 import com.freemocktest.app.util.TestApplyState
 import com.freemocktest.app.util.TestCyclePhase
 import com.freemocktest.app.util.TestScheduleUtils
-import com.freemocktest.app.util.UserInterestUtils
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -120,20 +119,6 @@ fun StartTestPreviewScreenNew(
     val pendingResult by AppPreferencesRepository.pendingResultState.collectAsState(initial = null)
     val loginPickedTitles by AppPreferencesRepository.loginPickedTestTitles.collectAsState(initial = emptyList())
     val loginPickedSubcategories by AppPreferencesRepository.loginPickedSubcategories.collectAsState(initial = emptyList())
-    val showAllTests by AppPreferencesRepository.showAllTestsCatalog.collectAsState(initial = true)
-    val normalizedSubs = remember(loginPickedSubcategories) {
-        UserInterestUtils.normalizeInterestSubcategories(loginPickedSubcategories)
-    }
-    val interestDisplayLabels = remember(normalizedSubs, loginPickedTitles) {
-        if (normalizedSubs.isNotEmpty()) {
-            normalizedSubs
-        } else {
-            loginPickedTitles
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .distinctBy { it.lowercase(Locale.US) }
-        }
-    }
     val pickedTitlesForApply = remember(loginPickedTitles, loginPickedSubcategories) {
         val titles = loginPickedTitles
             .map { it.trim() }
@@ -357,41 +342,6 @@ fun StartTestPreviewScreenNew(
                 )
             }
             Spacer(Modifier.height(12.dp))
-
-            if (interestDisplayLabels.isNotEmpty()) {
-                val fromSubs = normalizedSubs.isNotEmpty()
-                val label = when {
-                    fromSubs && interestDisplayLabels.size == 1 -> "Aapka exam"
-                    fromSubs -> "Aapke exams"
-                    interestDisplayLabels.size == 1 -> "Your selected test"
-                    else -> "Your selected tests"
-                }
-                Text(
-                    text = label,
-                    color = p.textPrimary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = interestDisplayLabels.joinToString(separator = " · "),
-                    color = p.textSecondary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                if (fromSubs && !showAllTests) {
-                    Spacer(Modifier.height(6.dp))
-                    TextButton(onClick = onBrowseTests) {
-                        Text(
-                            text = "Saare tests browse karein",
-                            color = p.systemBlue,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-            }
 
             if (showAppliedList) {
                 Text(
@@ -917,6 +867,7 @@ private fun AppliedTestStartCardSection(
     val lateJoinClosed = !serverAuthoritative && scheduleTimerEnabled && !isLocked && !joinAllowed &&
         TestScheduleUtils.isExamStartAllowed(card.examDate, card.slotLabel, nowMs)
     val isPendingResult = AppPreferencesRepository.isTestBlockedByPendingResult(name, pendingResult)
+    val isPendingResultWaiting = isPendingResult && !AppPreferencesRepository.isPendingResultReady(pendingResult)
     val canStartNow = !isPendingResult && joinAllowed && !isLocked && card.title.isNotBlank()
     val progress = if (isLocked) {
         1f - (remainingMs.toFloat() / totalLockMs.toFloat()).coerceIn(0f, 1f)
@@ -924,7 +875,8 @@ private fun AppliedTestStartCardSection(
         1f
     }
     val statusMessage = when {
-        isPendingResult -> "Result will be available soon"
+        isPendingResultWaiting -> "Result will be available soon"
+        isPendingResult -> "View your result from Home"
         serverAuthoritative && !entry.startBlockReason.isNullOrBlank() && !canStartNow ->
             entry.startBlockReason!!
         lateJoinClosed ->
@@ -935,7 +887,8 @@ private fun AppliedTestStartCardSection(
         else -> "Ready to start"
     }
     val buttonLabel = when {
-        isPendingResult -> "Result Pending"
+        isPendingResultWaiting -> "Result Pending"
+        isPendingResult -> "View Result"
         lateJoinClosed -> "Late Join Closed"
         isLocked -> "Start Test (Locked)"
         else -> "Start Test"

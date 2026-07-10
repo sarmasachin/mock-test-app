@@ -67,6 +67,7 @@ const ADMIN_ROUTE_RULES = [
   { method: 'DELETE', pattern: /^\/audit-logs$/, permission: 'audit_clear' },
 
   { method: 'GET', pattern: /^\/tests$/, permission: 'tab_all_tests' },
+  { method: 'GET', pattern: /^\/tests\/[^/]+\/cycle-diagnostics$/, permission: 'tab_all_tests' },
   { method: 'POST', pattern: /^\/tests\/badge\/bulk-live$/, permission: 'tab_all_tests' },
   { method: 'POST', pattern: /^\/tests$/, permission: 'tab_all_tests' },
   { method: 'PATCH', pattern: /^\/tests\/[^/]+$/, permission: 'tab_all_tests' },

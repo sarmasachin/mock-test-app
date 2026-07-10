@@ -1269,6 +1269,46 @@ button:active {
   font-weight: 500;
 }
 
+.all-tests-cycle-diagnostics {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+}
+
+.all-tests-cycle-diagnostics-title {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  color: #0f172a;
+}
+
+.all-tests-cycle-diagnostics-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.all-tests-cycle-diagnostics-list li {
+  display: grid;
+  grid-template-columns: minmax(140px, 38%) 1fr;
+  gap: 8px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.all-tests-cycle-diagnostics-list li > span:first-child {
+  color: #64748b;
+  font-weight: 600;
+}
+
+.all-tests-cycle-diagnostics-list li > span:last-child {
+  color: #0f172a;
+  word-break: break-word;
+}
+
 .field-required-star {
   color: #dc2626;
   font-weight: 800;

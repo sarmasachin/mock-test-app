@@ -165,6 +165,26 @@ type TestItem = {
   last_cycle_started_at?: string | null;
 };
 
+type TestCycleDiagnostics = {
+  modeLabel?: string;
+  cycleStartedAt?: string | null;
+  examStartAt?: string | null;
+  examEndAt?: string | null;
+  schedulerCycleEndAt?: string | null;
+  resolvedExamDate?: string | null;
+  shouldRunSchedulerRollover?: boolean;
+  rolloverDue?: boolean;
+  rolloverBlockedReason?: string | null;
+  rolloverWouldExecute?: boolean;
+  pendingDeferredResults?: boolean;
+  resultVisibility?: string;
+  resultUnlockDelayHours?: number;
+  schedulerDeferResultsEnabled?: boolean;
+  applyOpen?: boolean;
+  applyBlockReason?: string | null;
+  examInProgress?: boolean;
+};
+
 type QuestionItem = {
   id: number;
   test_id: string;
@@ -1758,6 +1778,8 @@ function TestsTab({
   const [editingTestId, setEditingTestId] = useState('');
   /** Snapshot of schedule fields when edit began — used for reschedule enrollment warning. */
   const [editingScheduleBaseline, setEditingScheduleBaseline] = useState<AdminScheduleBaseline | null>(null);
+  const [cycleDiagnostics, setCycleDiagnostics] = useState<TestCycleDiagnostics | null>(null);
+  const [cycleDiagnosticsLoading, setCycleDiagnosticsLoading] = useState(false);
   const testFormRef = useRef<HTMLFormElement | null>(null);
   const [kind, setKind] = useState<TestKind>('mock');
   const [isPublished, setIsPublished] = useState(true);
@@ -2135,6 +2157,7 @@ function TestsTab({
   function resetTestFormToCreate() {
     setEditingTestId('');
     setEditingScheduleBaseline(null);
+    setCycleDiagnostics(null);
     setTitle('');
     setSlug('');
     setSubcategory('');
@@ -2176,6 +2199,47 @@ function TestsTab({
     setIsPublished(true);
     setDynamicFluctuationOnPublish(true);
   }
+
+  function formatCycleDiagnosticTime(iso: string | null | undefined): string {
+    if (!iso) return '—';
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return '—';
+    return new Date(ms).toLocaleString();
+  }
+
+  function formatRolloverBlockedReason(reason: string | null | undefined): string {
+    switch (reason) {
+      case 'pending_deferred_results':
+        return 'Waiting for deferred result release (Phase 3 gate)';
+      default:
+        return reason || '—';
+    }
+  }
+
+  async function loadCycleDiagnostics(testId: string) {
+    const id = testId.trim();
+    if (!id) {
+      setCycleDiagnostics(null);
+      return;
+    }
+    setCycleDiagnosticsLoading(true);
+    try {
+      const res = await apiClient.get(`/admin/tests/${id}/cycle-diagnostics`);
+      setCycleDiagnostics(res.data?.diagnostics || null);
+    } catch {
+      setCycleDiagnostics(null);
+    } finally {
+      setCycleDiagnosticsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!editingTestId) {
+      setCycleDiagnostics(null);
+      return;
+    }
+    void loadCycleDiagnostics(editingTestId);
+  }, [editingTestId]);
 
   function captureScheduleBaseline(t: TestItem) {
     setEditingScheduleBaseline({
@@ -2350,6 +2414,7 @@ function TestsTab({
         }
         setEditingTestId(editingId);
         setAdvancedOpen(true);
+        void loadCycleDiagnostics(editingId);
       } else {
         await apiClient.post('/admin/tests', data);
         pushToast('success', `Test "${data.title}" created successfully.`);
@@ -2751,6 +2816,79 @@ function TestsTab({
 
             <div className="all-tests-section">
               <h4>Schedule & Stats</h4>
+              {editingTestId ? (
+                <div className="all-tests-cycle-diagnostics" role="region" aria-label="Cycle diagnostics">
+                  <p className="all-tests-cycle-diagnostics-title">
+                    <strong>Cycle diagnostics</strong>
+                    {cycleDiagnosticsLoading ? ' (loading…)' : ''}
+                  </p>
+                  {cycleDiagnostics ? (
+                    <ul className="all-tests-cycle-diagnostics-list">
+                      <li>
+                        <span>Mode</span>
+                        <span>{cycleDiagnostics.modeLabel || '—'}</span>
+                      </li>
+                      <li>
+                        <span>Resolved exam date</span>
+                        <span>{cycleDiagnostics.resolvedExamDate || '—'}</span>
+                      </li>
+                      <li>
+                        <span>Cycle started</span>
+                        <span>{formatCycleDiagnosticTime(cycleDiagnostics.cycleStartedAt)}</span>
+                      </li>
+                      <li>
+                        <span>Exam window</span>
+                        <span>
+                          {formatCycleDiagnosticTime(cycleDiagnostics.examStartAt)} →{' '}
+                          {formatCycleDiagnosticTime(cycleDiagnostics.examEndAt)}
+                        </span>
+                      </li>
+                      <li>
+                        <span>Scheduler cycle end</span>
+                        <span>{formatCycleDiagnosticTime(cycleDiagnostics.schedulerCycleEndAt)}</span>
+                      </li>
+                      <li>
+                        <span>Apply window</span>
+                        <span>
+                          {cycleDiagnostics.applyOpen
+                            ? 'Open'
+                            : cycleDiagnostics.applyBlockReason || 'Closed'}
+                        </span>
+                      </li>
+                      <li>
+                        <span>Result visibility</span>
+                        <span>{cycleDiagnostics.resultVisibility || 'immediate'}</span>
+                      </li>
+                      <li>
+                        <span>Pending deferred results</span>
+                        <span>{cycleDiagnostics.pendingDeferredResults ? 'Yes' : 'No'}</span>
+                      </li>
+                      <li>
+                        <span>Rollover due now</span>
+                        <span>{cycleDiagnostics.rolloverDue ? 'Yes' : 'No'}</span>
+                      </li>
+                      <li>
+                        <span>Rollover blocked</span>
+                        <span>{formatRolloverBlockedReason(cycleDiagnostics.rolloverBlockedReason)}</span>
+                      </li>
+                      <li>
+                        <span>Scheduler would rollover</span>
+                        <span>{cycleDiagnostics.rolloverWouldExecute ? 'Yes' : 'No'}</span>
+                      </li>
+                    </ul>
+                  ) : !cycleDiagnosticsLoading ? (
+                    <p className="muted">Diagnostics unavailable for this test.</p>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={cycleDiagnosticsLoading}
+                    onClick={() => void loadCycleDiagnostics(editingTestId)}
+                  >
+                    Refresh diagnostics
+                  </button>
+                </div>
+              ) : null}
               {rescheduleRenewalPending ? (
                 <p className="all-tests-cycle-notice" role="status">
                   {buildRescheduleInlineNotice()}

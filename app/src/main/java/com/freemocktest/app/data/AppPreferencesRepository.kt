@@ -214,6 +214,14 @@ object AppPreferencesRepository {
         return pending.testName.equals(name, ignoreCase = true)
     }
 
+    fun isPendingResultReady(pending: PendingResultState?, nowMs: Long = System.currentTimeMillis()): Boolean {
+        if (pending == null) return false
+        return com.freemocktest.app.util.TestScheduleUtils.isPendingResultReleaseReady(
+            publishAtMillis = pending.publishAtMillis,
+            nowMs = nowMs,
+        )
+    }
+
     fun canStartTest(testName: String, pending: PendingResultState?): Boolean =
         !isTestBlockedByPendingResult(testName, pending)
 
@@ -861,12 +869,12 @@ object AppPreferencesRepository {
         get() = storeOrNull()?.data?.map { prefs ->
             val name = prefs[keyPendingResultTestName].orEmpty().trim()
             val publishAt = prefs[keyPendingResultPublishAt] ?: 0L
-            if (name.isBlank() || publishAt <= 0L) {
+            if (name.isBlank()) {
                 null
             } else {
                 PendingResultState(
                     testName = name,
-                    publishAtMillis = publishAt,
+                    publishAtMillis = publishAt.coerceAtLeast(0L),
                     answered = (prefs[keyPendingResultAnswered] ?: 0).coerceAtLeast(0),
                     correct = (prefs[keyPendingResultCorrect] ?: 0).coerceAtLeast(0),
                     wrong = (prefs[keyPendingResultWrong] ?: 0).coerceAtLeast(0),
@@ -953,7 +961,10 @@ object AppPreferencesRepository {
         if (!::appContext.isInitialized) return
         val safeName = testName.trim().ifBlank { "Test" }
         val defaultReleaseAt = System.currentTimeMillis() + BuildConfig.RESULT_RELEASE_DELAY_HOURS * HourMs
-        val safePublish = publishAtMillis.takeIf { it > 0L } ?: defaultReleaseAt
+        val safePublish = com.freemocktest.app.util.TestScheduleUtils.resolvePendingResultPublishAtMillis(
+            submitPublishAtMillis = publishAtMillis,
+            defaultDeferredReleaseAtMs = defaultReleaseAt,
+        )
         val safeAnswered = answered.coerceAtLeast(0)
         val safeCorrect = correct.coerceAtLeast(0)
         val safeWrong = wrong.coerceAtLeast(0)
@@ -1123,6 +1134,9 @@ object AppPreferencesRepository {
     fun markPendingResultViewedAndClear() {
         if (!::appContext.isInitialized) return
         scope.launch {
+            val viewedTestName = runCatching {
+                store().data.first()[keyPendingResultTestName].orEmpty().trim()
+            }.getOrDefault("")
             runCatching {
                 store().edit { prefs ->
                     prefs[keyPendingResultViewed] = 1
@@ -1135,6 +1149,9 @@ object AppPreferencesRepository {
                     prefs[keySubmittedAttemptJson] = ""
                 }
             }.onFailure { Log.e(TAG, "markPendingResultViewedAndClear failed", it) }
+            if (viewedTestName.isNotBlank()) {
+                removeAppliedTestSeriesNow(viewedTestName)
+            }
         }
     }
 

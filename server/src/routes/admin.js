@@ -70,6 +70,7 @@ const {
 } = require('../lib/adminPermissions');
 const { adminPermissionGuard } = require('../middleware/adminPermissionGuard');
 const { buildAdminTestCycleFields } = require('../lib/adminTestCycleStatus');
+const { buildAdminTestCycleDiagnostics } = require('../lib/adminTestCycleDiagnostics');
 const { resolveAdminCycleStartUpdate } = require('../lib/testCycleWindow');
 const { loadPublishScheduleItemsSafe } = require('../lib/testResolve');
 const { republishTestNow } = require('../lib/testRepublishNow');
@@ -2787,6 +2788,31 @@ router.get('/tests', async (_req, res) => {
   }
 });
 
+router.get('/tests/:id/cycle-diagnostics', async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(id)) return res.status(400).json({ error: 'Invalid test id' });
+  try {
+    const advancedMap = await getJsonSetting('testAdvancedConfigs', {});
+    const { rows } = await pool.query(
+      `SELECT id, slug, title, is_published, duration_minutes, exam_date, slot_label,
+              dynamic_date_enabled, date_cycle_days, last_cycle_started_at, result_release_at,
+              enrolled_count, updated_at
+       FROM tests
+       WHERE id = $1::uuid
+       LIMIT 1`,
+      [id],
+    );
+    const row = rows[0];
+    if (!row) return res.status(404).json({ error: 'Test not found' });
+    const advanced_config = resolveAdvancedConfigForTest(advancedMap, id) || {};
+    const diagnostics = await buildAdminTestCycleDiagnostics(pool, row, advanced_config);
+    return res.json({ diagnostics });
+  } catch (e) {
+    console.error('admin_test_cycle_diagnostics_error', id, e);
+    return res.status(500).json({ error: 'Failed to load cycle diagnostics' });
+  }
+});
+
 router.post('/tests/:id/republish-now', async (req, res) => {
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid test id' });
@@ -3034,6 +3060,7 @@ router.patch('/tests/:id', async (req, res) => {
     const txResult = await withPgTransaction(async (client) => {
       const before = await client.query(
         `SELECT id, title, is_published, last_cycle_started_at, enrolled_count,
+                exam_date, slot_label, dynamic_date_enabled, date_cycle_days, duration_minutes,
                 COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
          FROM tests
          WHERE id = $1::uuid

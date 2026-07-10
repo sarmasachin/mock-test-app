@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.TextButton
@@ -283,7 +284,6 @@ fun SeeAllCategoriesScreenNew(
     }
     val rows = shownItems.chunked(2)
     val title = when {
-        level1 == null && interestFilterActive -> "Mere exams"
         level1 == null -> "Exam Categories"
         level2 == null -> level1 ?: "Exam Categories"
         else -> level2 ?: "Exam Categories"
@@ -315,13 +315,18 @@ fun SeeAllCategoriesScreenNew(
                     fontWeight = FontWeight.SemiBold,
                 )
             }
-            if (UserInterestUtils.normalizeInterestSubcategories(userInterests).isNotEmpty()) {
+            if (level1 == null) {
                 Spacer(Modifier.height(10.dp))
-                InterestCatalogToggleRow(
+                ExamCatalogModeToggleRow(
                     showAllTests = showAllTests,
-                    onToggle = {
+                    onSelectMyMockTests = {
                         scope.launch {
-                            AppPreferencesRepository.setShowAllTestsCatalog(!showAllTests)
+                            AppPreferencesRepository.setShowAllTestsCatalog(false)
+                        }
+                    },
+                    onSelectAllMockTests = {
+                        scope.launch {
+                            AppPreferencesRepository.setShowAllTestsCatalog(true)
                         }
                     },
                 )
@@ -352,7 +357,7 @@ fun SeeAllCategoriesScreenNew(
                         },
                     ) {
                         Text(
-                            text = "Saare tests dekho",
+                            text = "All Mock Test",
                             color = p.systemBlue,
                             fontWeight = FontWeight.Bold,
                         )
@@ -432,31 +437,58 @@ fun SeeAllCategoriesScreenNew(
 }
 
 @Composable
-private fun InterestCatalogToggleRow(
+private fun ExamCatalogModeToggleRow(
     showAllTests: Boolean,
-    onToggle: () -> Unit,
+    onSelectMyMockTests: () -> Unit,
+    onSelectAllMockTests: () -> Unit,
 ) {
-    val p = mockTestPalette()
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(
-            text = if (showAllTests) "Saare exams dikh rahe hain" else "Sirf aapke chune exams",
-            color = p.textSecondary,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
+        ExamCatalogModeChip(
+            label = "My Mock Test",
+            selected = !showAllTests,
+            onClick = onSelectMyMockTests,
             modifier = Modifier.weight(1f),
         )
-        TextButton(onClick = onToggle) {
-            Text(
-                text = if (showAllTests) "Sirf mere tests" else "Saare tests dekho",
-                color = p.systemBlue,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-            )
-        }
+        ExamCatalogModeChip(
+            label = "All Mock Test",
+            selected = showAllTests,
+            onClick = onSelectAllMockTests,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun ExamCatalogModeChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val p = mockTestPalette()
+    val shape = RoundedCornerShape(12.dp)
+    val bg = if (selected) p.primaryButton else p.surface
+    val textColor = if (selected) p.onPrimaryButton else p.textSecondary
+    val borderColor = if (selected) p.primaryButton else p.textSecondary.copy(alpha = 0.25f)
+    Box(
+        modifier = modifier
+            .height(42.dp)
+            .clip(shape)
+            .border(1.dp, borderColor, shape)
+            .background(bg)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = textColor,
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 

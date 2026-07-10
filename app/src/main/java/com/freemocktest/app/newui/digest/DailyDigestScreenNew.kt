@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -58,6 +59,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.platform.LocalContext
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
@@ -243,7 +245,6 @@ fun DailyDigestScreenNew(
     var quizStartedAtMillis by remember { mutableStateOf<Long?>(null) }
     var questionStartedAtMillis by remember { mutableStateOf<Long?>(null) }
     var submittedAtMillis by remember { mutableStateOf<Long?>(null) }
-    var showSolution by remember { mutableStateOf(false) }
     var isSubmitting by remember { mutableStateOf(false) }
     var resultSyncMessage by remember { mutableStateOf<String?>(null) }
     var dailyDigestShareSubject by remember { mutableStateOf("Daily Quiz — Mock Test App") }
@@ -299,7 +300,6 @@ fun DailyDigestScreenNew(
         submittedAtMillis = null
         quizStartedAtMillis = null
         questionStartedAtMillis = null
-        showSolution = false
         isSubmitting = false
         resultSyncMessage = null
         dailyQuizRank = null
@@ -421,6 +421,17 @@ fun DailyDigestScreenNew(
     val isSelectedQuizDay = selectedDate == effectiveQuizDay
     val canTakeTodayQuiz = !quizLoading && quizItems.isNotEmpty() && isSelectedQuizDay
     val currentQuizItem = quizItems.getOrNull(currentQuestionIndex)
+
+    BackHandler(enabled = showResult) {
+        showResult = false
+        submittedAtMillis = null
+    }
+    BackHandler(enabled = showQuiz && !showResult) {
+        showQuiz = false
+        selectedOptionIndex = null
+        currentQuestionIndex = 0
+        pendingQuestionResults = emptyList()
+    }
 
     if (!showQuiz && !showResult) {
         DailyQuizDatePickerScreen(
@@ -563,7 +574,6 @@ fun DailyDigestScreenNew(
                     questionStartedAtMillis = System.currentTimeMillis()
                 } else {
                     submittedAtMillis = now
-                    showSolution = false
                     showQuiz = false
                     showResult = true
                     val dayForSave = currentQuizDay ?: selectedDate
@@ -630,12 +640,9 @@ fun DailyDigestScreenNew(
             syncMessage = resultSyncMessage,
             scoreVisible = scoreVisible,
             timeTakenSeconds = resultTimeSec,
-            showSolution = showSolution,
-            onBack = onBack,
             onClose = {
                 showResult = false
                 submittedAtMillis = null
-                showSolution = false
             },
             onReAttempt = {
                 if (quizItems.isEmpty()) {
@@ -651,19 +658,8 @@ fun DailyDigestScreenNew(
                     val now = System.currentTimeMillis()
                     quizStartedAtMillis = now
                     questionStartedAtMillis = now
-                    showSolution = false
                     showResult = false
                     showQuiz = true
-                }
-            },
-            onSolution = {
-                val hasAnyExplanation = savedDayResult?.questions?.any {
-                    it.explanation.isNotBlank()
-                } == true
-                if (!hasAnyExplanation) {
-                    Toast.makeText(context, "Solution not available for this quiz.", Toast.LENGTH_SHORT).show()
-                } else {
-                    showSolution = !showSolution
                 }
             },
             shareSubject = dailyQuizResultShareSubject,
@@ -793,7 +789,7 @@ private fun DailyQuizResultLiveScreen(
                 .padding(horizontal = 14.dp, vertical = 12.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { onClose(); onBack() }) {
+                IconButton(onClick = onClose) {
                     Icon(Icons.Rounded.Close, contentDescription = "Close", tint = Color(0xFF555555))
                 }
                 Text(
@@ -1210,6 +1206,63 @@ private fun LegendRow(label: String, color: Color) {
     }
 }
 
+private enum class DailyQuizResultSection(val label: String) {
+    OVERVIEW("Overview"),
+    LEADERBOARD("Leaderboard"),
+    QUESTION_ANALYSIS("Questions"),
+    GRAPH_ANALYSIS("Analysis"),
+    ANSWER_REVIEW("Answers"),
+    SOLUTION("Solution"),
+}
+
+@Composable
+private fun DailyQuizResultTabBar(
+    activeSection: DailyQuizResultSection,
+    onSectionSelected: (DailyQuizResultSection) -> Unit,
+) {
+    val tabs = listOf(
+        DailyQuizResultSection.OVERVIEW,
+        DailyQuizResultSection.LEADERBOARD,
+        DailyQuizResultSection.QUESTION_ANALYSIS,
+        DailyQuizResultSection.GRAPH_ANALYSIS,
+        DailyQuizResultSection.ANSWER_REVIEW,
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(top = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        tabs.forEach { section ->
+            val selected = activeSection == section
+            TextButton(
+                onClick = {
+                    onSectionSelected(if (selected) DailyQuizResultSection.OVERVIEW else section)
+                },
+                modifier = Modifier
+                    .height(40.dp)
+                    .border(
+                        width = 1.dp,
+                        color = if (selected) DailyBlue else Color(0xFFE2E8F0),
+                        shape = RoundedCornerShape(20.dp),
+                    )
+                    .background(
+                        color = if (selected) Color(0xFFE8F0FF) else Color.White,
+                        shape = RoundedCornerShape(20.dp),
+                    ),
+            ) {
+                Text(
+                    text = section.label,
+                    color = if (selected) DailyBlue else Color(0xFF64748B),
+                    fontSize = 13.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun DailyQuizResultScreen(
     modifier: Modifier,
@@ -1223,11 +1276,8 @@ private fun DailyQuizResultScreen(
     syncMessage: String?,
     scoreVisible: Boolean,
     timeTakenSeconds: Long,
-    showSolution: Boolean,
-    onBack: () -> Unit,
     onClose: () -> Unit,
     onReAttempt: () -> Unit,
-    onSolution: () -> Unit,
     shareSubject: String,
     shareTemplate: String,
 ) {
@@ -1266,13 +1316,19 @@ private fun DailyQuizResultScreen(
         }
     }.joinToString("\n\n")
     var leaderboard by remember(quizShareDay, quizScope) { mutableStateOf<DailyQuizRepository.Leaderboard?>(null) }
-    var leaderboardLoading by remember(quizShareDay, quizScope) { mutableStateOf(true) }
+    var leaderboardLoading by remember(quizShareDay, quizScope) { mutableStateOf(false) }
+    var leaderboardFetched by remember(quizShareDay, quizScope) { mutableStateOf(false) }
+    var activeSection by remember { mutableStateOf(DailyQuizResultSection.OVERVIEW) }
+    val hasSolution = solutionText.isNotBlank()
 
-    LaunchedEffect(quizShareDay, quizScope, rank, rankTotal) {
+    LaunchedEffect(quizShareDay, quizScope, rank, rankTotal, activeSection) {
+        if (activeSection != DailyQuizResultSection.LEADERBOARD) return@LaunchedEffect
+        if (leaderboardFetched) return@LaunchedEffect
         leaderboardLoading = true
         leaderboard = withContext(Dispatchers.IO) {
             DailyQuizRepository.loadLeaderboard(quizShareDay, scope = quizScope)
         }
+        leaderboardFetched = true
         leaderboardLoading = false
     }
 
@@ -1294,9 +1350,25 @@ private fun DailyQuizResultScreen(
                     shape = DailyCardRadius,
                 ) { Text("Re Attempt", color = Color.White, fontSize = 15.sp) }
                 Button(
-                    onClick = onSolution,
+                    onClick = {
+                        if (!hasSolution) {
+                            Toast.makeText(context, "Solution not available for this quiz.", Toast.LENGTH_SHORT).show()
+                        } else {
+                            activeSection = if (activeSection == DailyQuizResultSection.SOLUTION) {
+                                DailyQuizResultSection.OVERVIEW
+                            } else {
+                                DailyQuizResultSection.SOLUTION
+                            }
+                        }
+                    },
                     modifier = Modifier.weight(1f).height(50.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF14B97A)),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (activeSection == DailyQuizResultSection.SOLUTION) {
+                            Color(0xFF0D9668)
+                        } else {
+                            Color(0xFF14B97A)
+                        },
+                    ),
                     shape = DailyCardRadius,
                 ) { Text("Solution", color = Color.White, fontSize = 15.sp) }
             }
@@ -1327,7 +1399,7 @@ private fun DailyQuizResultScreen(
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = { onClose(); onBack() }) {
+                IconButton(onClick = onClose) {
                     Icon(Icons.Rounded.Close, contentDescription = "Close", tint = Color(0xFF555555))
                 }
                 Spacer(Modifier.weight(1f))
@@ -1381,118 +1453,140 @@ private fun DailyQuizResultScreen(
                 }
             }
 
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = DailyPanelRadius,
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFDDF7FA)),
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Box(modifier = Modifier.size(56.dp).clip(CircleShape).background(Color(0xFFEAF0F2)), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Person, contentDescription = null, tint = Color(0xFF8397A3), modifier = Modifier.size(32.dp))
-                    }
-                    Text("Daily Quiz", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Color(0xFF1652D4))
-                    Text(displayName, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = Color(0xFF2B2B2B))
-                    Text("ID: $userCodeLine · $quizDateLabel", color = Color(0xFF4E4E4E), fontSize = 14.sp)
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ScoreBox(
-                            title = "Daily Quiz Score",
-                            value = visibleScore,
-                            subtitle = "Out of $visibleOutOf",
-                            valueColor = Color(0xFF10B981),
-                            modifier = Modifier.weight(1f),
-                        )
-                        ScoreBox(
-                            title = "Daily Quiz Rank",
-                            value = if (scoreVisible && rank != null && rank > 0) rank.toString() else "-",
-                            subtitle = if (rankTotal != null && rankTotal > 0) {
-                                "Out of $rankTotal"
-                            } else {
-                                "Same day players"
-                            },
-                            valueColor = Color(0xFF2563EB),
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "Time Taken : ${String.format("%02d", minutes)} min, ${String.format("%02d", seconds)} sec",
-                        color = Color(0xFF454545),
-                        fontSize = 14.sp,
-                    )
-                }
-            }
-
-            DailyQuizLeaderboardSection(
-                quizDayLabel = quizDateLabel,
-                loading = leaderboardLoading,
-                leaderboard = leaderboard,
-                scoreVisible = scoreVisible,
-                fallbackRank = rank,
-                fallbackRankTotal = rankTotal,
+            DailyQuizResultTabBar(
+                activeSection = activeSection,
+                onSectionSelected = { activeSection = it },
             )
 
-            AnalysisCard(questions = questions)
-            DonutCard(
-                title = "Daily Quiz — Brief Analysis",
-                centerText = "Brief",
-                values = dailyQuizDonutSegments(correctCount, wrongCount, skippedCount),
-                sideStats = "Correct - $correctCount      Wrong - $wrongCount      Skipped - $skippedCount",
-            )
-            DonutCard(
-                title = "Daily Quiz — Accuracy",
-                centerText = "Accuracy\n$accuracyPct",
-                values = if (scoreVisible) {
-                    dailyQuizDonutSegments(correctCount, wrongCount, skippedCount)
-                } else {
-                    listOf(100f to Color(0xFFE7EBEF))
-                },
-                sideStats = "Correct - $correctCount      Wrong - $wrongCount      Skipped - $skippedCount",
-            )
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
-                shape = DailyPanelRadius,
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-            ) {
-                Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
-                    Text("Daily Quiz — Answer Review", color = Color(0xFF2E2E2E), fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-                    Spacer(Modifier.height(8.dp))
-                    if (questions.isEmpty()) {
-                        Text("No answers recorded.", color = Color(0xFF4A4A4A), fontSize = 14.sp)
-                    } else {
-                        questions.forEachIndexed { index, q ->
-                            val qStatus = resolveDailyQuizQuestionStatus(q.selectedOptionIndex, q.correctIndex)
-                            val yourAns = q.selectedOptionIndex?.let { idx -> q.options.getOrNull(idx) } ?: "Not answered"
-                            val correctAns = q.options.getOrNull(q.correctIndex).orEmpty()
+            when (activeSection) {
+                DailyQuizResultSection.OVERVIEW -> {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                        shape = DailyPanelRadius,
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFDDF7FA)),
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Box(modifier = Modifier.size(56.dp).clip(CircleShape).background(Color(0xFFEAF0F2)), contentAlignment = Alignment.Center) {
+                                Icon(Icons.Rounded.Person, contentDescription = null, tint = Color(0xFF8397A3), modifier = Modifier.size(32.dp))
+                            }
+                            Text("Daily Quiz", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Color(0xFF1652D4))
+                            Text(displayName, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = Color(0xFF2B2B2B))
+                            Text("ID: $userCodeLine · $quizDateLabel", color = Color(0xFF4E4E4E), fontSize = 14.sp)
+                            Spacer(Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                ScoreBox(
+                                    title = "Daily Quiz Score",
+                                    value = visibleScore,
+                                    subtitle = "Out of $visibleOutOf",
+                                    valueColor = Color(0xFF10B981),
+                                    modifier = Modifier.weight(1f),
+                                )
+                                ScoreBox(
+                                    title = "Daily Quiz Rank",
+                                    value = if (scoreVisible && rank != null && rank > 0) rank.toString() else "-",
+                                    subtitle = if (rankTotal != null && rankTotal > 0) {
+                                        "Out of $rankTotal"
+                                    } else {
+                                        "Same day players"
+                                    },
+                                    valueColor = Color(0xFF2563EB),
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            Spacer(Modifier.height(10.dp))
                             Text(
-                                "Q${index + 1}: ${qStatus.label()}",
-                                color = qStatus.color(),
-                                fontWeight = FontWeight.SemiBold,
+                                "Time Taken : ${String.format("%02d", minutes)} min, ${String.format("%02d", seconds)} sec",
+                                color = Color(0xFF454545),
                                 fontSize = 14.sp,
                             )
-                            Spacer(Modifier.height(4.dp))
-                            Text("Your answer: $yourAns", color = Color(0xFF4A4A4A), fontSize = 14.sp)
-                            Text("Correct answer: $correctAns", color = Color(0xFF4A4A4A), fontSize = 14.sp)
-                            if (index < questions.lastIndex) {
-                                Spacer(Modifier.height(10.dp))
+                        }
+                    }
+                    Text(
+                        "Tap Leaderboard, Questions, Analysis, or Answers above to view details.",
+                        color = Color(0xFF64748B),
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(top = 12.dp),
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                DailyQuizResultSection.LEADERBOARD -> {
+                    DailyQuizLeaderboardSection(
+                        quizDayLabel = quizDateLabel,
+                        loading = leaderboardLoading || !leaderboardFetched,
+                        leaderboard = leaderboard,
+                        scoreVisible = scoreVisible,
+                        fallbackRank = rank,
+                        fallbackRankTotal = rankTotal,
+                    )
+                }
+                DailyQuizResultSection.QUESTION_ANALYSIS -> {
+                    AnalysisCard(questions = questions)
+                }
+                DailyQuizResultSection.GRAPH_ANALYSIS -> {
+                    DonutCard(
+                        title = "Daily Quiz — Brief Analysis",
+                        centerText = "Brief",
+                        values = dailyQuizDonutSegments(correctCount, wrongCount, skippedCount),
+                        sideStats = "Correct - $correctCount      Wrong - $wrongCount      Skipped - $skippedCount",
+                    )
+                    DonutCard(
+                        title = "Daily Quiz — Accuracy",
+                        centerText = "Accuracy\n$accuracyPct",
+                        values = if (scoreVisible) {
+                            dailyQuizDonutSegments(correctCount, wrongCount, skippedCount)
+                        } else {
+                            listOf(100f to Color(0xFFE7EBEF))
+                        },
+                        sideStats = "Correct - $correctCount      Wrong - $wrongCount      Skipped - $skippedCount",
+                    )
+                }
+                DailyQuizResultSection.ANSWER_REVIEW -> {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+                        shape = DailyPanelRadius,
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
+                            Text("Daily Quiz — Answer Review", color = Color(0xFF2E2E2E), fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+                            Spacer(Modifier.height(8.dp))
+                            if (questions.isEmpty()) {
+                                Text("No answers recorded.", color = Color(0xFF4A4A4A), fontSize = 14.sp)
+                            } else {
+                                questions.forEachIndexed { index, q ->
+                                    val qStatus = resolveDailyQuizQuestionStatus(q.selectedOptionIndex, q.correctIndex)
+                                    val yourAns = q.selectedOptionIndex?.let { idx -> q.options.getOrNull(idx) } ?: "Not answered"
+                                    val correctAns = q.options.getOrNull(q.correctIndex).orEmpty()
+                                    Text(
+                                        "Q${index + 1}: ${qStatus.label()}",
+                                        color = qStatus.color(),
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 14.sp,
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    Text("Your answer: $yourAns", color = Color(0xFF4A4A4A), fontSize = 14.sp)
+                                    Text("Correct answer: $correctAns", color = Color(0xFF4A4A4A), fontSize = 14.sp)
+                                    if (index < questions.lastIndex) {
+                                        Spacer(Modifier.height(10.dp))
+                                    }
+                                }
                             }
                         }
                     }
                 }
-            }
-            if (showSolution && solutionText.isNotBlank()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
-                    shape = DailyPanelRadius,
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
-                        Text("Solution", color = Color(0xFF2E2E2E), fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-                        Spacer(Modifier.height(8.dp))
-                        Text(solutionText, color = Color(0xFF4A4A4A), fontSize = 14.sp, lineHeight = 21.sp)
+                DailyQuizResultSection.SOLUTION -> {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+                        shape = DailyPanelRadius,
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
+                            Text("Solution", color = Color(0xFF2E2E2E), fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+                            Spacer(Modifier.height(8.dp))
+                            Text(solutionText, color = Color(0xFF4A4A4A), fontSize = 14.sp, lineHeight = 21.sp)
+                        }
                     }
                 }
             }
