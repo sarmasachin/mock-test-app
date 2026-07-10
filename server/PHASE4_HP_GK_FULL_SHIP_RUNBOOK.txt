@@ -18,6 +18,9 @@ Offline verify (run before any deploy)
   cd server
   node scripts/verifyPhase4HpGkFullShip.js
 
+  On VPS (no APK build): same command — APK check is skipped automatically.
+  On dev machine before APK ship: node scripts/verifyPhase4HpGkFullShip.js --require-apk
+
   Or step by step:
   node scripts/verifyPhase0HpGkCycle.js
   node scripts/verifyPhase1HpGkCycle.js

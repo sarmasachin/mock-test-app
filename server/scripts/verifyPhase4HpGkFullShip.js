@@ -6,6 +6,7 @@
  *
  * Usage:
  *   node scripts/verifyPhase4HpGkFullShip.js
+ *   node scripts/verifyPhase4HpGkFullShip.js --require-apk
  */
 
 const { execSync } = require('child_process');
@@ -33,6 +34,7 @@ const requiredRunbooks = [
   'PHASE1_HP_GK_CYCLE_RUNBOOK.txt',
   'PHASE2_HP_GK_CYCLE_RUNBOOK.txt',
   'PHASE3_HP_GK_RESULT_RUNBOOK.txt',
+  'PHASE4_HP_GK_FULL_SHIP_RUNBOOK.txt',
 ];
 
 const requiredAppFiles = [
@@ -58,6 +60,7 @@ function line(ok, msg) {
 }
 
 function main() {
+  const requireApk = process.argv.includes('--require-apk');
   console.log('=== Phase 4: HP GK full ship verification ===\n');
   let ok = true;
 
@@ -77,9 +80,16 @@ function main() {
     path.join(appRoot, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'),
     path.join(appRoot, '..', 'MockTestApp-debug-v1.0.9-PHASE3-HPGK-RESULT.apk'),
     path.join(appRoot, '..', 'MockTestApp-debug-v1.0.9-PHASE4-HPGK-FULLSHIP.apk'),
+    path.join(appRoot, '..', 'MockTestApp-debug-v1.0.9-LATEST.apk'),
   ];
   const apkFound = apkCandidates.find((p) => fs.existsSync(p));
-  ok = line(Boolean(apkFound), `Debug APK present (${apkFound ? path.basename(apkFound) : 'run gradlew assembleDebug'})`) && ok;
+  if (apkFound) {
+    ok = line(true, `Debug APK present (${path.basename(apkFound)})`) && ok;
+  } else if (requireApk) {
+    ok = line(false, 'Debug APK missing (run gradlew assembleDebug on dev machine)') && ok;
+  } else {
+    console.log('SKIP  Debug APK (not on server — build locally with gradlew assembleDebug)');
+  }
 
   const testsJs = fs.readFileSync(path.join(appRoot, 'server/src/routes/tests.js'), 'utf8');
   ok = line(testsJs.includes('buildApplyJsonBody') || testsJs.includes('buildApplyResponseBody'), 'tests.js apply response schedule fields wired') && ok;
