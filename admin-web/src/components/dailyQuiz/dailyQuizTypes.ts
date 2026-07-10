@@ -361,13 +361,24 @@ export function normalizeDailyQuizAdminStats(raw: unknown): DailyQuizAdminStatsD
   };
 }
 
+export type DailyQuizAnalyticsTab = Exclude<DailyQuizDashboardTab, 'overview'>;
+
+export const DAILY_QUIZ_ANALYTICS_TABS: ReadonlyArray<{
+  id: DailyQuizAnalyticsTab;
+  label: string;
+  description: string;
+}> = [
+  { id: 'leaderboard', label: 'Leaderboard', description: 'Daily player rankings' },
+  { id: 'questionAnalysis', label: 'Question Analysis', description: 'Per-question performance' },
+  { id: 'answerReview', label: 'Answer Review', description: 'Student answer details' },
+];
+
+/** @deprecated Use DAILY_QUIZ_ANALYTICS_TABS — overview is always visible above tabs. */
 export const DAILY_QUIZ_DASHBOARD_TABS: ReadonlyArray<{
   id: DailyQuizDashboardTab;
   label: string;
   description: string;
 }> = [
   { id: 'overview', label: 'Overview', description: 'Trends and recent activity' },
-  { id: 'leaderboard', label: 'Leaderboard', description: 'Daily player rankings' },
-  { id: 'questionAnalysis', label: 'Question Analysis', description: 'Per-question performance' },
-  { id: 'answerReview', label: 'Answer Review', description: 'Student answer details' },
+  ...DAILY_QUIZ_ANALYTICS_TABS,
 ];

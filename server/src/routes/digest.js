@@ -5,13 +5,8 @@ const { pool } = require('../db');
 const { clampMcqCorrectIndex } = require('../mcqShuffle');
 const {
   seededRandom,
-  shuffleQuizOptions,
-  selectDailyQuizItemsForDay,
-  filterEligibleDailyQuizItems,
-  DAILY_QUIZ_SCOPE_ALL_INDIA,
   loadDailyQuizSettings,
   resolveDailyKey,
-  loadPublishedDailyQuizItems,
 } = require('../lib/dailyQuizUtils');
 
 const router = express.Router();
@@ -94,28 +89,13 @@ router.get('/today', async (_req, res) => {
   }
 });
 
-router.get('/quiz-today', async (_req, res) => {
-  try {
-    const items = await loadPublishedDailyQuizItems();
-    if (!items.length) {
-      return res.status(404).json({ error: 'No daily quiz content available' });
-    }
-    const schedule = await loadDailyQuizSettings();
-    const { dayKey, quizDay } = resolveDailyKey(Date.now(), schedule);
-    const allIndiaPool = filterEligibleDailyQuizItems(items, { scope: DAILY_QUIZ_SCOPE_ALL_INDIA });
-    const quizItems = selectDailyQuizItemsForDay(allIndiaPool, dayKey, quizDay, schedule);
-    if (!quizItems.length) {
-      return res.status(404).json({ error: 'No daily quiz content available' });
-    }
-    return res.json({
-      quizDay,
-      questionCount: quizItems.length,
-      items: quizItems,
-    });
-  } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Failed to load daily quiz' });
-  }
+/** @deprecated Login-only app — use GET /v1/daily-quiz/today (auth + scope). */
+router.get('/quiz-today', (_req, res) => {
+  return res.status(410).json({
+    error: 'Daily quiz requires sign-in. Use GET /v1/daily-quiz/today with Authorization.',
+    loginRequired: true,
+    replacement: '/v1/daily-quiz/today',
+  });
 });
 
 module.exports = router;

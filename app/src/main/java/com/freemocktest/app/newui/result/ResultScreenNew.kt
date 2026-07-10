@@ -164,8 +164,8 @@ fun ResultScreenNew(
             }
             val submitted = runCatching {
                 val owner = cacheUserScope?.trim().orEmpty().ifBlank {
-                    AppPreferencesRepository.peekEditableProfileNow().email.trim().ifBlank { "guest" }
-                }
+                    AppPreferencesRepository.peekEditableProfileNow().email.trim()
+                }.ifBlank { return@runCatching null }
                 AppPreferencesRepository.peekSubmittedAttemptSnapshot(owner, testName)?.questions?.size
             }.getOrNull()
             if ((submitted ?: 0) > 0) {
@@ -198,16 +198,16 @@ fun ResultScreenNew(
     val hasQuestionData = (questionCount ?: 0) > 0
     val canOpenDetailViews = !isQuestionDataLoading && hasQuestionData
     val answerKeyButtonText = when {
-        isQuestionDataLoading -> "Answer Key • Loading..."
-        questionsLoadFailed -> "Answer Key • Unavailable"
-        !hasQuestionData -> "Answer Key • Not available"
-        isAnswerKeyLocked -> "Answer Key • $answerKeyCountdown"
+        isQuestionDataLoading -> "Answer Key ? Loading..."
+        questionsLoadFailed -> "Answer Key ? Unavailable"
+        !hasQuestionData -> "Answer Key ? Not available"
+        isAnswerKeyLocked -> "Answer Key ? $answerKeyCountdown"
         else -> "Answer Key"
     }
     val reviewButtonText = when {
-        isQuestionDataLoading -> "Review • Loading..."
-        questionsLoadFailed -> "Review • Unavailable"
-        !hasQuestionData -> "Review • Not available"
+        isQuestionDataLoading -> "Review ? Loading..."
+        questionsLoadFailed -> "Review ? Unavailable"
+        !hasQuestionData -> "Review ? Not available"
         else -> "Review"
     }
 
@@ -426,7 +426,7 @@ fun ResultScreenNew(
                         onClick = {
                             try {
                                 val now = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a").format(LocalDateTime.now())
-                                val userName = profile.displayName.ifBlank { "Guest User" }
+                                val userName = profile.displayName.ifBlank { "User" }
                                 val userId = profile.userIdFormatted ?: "000000"
                                 val cardBitmap = createResultShareCardBitmap(
                                     userName = userName,
@@ -454,7 +454,7 @@ fun ResultScreenNew(
                                 }
                                 context.startActivity(Intent.createChooser(send, "Share score"))
                             } catch (_: ActivityNotFoundException) {
-                                // No share handler; ignore — avoids crash on stripped-down builds.
+                                // No share handler; ignore ? avoids crash on stripped-down builds.
                             } catch (_: Exception) {
                                 // Ignore share failures to keep result flow safe.
                             }

@@ -63,9 +63,9 @@ function main() {
 
   ok =
     line(
-      digest.includes('filterEligibleDailyQuizItems') &&
-        digest.includes('selectDailyQuizItemsForDay(allIndiaPool'),
-      'digest GET /quiz-today uses all_india filtered daily picker',
+      digest.includes('res.status(410)') &&
+        digest.includes('/v1/daily-quiz/today'),
+      'digest GET /quiz-today deprecated — use auth /v1/daily-quiz/today',
     ) && ok;
 
   ok =

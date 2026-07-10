@@ -76,10 +76,11 @@ function main() {
 
   ok =
     line(
-      digest.includes('filterEligibleDailyQuizItems') &&
-        digest.includes('DAILY_QUIZ_SCOPE_ALL_INDIA') &&
-        digest.includes('selectDailyQuizItemsForDay(allIndiaPool'),
-      'digest /quiz-today serves all_india pool only (public fallback)',
+      digest.includes('res.status(410)') &&
+        digest.includes('loginRequired: true') &&
+        digest.includes('/v1/daily-quiz/today') &&
+        !digest.includes('selectDailyQuizItemsForDay(allIndiaPool'),
+      'digest /quiz-today deprecated — auth /v1/daily-quiz/today only',
     ) && ok;
 
   ok =

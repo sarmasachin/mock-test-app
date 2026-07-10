@@ -101,15 +101,18 @@ object DailyQuizRepository {
     fun isLoggedIn(): Boolean = !AuthRepository.peekAccessToken().isNullOrBlank()
 
     /**
-     * Phase 2 — Logged-in users: server attempt for [day] is source of truth (404 ⇒ not attempted).
-     * Guests: local owner-scoped cache only.
+     * Logged-in users only: server attempt for [day] is source of truth (404 ⇒ not attempted).
+     * Rank uses the same delivery [scope] as submit and leaderboard.
      */
-    suspend fun loadDayResultForCurrentUser(day: LocalDate): AppPreferencesRepository.DailyQuizDayResult? =
+    suspend fun loadDayResultForCurrentUser(
+        day: LocalDate,
+        scope: DailyQuizScopeSelection = DailyQuizScopeSelection.AllIndia,
+    ): AppPreferencesRepository.DailyQuizDayResult? =
         withContext(Dispatchers.IO) {
-            if (isLoggedIn()) {
-                return@withContext loadDayFromServer(day)
-            }
-            AppPreferencesRepository.loadDailyQuizDayResult(day)
+            if (!isLoggedIn()) return@withContext null
+            val local = AppPreferencesRepository.loadDailyQuizDayResult(day)
+            val server = loadDayFromServer(day, scope)
+            server ?: local
         }
 
     suspend fun syncHistoryFromServer(): SyncedHistory? = withContext(Dispatchers.IO) {
@@ -134,9 +137,29 @@ object DailyQuizRepository {
 
                     val session = dtos.toLocalSession(day) ?: return@forEach
 
+                    val prior = AppPreferencesRepository.loadDailyQuizDayResult(day)
+
+                    val merged = if (prior != null) {
+
+                        session.copy(
+
+                            rank = prior.rank,
+
+                            rankTotal = prior.rankTotal,
+
+                            scopeKey = prior.scopeKey,
+
+                        )
+
+                    } else {
+
+                        session
+
+                    }
+
                     dates.add(day)
 
-                    attemptsByDay[day] = session
+                    attemptsByDay[day] = merged
 
                 }
 
@@ -151,6 +174,14 @@ object DailyQuizRepository {
                 AppPreferencesRepository.replaceDailyQuizResultsForCurrentUser(emptyMap())
 
                 SyncedHistory(emptySet(), emptyMap())
+
+            } else if (e.code() == 401) {
+
+                Log.w(TAG, "syncHistoryFromServer http 401: session expired", e)
+
+                runCatching { AuthRepository.clearSession() }
+
+                null
 
             } else {
 
@@ -172,7 +203,10 @@ object DailyQuizRepository {
 
 
 
-    suspend fun loadDayFromServer(day: LocalDate): AppPreferencesRepository.DailyQuizDayResult? =
+    suspend fun loadDayFromServer(
+        day: LocalDate,
+        scope: DailyQuizScopeSelection = DailyQuizScopeSelection.AllIndia,
+    ): AppPreferencesRepository.DailyQuizDayResult? =
 
         withContext(Dispatchers.IO) {
 
@@ -180,9 +214,15 @@ object DailyQuizRepository {
 
             try {
 
-                val res = RetrofitProvider.appApi.getDailyQuizAttempt(day.toString())
+                val scopeMode = if (scope.isState) DailyQuizScopeSelection.MODE_STATE else DailyQuizScopeSelection.MODE_ALL_INDIA
+                val scopeState = scope.stateName.trim().takeIf { scope.isState && it.isNotBlank() }
+                val res = RetrofitProvider.appApi.getDailyQuizAttempt(
+                    quizDay = day.toString(),
+                    scope = scopeMode,
+                    state = scopeState,
+                )
 
-                val mapped = res.toLocalSession() ?: return@withContext null
+                val mapped = res.toLocalSession(fallbackScopeKey = scope.cacheKey()) ?: return@withContext null
 
                 AppPreferencesRepository.saveDailyQuizDayResult(mapped)
 
@@ -196,11 +236,19 @@ object DailyQuizRepository {
 
                     null
 
+                } else if (e.code() == 401) {
+
+                    Log.w(TAG, "loadDayFromServer http 401: session expired", e)
+
+                    runCatching { AuthRepository.clearSession() }
+
+                    null
+
                 } else {
 
                     Log.w(TAG, "loadDayFromServer http ${e.code()}: ${parseHttpError(e)}", e)
 
-                    null
+                    AppPreferencesRepository.loadDailyQuizDayResult(day)
 
                 }
 
@@ -208,7 +256,7 @@ object DailyQuizRepository {
 
                 Log.w(TAG, "loadDayFromServer", e)
 
-                null
+                AppPreferencesRepository.loadDailyQuizDayResult(day)
 
             }
 
@@ -297,6 +345,8 @@ object DailyQuizRepository {
 
         itemId: String,
 
+        scope: DailyQuizScopeSelection? = null,
+
     ): ServerResult = withContext(Dispatchers.IO) {
 
         if (!isLoggedIn()) {
@@ -335,6 +385,10 @@ object DailyQuizRepository {
 
                 clientSubmissionId = UUID.randomUUID().toString(),
 
+                scope = scope?.mode,
+
+                state = scope?.stateName?.takeIf { scope.isState && it.isNotBlank() },
+
             )
 
             val res = RetrofitProvider.appApi.submitDailyQuizAttempt(body)
@@ -351,9 +405,11 @@ object DailyQuizRepository {
 
             val summary = res.summary
 
+            val resolvedScopeKey = res.scopeKey?.takeIf { it.isNotBlank() } ?: scope?.cacheKey()
+
             val mapped = if (attempts.isNotEmpty() && summary != null) {
 
-                summary.toLocalSession(snapshot.day, attempts, snapshot.savedAtMillis)
+                summary.toLocalSession(snapshot.day, attempts, snapshot.savedAtMillis, resolvedScopeKey)
 
             } else {
 
@@ -461,7 +517,9 @@ object DailyQuizRepository {
 
             val res = RetrofitProvider.appApi.submitDailyQuizBatch(body)
 
-            val mapped = res.toLocalSession(snapshot.day, snapshot.savedAtMillis)
+            val resolvedScopeKey = res.scopeKey?.takeIf { it.isNotBlank() } ?: scope?.cacheKey()
+
+            val mapped = res.toLocalSession(snapshot.day, snapshot.savedAtMillis, resolvedScopeKey)
 
                 ?: return@withContext ServerResult.Failure("Server returned an incomplete Daily Quiz response.")
 
@@ -566,14 +624,15 @@ object DailyQuizRepository {
 
 
     private fun com.freemocktest.app.data.remote.DailyQuizDayAttemptResponse.toLocalSession(
-
+        fallbackScopeKey: String? = null,
         savedAtMillis: Long = System.currentTimeMillis(),
-
     ): AppPreferencesRepository.DailyQuizDayResult? {
 
         val day = runCatching { LocalDate.parse(quizDay) }.getOrNull() ?: return null
 
-        return summary.toLocalSession(day, attempts, savedAtMillis)
+        val resolvedScopeKey = scopeKey?.takeIf { it.isNotBlank() } ?: fallbackScopeKey
+
+        return summary.toLocalSession(day, attempts, savedAtMillis, resolvedScopeKey)
 
     }
 
@@ -585,9 +644,15 @@ object DailyQuizRepository {
 
         savedAtMillis: Long,
 
-    ): AppPreferencesRepository.DailyQuizDayResult? =
+        fallbackScopeKey: String? = null,
 
-        summary.toLocalSession(day, attempts, savedAtMillis)
+    ): AppPreferencesRepository.DailyQuizDayResult? {
+
+        val resolvedScopeKey = scopeKey?.takeIf { it.isNotBlank() } ?: fallbackScopeKey
+
+        return summary.toLocalSession(day, attempts, savedAtMillis, resolvedScopeKey)
+
+    }
 
 
 
@@ -598,6 +663,8 @@ object DailyQuizRepository {
         attempts: List<DailyQuizAttemptDto>,
 
         savedAtMillis: Long,
+
+        scopeKey: String? = null,
 
     ): AppPreferencesRepository.DailyQuizDayResult? {
 
@@ -618,6 +685,8 @@ object DailyQuizRepository {
             rank = rank,
 
             rankTotal = rankTotal,
+
+            scopeKey = scopeKey,
 
         )
 

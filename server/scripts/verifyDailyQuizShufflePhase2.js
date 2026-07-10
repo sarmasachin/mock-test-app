@@ -57,7 +57,7 @@ function readText(relPath) {
 }
 
 function readDailyQuizLoadFn(src) {
-  const start = src.indexOf('suspend fun loadDailyQuizToday()');
+  const start = src.indexOf('suspend fun loadDailyQuizToday(');
   if (start < 0) return '';
   const end = src.indexOf('\n    suspend fun ', start + 1);
   if (end < 0) return src.slice(start);
@@ -97,25 +97,28 @@ function staticWiringAudit() {
   ok = line(utilsJs.includes('identity-fix'), 'seeded identity-fix swap suffix present') && ok;
   ok =
     line(
-      digestJs.includes("router.get('/quiz-today'") && digestJs.includes('selectDailyQuizItemsForDay'),
-      'digest.js GET /quiz-today → selectDailyQuizItemsForDay',
+      digestJs.includes("router.get('/quiz-today'") && digestJs.includes('res.status(410)'),
+      'digest.js GET /quiz-today → 410 Gone (login-only)',
     ) && ok;
   ok =
     line(
-      !digestJs.includes('ensureVisibleShuffle'),
-      'digest daily quiz path uses selectDailyQuizItemsForDay (not duplicate shuffle)',
+      !digestJs.includes('ensureVisibleShuffle') &&
+        !digestJs.includes('selectDailyQuizItemsForDay'),
+      'digest no longer delivers daily quiz (auth /v1/daily-quiz/today only)',
     ) && ok;
 
   const dailyQuizLoadFn = readDailyQuizLoadFn(contentRepo);
   ok =
     line(
-      dailyQuizLoadFn.includes('getDailyQuizToday()') && dailyQuizLoadFn.includes('row.options'),
-      'Android loadDailyQuizToday reads API options',
+      dailyQuizLoadFn.includes('getDailyQuizTodayScoped') &&
+        dailyQuizLoadFn.includes('mapDailyQuizTodayResponse'),
+      'Android loadDailyQuizToday uses auth scoped API + response mapper',
     ) && ok;
   ok =
     line(
-      publicApi.includes('digest/quiz-today'),
-      'PublicApiService GET digest/quiz-today',
+      !publicApi.includes('digest/quiz-today') &&
+        contentRepo.includes('DailyQuizRepository.isLoggedIn()'),
+      'Android: login-only daily quiz (no public digest/quiz-today)',
     ) && ok;
   ok =
     line(
@@ -212,54 +215,7 @@ async function optionalLiveApiAudit(apiBase) {
 
   let ok = true;
   const res = await fetchJson(`${apiBase}/digest/quiz-today`);
-  ok = line(res.ok, `GET /digest/quiz-today → HTTP ${res.status}`) && ok;
-  if (!res.ok) return ok;
-
-  const apiItems = Array.isArray(res.body?.items) ? res.body.items : [];
-  const schedule = await loadDailyQuizSettings();
-  const { dayKey, quizDay } = resolveDailyKey(Date.now(), schedule);
-  const localBuilt = selectDailyQuizItemsForDay(PROD_ITEMS, dayKey, quizDay, schedule);
-  const declaredCount = Number(res.body?.questionCount);
-
-  ok = line(apiItems.length > 0, `API returned ${apiItems.length} item(s)`) && ok;
-  ok =
-    line(
-      apiItems.length <= schedule.questionsPerDay,
-      `API delivery <= questionsPerDay (${apiItems.length} <= ${schedule.questionsPerDay})`,
-    ) && ok;
-  ok =
-    line(
-      !Number.isInteger(declaredCount) || declaredCount === apiItems.length,
-      `questionCount metadata matches items (${declaredCount} vs ${apiItems.length})`,
-    ) && ok;
-
-  if (localBuilt.length === apiItems.length && apiItems.length > 0) {
-    const matches = sameDeliveryFingerprint(localBuilt, apiItems);
-    ok =
-      line(
-        matches,
-        matches
-          ? 'live API fingerprint matches local build (fix deployed)'
-          : 'live API differs from local — production may not have Phase 1 deploy yet',
-      ) && ok;
-  }
-
-  for (const apiItem of apiItems) {
-    const shape = verifyLiveDeliveryShape(apiItem);
-    ok = line(shape.ok, `live ${apiItem.id}: delivery shape`) && ok;
-    const opts = (apiItem.options || []).map((x) => String(x || ''));
-    if (String(apiItem.id) === 'dq-1783448166666-1961') {
-      const isIdentity = isSameStringArray(opts, DISTRICTS_IDENTITY_PATTERN);
-      ok =
-        line(
-          !isIdentity,
-          isIdentity
-            ? 'districts question still identity on live API (deploy Phase 1 to production)'
-            : 'districts question shuffled on live API',
-        ) && ok;
-    }
-  }
-
+  ok = line(res.status === 410, `GET /digest/quiz-today → HTTP ${res.status} (410 Gone expected)`) && ok;
   return ok;
 }
 

@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.sp
 import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
 import com.freemocktest.app.data.AppPreferencesRepository
+import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.data.ContentRepository
 import android.util.Log
 import com.freemocktest.app.data.DailyQuizRepository
@@ -104,18 +105,21 @@ private enum class DailyQuizQuestionStatus {
     CORRECT,
     WRONG,
     SKIPPED,
+    PARTIAL,
 }
 
 private fun DailyQuizQuestionStatus.color(): Color = when (this) {
     DailyQuizQuestionStatus.CORRECT -> Color(0xFF10B981)
     DailyQuizQuestionStatus.WRONG -> Color(0xFFEB5757)
     DailyQuizQuestionStatus.SKIPPED -> Color(0xFFE7EBEF)
+    DailyQuizQuestionStatus.PARTIAL -> Color(0xFFF59E0B)
 }
 
 private fun DailyQuizQuestionStatus.label(): String = when (this) {
     DailyQuizQuestionStatus.CORRECT -> "Correct"
     DailyQuizQuestionStatus.WRONG -> "Wrong"
     DailyQuizQuestionStatus.SKIPPED -> "Skipped"
+    DailyQuizQuestionStatus.PARTIAL -> "Partial"
 }
 
 private fun resolveDailyQuizQuestionStatus(
@@ -127,6 +131,18 @@ private fun resolveDailyQuizQuestionStatus(
         DailyQuizQuestionStatus.CORRECT
     } else {
         DailyQuizQuestionStatus.WRONG
+    }
+}
+
+private fun resolveDailyQuizDayStatus(result: AppPreferencesRepository.DailyQuizDayResult): DailyQuizQuestionStatus {
+    val total = result.totalQuestions
+    val correct = result.correctCount
+    val skipped = result.skippedCount
+    return when {
+        correct == total -> DailyQuizQuestionStatus.CORRECT
+        skipped == total -> DailyQuizQuestionStatus.SKIPPED
+        correct == 0 && skipped == 0 -> DailyQuizQuestionStatus.WRONG
+        else -> DailyQuizQuestionStatus.PARTIAL
     }
 }
 
@@ -161,12 +177,10 @@ private fun dailyQuizProfileInitials(displayName: String): String {
     }
 }
 
-/** Phase 4 — identity key so quiz UI resets when account / guest mode changes. */
+/** Identity key so quiz UI resets when user switches account. */
 private fun buildDailyQuizSessionKey(
-    isLoggedIn: Boolean,
     drawerProfile: AppPreferencesRepository.DrawerUserProfile,
 ): String {
-    if (!isLoggedIn) return "guest"
     val uid = drawerProfile.userIdFormatted.orEmpty().trim()
     val email = drawerProfile.emailLine.trim().lowercase(Locale.US)
     return listOf(uid, email).filter { it.isNotBlank() }.joinToString("|").ifBlank { "signed-in" }
@@ -217,6 +231,7 @@ fun DailyDigestScreenNew(
     var dailyQuizRankTotal by remember { mutableStateOf<Int?>(null) }
     var quizError by remember { mutableStateOf(false) }
     var quizLoading by remember { mutableStateOf(true) }
+    var dayResultLoading by remember { mutableStateOf(true) }
     var quizStatusMessage by remember { mutableStateOf<String?>(null) }
     var quizReloadTick by remember { mutableStateOf(0) }
     var dailyQuizQuestionCount by remember { mutableStateOf(0) }
@@ -240,16 +255,44 @@ fun DailyDigestScreenNew(
         mutableStateOf("My Daily Quiz result on {date}\n\n{question}\nScore: {score}\n\nDownload: {storeUrl}")
     }
 
-    val dailyQuizSessionKey = buildDailyQuizSessionKey(
-        isLoggedIn = DailyQuizRepository.isLoggedIn(),
-        drawerProfile = drawerProfile,
-    )
+    val dailyQuizSessionKey = buildDailyQuizSessionKey(drawerProfile = drawerProfile)
+
+    if (!DailyQuizRepository.isLoggedIn()) {
+        Scaffold(containerColor = Color(0xFFF5F6FA)) { padding ->
+            Column(
+                modifier = modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    "Sign in required",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 20.sp,
+                    color = Color(0xFF272727),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Daily Quiz is available for signed-in users only.",
+                    color = Color(0xFF6B7280),
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onBack, colors = ButtonDefaults.buttonColors(containerColor = DailyBlue)) {
+                    Text("Back", color = Color.White)
+                }
+            }
+        }
+        return
+    }
 
     // Phase 4 — drop in-flight quiz/result UI when user logs out or switches account.
     LaunchedEffect(dailyQuizSessionKey) {
         showQuiz = false
         showResult = false
-        savedDayResult = null
         pendingQuestionResults = emptyList()
         currentQuestionIndex = 0
         selectedOptionIndex = null
@@ -277,29 +320,28 @@ fun DailyDigestScreenNew(
         featuredScopeStates = scopeSetup.second
         expandedScopeStates = scopeSetup.third
         attemptedDates = withContext(Dispatchers.IO) {
-            if (DailyQuizRepository.isLoggedIn()) {
-                val synced = DailyQuizRepository.syncHistoryFromServer()
-                synced?.attemptedDates
-                    ?: AppPreferencesRepository.loadDailyQuizAttemptedDates()
-            } else {
-                AppPreferencesRepository.loadDailyQuizAttemptedDates()
-            }
+            val synced = DailyQuizRepository.syncHistoryFromServer()
+            synced?.attemptedDates
+                ?: AppPreferencesRepository.loadDailyQuizAttemptedDates()
         }
-        val result = withContext(Dispatchers.IO) {
-            DailyQuizRepository.loadDayResultForCurrentUser(selectedDate)
-        }
-        savedDayResult = result
-        dailyQuizRank = result?.rank
-        dailyQuizRankTotal = result?.rankTotal
     }
 
-    LaunchedEffect(selectedDate, dailyQuizSessionKey) {
+    LaunchedEffect(selectedDate, dailyQuizSessionKey, selectedQuizScope) {
+        dayResultLoading = true
+        val localCached = withContext(Dispatchers.IO) {
+            AppPreferencesRepository.loadDailyQuizDayResult(selectedDate)
+        }
+        savedDayResult = localCached
+        dailyQuizRank = localCached?.rank
+        dailyQuizRankTotal = localCached?.rankTotal
+
         val result = withContext(Dispatchers.IO) {
-            DailyQuizRepository.loadDayResultForCurrentUser(selectedDate)
+            DailyQuizRepository.loadDayResultForCurrentUser(selectedDate, selectedQuizScope)
         }
         savedDayResult = result
         dailyQuizRank = result?.rank
         dailyQuizRankTotal = result?.rankTotal
+        dayResultLoading = false
     }
 
     // Phase 4 — never keep dashboard route open without a verified day snapshot.
@@ -346,6 +388,10 @@ fun DailyDigestScreenNew(
                 quizError = true
                 quizStatusMessage = when (e) {
                     is HttpException -> when (e.code()) {
+                        401 -> {
+                            scope.launch(Dispatchers.IO) { AuthRepository.clearSession() }
+                            "Session expired. Please sign in again."
+                        }
                         in 500..599 -> "Server error. Please try again later."
                         else -> "Couldn't load quiz (error ${e.code()}). Check internet and tap retry."
                     }
@@ -384,6 +430,7 @@ fun DailyDigestScreenNew(
             digestItem = null,
             showDigestError = quizError,
             isQuizLoading = quizLoading,
+            isDayResultLoading = dayResultLoading,
             isTakeTestEnabled = canTakeTodayQuiz || hasSavedResultForSelectedDay,
             hasSavedResultForDay = hasSavedResultForSelectedDay,
             savedDayResult = savedDayResult,
@@ -439,7 +486,7 @@ fun DailyDigestScreenNew(
                 scope.launch {
                     // Phase 4 — re-verify server truth before routing to dashboard (prevents stale UI).
                     val verified = withContext(Dispatchers.IO) {
-                        DailyQuizRepository.loadDayResultForCurrentUser(selectedDate)
+                        DailyQuizRepository.loadDayResultForCurrentUser(selectedDate, selectedQuizScope)
                     }
                     savedDayResult = verified
                     dailyQuizRank = verified?.rank
@@ -554,6 +601,9 @@ fun DailyDigestScreenNew(
                                 }
                                 is DailyQuizRepository.ServerResult.Failure -> {
                                     resultSyncMessage = serverResult.message
+                                    if (serverResult.httpCode == 401) {
+                                        scope.launch(Dispatchers.IO) { AuthRepository.clearSession() }
+                                    }
                                     Toast.makeText(context, serverResult.message, Toast.LENGTH_LONG).show()
                                 }
                             }
@@ -572,7 +622,7 @@ fun DailyDigestScreenNew(
             modifier = modifier,
             quizShareDay = selectedDate,
             quizScope = selectedQuizScope,
-            displayName = drawerProfile.displayName.ifBlank { "Guest" },
+            displayName = drawerProfile.displayName.ifBlank { "User" },
             userIdFormatted = drawerProfile.userIdFormatted,
             rank = dailyQuizRank,
             rankTotal = dailyQuizRankTotal,
@@ -804,6 +854,7 @@ private fun DailyQuizDatePickerScreen(
     digestItem: ContentRepository.DailyDigestRemote?,
     showDigestError: Boolean,
     isQuizLoading: Boolean,
+    isDayResultLoading: Boolean,
     isTakeTestEnabled: Boolean,
     hasSavedResultForDay: Boolean,
     savedDayResult: AppPreferencesRepository.DailyQuizDayResult?,
@@ -953,7 +1004,7 @@ private fun DailyQuizDatePickerScreen(
             ) {
             Button(
                 onClick = onTakeTest,
-                enabled = isTakeTestEnabled || hasSavedResultForDay,
+                enabled = (!isDayResultLoading || hasSavedResultForDay) && (isTakeTestEnabled || hasSavedResultForDay),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -963,7 +1014,8 @@ private fun DailyQuizDatePickerScreen(
             ) {
                 Text(
                     text = when {
-                        isQuizLoading -> "LOADING QUIZ..."
+                        isDayResultLoading && !hasSavedResultForDay -> "LOADING..."
+                        isQuizLoading && !hasSavedResultForDay -> "LOADING..."
                         hasSavedResultForDay -> "VIEW DASHBOARD"
                         !isTakeTestEnabled -> "QUIZ NOT AVAILABLE"
                         else -> "TAKE TEST"
@@ -978,7 +1030,7 @@ private fun DailyQuizDatePickerScreen(
                 featuredStates = featuredScopeStates,
                 expandedStates = expandedScopeStates,
                 showAllStates = showAllScopeStates,
-                enabled = !isQuizLoading,
+                enabled = !isQuizLoading && !isDayResultLoading,
                 onSelectAllIndia = onSelectAllIndiaScope,
                 onSelectState = onSelectStateScope,
                 onToggleSeeAll = onToggleSeeAllScopeStates,
@@ -1078,11 +1130,7 @@ private fun DailyQuizDashboardPreviewCard(
     onOpenDashboard: () -> Unit,
 ) {
     val totalQ = result.totalQuestions
-    val status = when {
-        result.correctCount == totalQ -> DailyQuizQuestionStatus.CORRECT
-        result.skippedCount == totalQ -> DailyQuizQuestionStatus.SKIPPED
-        else -> DailyQuizQuestionStatus.WRONG
-    }
+    val status = resolveDailyQuizDayStatus(result)
     val dayLabel = result.day.format(DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.US))
     Card(
         modifier = Modifier
@@ -1189,13 +1237,7 @@ private fun DailyQuizResultScreen(
     val correctCount = dayResult?.correctCount ?: 0
     val wrongCount = dayResult?.wrongCount ?: 0
     val skippedCount = dayResult?.skippedCount ?: 0
-    val questionStatus = when {
-        correctCount == totalQuestions -> DailyQuizQuestionStatus.CORRECT
-        skippedCount == totalQuestions -> DailyQuizQuestionStatus.SKIPPED
-        else -> DailyQuizQuestionStatus.WRONG
-    }
     val firstQuestion = questions.firstOrNull()
-    val isCorrect = correctCount == totalQuestions && totalQuestions > 0
     val quizDateLabel = quizShareDay.format(DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.US))
     val userCodeLine = userIdFormatted?.takeIf { it.isNotBlank() } ?: "—"
     val visibleScore = if (scoreVisible) "$correctCount" else "-"
@@ -1393,7 +1435,7 @@ private fun DailyQuizResultScreen(
                 fallbackRankTotal = rankTotal,
             )
 
-            AnalysisCard(questionStatus = questionStatus)
+            AnalysisCard(questions = questions)
             DonutCard(
                 title = "Daily Quiz — Brief Analysis",
                 centerText = "Brief",
@@ -1515,13 +1557,6 @@ private fun DailyQuizLeaderboardSection(
                 loading -> {
                     Text("Loading ranks…", color = Color(0xFF6B7280), fontSize = 14.sp)
                 }
-                !DailyQuizRepository.isLoggedIn() -> {
-                    Text(
-                        "Login to see today’s ranked list (1, 2, 3…).",
-                        color = Color(0xFF6B7280),
-                        fontSize = 14.sp,
-                    )
-                }
                 leaderboard == null -> {
                     Text(
                         "Could not load leaderboard. Check internet and try again.",
@@ -1639,7 +1674,7 @@ private fun dailyQuizDonutSegments(
 }
 
 @Composable
-private fun AnalysisCard(questionStatus: DailyQuizQuestionStatus) {
+private fun AnalysisCard(questions: List<AppPreferencesRepository.DailyQuizQuestionResult>) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
         shape = DailyPanelRadius,
@@ -1649,39 +1684,52 @@ private fun AnalysisCard(questionStatus: DailyQuizQuestionStatus) {
             Text("Daily Quiz — Question Analysis", color = Color(0xFF2E2E2E), fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
             Spacer(Modifier.height(8.dp))
             Text(
-                "Green = correct · Red = wrong · Gray = skipped",
+                "Green = correct · Red = wrong · Gray = skipped · Amber = partial day",
                 color = Color(0xFF6C6C6C),
                 fontSize = 12.sp,
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(questionStatus.color()),
-                    contentAlignment = Alignment.Center,
+            if (questions.isEmpty()) {
+                Text("No answers recorded.", color = Color(0xFF6C6C6C), fontSize = 14.sp)
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
                 ) {
+                    questions.forEachIndexed { index, q ->
+                        val qStatus = resolveDailyQuizQuestionStatus(q.selectedOptionIndex, q.correctIndex)
+                        Box(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(qStatus.color()),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                (index + 1).toString(),
+                                color = if (qStatus == DailyQuizQuestionStatus.SKIPPED) {
+                                    Color(0xFF4A4A4A)
+                                } else {
+                                    Color.White
+                                },
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                questions.forEachIndexed { index, q ->
+                    val qStatus = resolveDailyQuizQuestionStatus(q.selectedOptionIndex, q.correctIndex)
                     Text(
-                        "1",
-                        color = if (questionStatus == DailyQuizQuestionStatus.SKIPPED) {
-                            Color(0xFF4A4A4A)
-                        } else {
-                            Color.White
-                        },
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
+                        "Q${index + 1} — ${qStatus.label()}",
+                        color = qStatus.color(),
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
                     )
                 }
             }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Q1 — ${questionStatus.label()}",
-                color = questionStatus.color(),
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 14.sp,
-            )
         }
     }
 }

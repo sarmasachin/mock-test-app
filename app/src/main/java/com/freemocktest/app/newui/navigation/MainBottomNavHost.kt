@@ -196,7 +196,9 @@ fun MainBottomNavHost(
         ),
     )
     val attemptsUserKey = remember(drawerProfile.emailLine, drawerProfile.userIdFormatted) {
-        drawerProfile.emailLine.ifBlank { drawerProfile.userIdFormatted ?: "guest" }
+        drawerProfile.emailLine.trim().takeIf { it.isNotBlank() }
+            ?: drawerProfile.userIdFormatted?.trim()?.takeIf { it.isNotBlank() }
+            ?: ""
     }
     val attempts by TestHistoryRepository.observeAttempts(attemptsUserKey).collectAsState(initial = emptyList())
     val pendingResult by AppPreferencesRepository.pendingResultState.collectAsState(initial = null)
@@ -721,9 +723,9 @@ fun MainBottomNavHost(
                     attemptsUserKey = attemptsUserKey,
                     onBack = { mainNavController.popBackOrHome() },
                     onSubmit = { answered, correct, wrong, total, publishAt ->
-                        val attemptsUserKey = drawerProfile.emailLine.ifBlank {
-                            drawerProfile.userIdFormatted ?: "guest"
-                        }
+                        val attemptsUserKey = drawerProfile.emailLine.trim().takeIf { it.isNotBlank() }
+                            ?: drawerProfile.userIdFormatted?.trim()?.takeIf { it.isNotBlank() }
+                            ?: ""
                         scope.launch {
                             val testTitle = decodedQuizName
                             val catalogId = runCatching {

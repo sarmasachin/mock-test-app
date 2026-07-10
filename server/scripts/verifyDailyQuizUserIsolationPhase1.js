@@ -32,7 +32,7 @@ function readDailyQuizRootForUser(stored, ownerNow) {
     return { owner: ownerNow, raw: '', root: {} };
   }
   const ownerMismatch = ownerStored && ownerStored.toLowerCase() !== ownerNow.toLowerCase();
-  const orphanLegacy = !ownerStored;
+  const orphanLegacy = !ownerStored || ownerStored.toLowerCase() === 'guest';
   if (ownerMismatch || orphanLegacy) {
     return { owner: ownerNow, raw: '', root: {} };
   }
@@ -108,7 +108,10 @@ function main() {
       'mirror: same user keeps owned blob',
     ) && ok;
 
-  const guestEmpty = readDailyQuizRootForUser({ owner: userA, raw: '' }, 'guest');
+  const guestLegacy = readDailyQuizRootForUser({ owner: 'guest', raw: legacyRaw }, userB);
+  ok = line(Object.keys(guestLegacy.root).length === 0, 'mirror: legacy guest owner blob discarded') && ok;
+
+  const guestEmpty = readDailyQuizRootForUser({ owner: userA, raw: '' }, userB);
   ok = line(Object.keys(guestEmpty.root).length === 0, 'mirror: empty blob after account switch') && ok;
 
   // Server remains per-user (sanity)

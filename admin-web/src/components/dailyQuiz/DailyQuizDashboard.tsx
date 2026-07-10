@@ -7,13 +7,13 @@ import { DailyQuizLeaderboardPanel } from './DailyQuizLeaderboardPanel';
 import { DailyQuizOverviewPanel } from './DailyQuizOverviewPanel';
 import { DailyQuizQuestionAnalysisPanel } from './DailyQuizQuestionAnalysisPanel';
 import {
-  DAILY_QUIZ_DASHBOARD_TABS,
+  DAILY_QUIZ_ANALYTICS_TABS,
   normalizeDailyQuizAdminStats,
   todayQuizDayUtc,
   type DailyQuizAdminStatsData,
+  type DailyQuizAnalyticsTab,
   type DailyQuizAnswerReviewPrefill,
   type DailyQuizDashboardApiClient,
-  type DailyQuizDashboardTab,
   type DailyQuizStatsRange,
 } from './dailyQuizTypes';
 import {
@@ -29,7 +29,7 @@ type Props = {
 };
 
 export function DailyQuizDashboard({ apiClient }: Props) {
-  const [activeTab, setActiveTab] = useState<DailyQuizDashboardTab>('overview');
+  const [activeAnalyticsTab, setActiveAnalyticsTab] = useState<DailyQuizAnalyticsTab | null>(null);
   const [range, setRange] = useState<DailyQuizStatsRange>('7d');
   const [quizDay, setQuizDay] = useState(todayQuizDayUtc);
   const [data, setData] = useState<DailyQuizAdminStatsData | null>(null);
@@ -99,7 +99,11 @@ export function DailyQuizDashboard({ apiClient }: Props) {
   const openAnswerReview = useCallback((prefill: DailyQuizAnswerReviewPrefill) => {
     if (prefill.quizDay) setQuizDay(prefill.quizDay.slice(0, 10));
     setAnswerReviewPrefill(prefill);
-    setActiveTab('answerReview');
+    setActiveAnalyticsTab('answerReview');
+  }, []);
+
+  const handleAnalyticsTabClick = useCallback((tabId: DailyQuizAnalyticsTab) => {
+    setActiveAnalyticsTab((prev) => (prev === tabId ? null : tabId));
   }, []);
 
   if (loading && !data) {
@@ -211,31 +215,38 @@ export function DailyQuizDashboard({ apiClient }: Props) {
           </div>
         </div>
 
-        <div className="dq-tab-bar" role="tablist" aria-label="Daily quiz dashboard sections">
-          {DAILY_QUIZ_DASHBOARD_TABS.map((tab) => (
+        <DailyQuizOverviewPanel
+          data={data}
+          loading={loading}
+          onOpenAnswerReview={openAnswerReview}
+        />
+
+        <div className="dq-tab-bar" role="tablist" aria-label="Daily quiz analytics sections">
+          {DAILY_QUIZ_ANALYTICS_TABS.map((tab) => (
             <button
               key={tab.id}
               type="button"
               role="tab"
               id={`dq-tab-${tab.id}`}
-              aria-selected={activeTab === tab.id}
+              aria-selected={activeAnalyticsTab === tab.id}
               aria-controls={`dq-panel-${tab.id}`}
+              aria-expanded={activeAnalyticsTab === tab.id}
               title={tab.description}
-              className={`dq-tab-btn${activeTab === tab.id ? ' dq-tab-btn-active' : ''}`}
-              onClick={() => setActiveTab(tab.id)}
+              className={`dq-tab-btn${activeAnalyticsTab === tab.id ? ' dq-tab-btn-active' : ''}`}
+              onClick={() => handleAnalyticsTabClick(tab.id)}
             >
               {tab.label}
             </button>
           ))}
         </div>
 
-        <div
-          className="dq-tab-panel"
-          role="tabpanel"
-          id={`dq-panel-${activeTab}`}
-          aria-labelledby={`dq-tab-${activeTab}`}
-        >
-          {activeTab === 'leaderboard' || activeTab === 'questionAnalysis' || activeTab === 'answerReview' ? (
+        {activeAnalyticsTab ? (
+          <div
+            className="dq-tab-panel dq-tab-panel-open"
+            role="tabpanel"
+            id={`dq-panel-${activeAnalyticsTab}`}
+            aria-labelledby={`dq-tab-${activeAnalyticsTab}`}
+          >
             <div className="dq-analytics-scope-bar">
               <DailyQuizDeliveryScopeFilter
                 stateOptions={signupStateOptions}
@@ -245,50 +256,45 @@ export function DailyQuizDashboard({ apiClient }: Props) {
                 onStateNameChange={setAnalyticsStateName}
               />
             </div>
-          ) : null}
-          {activeTab === 'overview' ? (
-            <DailyQuizOverviewPanel
-              data={data}
-              loading={loading}
-              onOpenAnswerReview={openAnswerReview}
-            />
-          ) : null}
-          {activeTab === 'leaderboard' ? (
-            <DailyQuizLeaderboardPanel
-              apiClient={apiClient}
-              quizDay={quizDay}
-              tableReady={data.tableReady}
-              scopeParams={analyticsScopeParams}
-              scopeLabel={analyticsScopeLabel}
-              scopeKey={analyticsScopeKey}
-              onOpenAnswerReview={openAnswerReview}
-            />
-          ) : null}
-          {activeTab === 'questionAnalysis' ? (
-            <DailyQuizQuestionAnalysisPanel
-              apiClient={apiClient}
-              quizDay={quizDay}
-              statsRange={range}
-              tableReady={data.tableReady}
-              scopeParams={analyticsScopeParams}
-              scopeLabel={analyticsScopeLabel}
-              scopeKey={analyticsScopeKey}
-              onOpenAnswerReview={openAnswerReview}
-            />
-          ) : null}
-          {activeTab === 'answerReview' ? (
-            <DailyQuizAnswerReviewPanel
-              apiClient={apiClient}
-              quizDay={quizDay}
-              tableReady={data.tableReady}
-              prefill={answerReviewPrefill}
-              scopeParams={analyticsScopeParams}
-              scopeLabel={analyticsScopeLabel}
-              scopeKey={analyticsScopeKey}
-              onClearPrefill={() => setAnswerReviewPrefill(null)}
-            />
-          ) : null}
-        </div>
+            {activeAnalyticsTab === 'leaderboard' ? (
+              <DailyQuizLeaderboardPanel
+                apiClient={apiClient}
+                quizDay={quizDay}
+                tableReady={data.tableReady}
+                scopeParams={analyticsScopeParams}
+                scopeLabel={analyticsScopeLabel}
+                scopeKey={analyticsScopeKey}
+                onOpenAnswerReview={openAnswerReview}
+              />
+            ) : null}
+            {activeAnalyticsTab === 'questionAnalysis' ? (
+              <DailyQuizQuestionAnalysisPanel
+                apiClient={apiClient}
+                quizDay={quizDay}
+                statsRange={range}
+                tableReady={data.tableReady}
+                scopeParams={analyticsScopeParams}
+                scopeLabel={analyticsScopeLabel}
+                scopeKey={analyticsScopeKey}
+                onOpenAnswerReview={openAnswerReview}
+              />
+            ) : null}
+            {activeAnalyticsTab === 'answerReview' ? (
+              <DailyQuizAnswerReviewPanel
+                apiClient={apiClient}
+                quizDay={quizDay}
+                tableReady={data.tableReady}
+                prefill={answerReviewPrefill}
+                scopeParams={analyticsScopeParams}
+                scopeLabel={analyticsScopeLabel}
+                scopeKey={analyticsScopeKey}
+                onClearPrefill={() => setAnswerReviewPrefill(null)}
+              />
+            ) : null}
+          </div>
+        ) : (
+          <p className="dq-tab-hint">Select Leaderboard, Question Analysis, or Answer Review to load details below.</p>
+        )}
       </div>
     </div>
   );

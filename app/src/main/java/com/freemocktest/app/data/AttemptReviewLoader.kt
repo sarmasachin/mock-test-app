@@ -51,13 +51,15 @@ object AttemptReviewLoader {
         val safeName = testName.trim().ifBlank { return LoadResult(emptyList(), Source.NETWORK_SOFT) }
         val owner = resolveUserScope(cacheUserScope)
 
-        AppPreferencesRepository.peekSubmittedAttemptSnapshot(owner, safeName)?.let { snap ->
-            return LoadResult(
-                rows = snap.questions.mapIndexed { index, q ->
-                    q.toReviewRow(selectedIndex = snap.answers[index])
-                },
-                source = Source.SUBMITTED_SNAPSHOT,
-            )
+        if (owner != null) {
+            AppPreferencesRepository.peekSubmittedAttemptSnapshot(owner, safeName)?.let { snap ->
+                return LoadResult(
+                    rows = snap.questions.mapIndexed { index, q ->
+                        q.toReviewRow(selectedIndex = snap.answers[index])
+                    },
+                    source = Source.SUBMITTED_SNAPSHOT,
+                )
+            }
         }
 
         val cached = ContentRepository.loadCachedQuizQuestionsBundleForTest(safeName, cacheUserScope)
@@ -82,12 +84,11 @@ object AttemptReviewLoader {
         )
     }
 
-    private suspend fun resolveUserScope(explicit: String?): String {
+    private suspend fun resolveUserScope(explicit: String?): String? {
         val direct = explicit?.trim().orEmpty()
         if (direct.isNotBlank()) return direct.lowercase(java.util.Locale.US)
-        val email = AppPreferencesRepository.peekEditableProfileNow().email.trim()
-        if (email.isNotBlank()) return email.lowercase(java.util.Locale.US)
-        return "guest"
+        if (!AuthRepository.isLoggedIn()) return null
+        return AuthRepository.resolveLoggedInUserScopeKey()
     }
 
     private fun AppPreferencesRepository.QuizQuestionSnapshot.toReviewRow(selectedIndex: Int?): ReviewRow {

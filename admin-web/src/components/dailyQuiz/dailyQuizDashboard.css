@@ -22,7 +22,7 @@
   flex-wrap: wrap;
   gap: 4px;
   border-bottom: 1px solid var(--dash-border);
-  margin: 0 0 24px;
+  margin: 24px 0 0;
   padding-bottom: 0;
 }
 
@@ -54,6 +54,37 @@
 
 .dash-analytics.dq-dashboard .dq-tab-panel {
   min-height: 120px;
+  margin-top: 16px;
+  padding-top: 4px;
+  border-top: 1px solid var(--dash-border);
+  animation: dq-panel-open 0.2s ease;
+}
+
+.dash-analytics.dq-dashboard .dq-tab-panel-open {
+  background: #fff;
+  border-radius: 0 0 12px 12px;
+}
+
+.dash-analytics.dq-dashboard .dq-tab-hint {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px dashed var(--dash-border);
+  font-size: 13px;
+  color: #64748b;
+  text-align: center;
+}
+
+@keyframes dq-panel-open {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .dash-analytics.dq-dashboard .dq-kpi-skeleton {

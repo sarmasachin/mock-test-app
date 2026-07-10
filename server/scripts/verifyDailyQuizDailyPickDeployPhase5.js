@@ -58,9 +58,9 @@ function main() {
   const digest = read('server/src/routes/digest.js');
   ok =
     line(
-      digest.includes('selectDailyQuizItemsForDay') &&
-        digest.includes('questionCount: quizItems.length'),
-      'digest /quiz-today wired for daily pick',
+      digest.includes('res.status(410)') &&
+        digest.includes('loginRequired: true'),
+      'digest /quiz-today deprecated (daily pick via auth /today)',
     ) && ok;
 
   const adminApp = read('admin-web/src/App.tsx');

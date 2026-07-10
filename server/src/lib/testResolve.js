@@ -239,6 +239,11 @@ function buildTestResolvePayload({
     capacityTotal: enrollment.capacityTotal,
     remainingSeats: enrollment.remainingSeats,
     lastCycleStartedAt,
+    joinClosesAt: startAccess.joinClosesAt,
+    enrolledCount: enrollment.enrolledCount,
+    capacityTotal: enrollment.capacityTotal,
+    remainingSeats: enrollment.remainingSeats,
+    lastCycleStartedAt,
   };
 }
 

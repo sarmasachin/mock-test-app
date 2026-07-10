@@ -64,7 +64,8 @@ fun HistoryScreenNew(
         ),
     )
     val attemptsUserKey = remember(profile.emailLine, profile.userIdFormatted) {
-        profile.emailLine.ifBlank { profile.userIdFormatted ?: "guest" }
+        profile.emailLine.trim().takeIf { it.isNotBlank() }
+            ?: profile.userIdFormatted?.trim().orEmpty()
     }
     val attempts by TestHistoryRepository.observeAttempts(attemptsUserKey).collectAsState(initial = emptyList())
     val scoreVisible by AppPreferencesRepository.scoreVisibilityEnabled.collectAsState(initial = true)

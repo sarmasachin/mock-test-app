@@ -105,19 +105,11 @@ async function main() {
   ok = line(health.ok, `GET /health → HTTP ${health.status}`) && ok;
 
   const digest = await fetchJson(`${apiBase}/digest/quiz-today`);
-  if (digest.status === 404) {
-    console.log('LIVE_SMOKE_NOTE: no daily quiz published (digest 404) — scoped auth checks may also 404');
-  } else {
-    ok = line(digest.ok, `GET /digest/quiz-today → HTTP ${digest.status}`) && ok;
-    if (digest.ok) {
-      const digestItems = Array.isArray(digest.body?.items) ? digest.body.items : [];
-      ok = line(digestItems.length > 0, `digest delivers ${digestItems.length} all_india item(s)`) && ok;
-      for (const item of digestItems.slice(0, 5)) {
-        const shape = verifyLiveDeliveryShape(item);
-        ok = line(shape.ok, `digest shape ${item.id}: ${shape.reason || 'ok'}`) && ok;
-      }
-    }
-  }
+  ok =
+    line(
+      digest.status === 410,
+      `GET /digest/quiz-today → HTTP ${digest.status} (410 Gone expected — login-only)`,
+    ) && ok;
 
   const badScope = await fetchJson(`${apiBase}/daily-quiz/today?scope=state`);
   ok =

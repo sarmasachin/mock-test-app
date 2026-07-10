@@ -108,6 +108,8 @@ interface AppApiService {
     @GET("daily-quiz/attempts/{quizDay}")
     suspend fun getDailyQuizAttempt(
         @Path("quizDay") quizDay: String,
+        @Query("scope") scope: String? = null,
+        @Query("state") state: String? = null,
     ): DailyQuizDayAttemptResponse
 
     @GET("daily-quiz/leaderboard")

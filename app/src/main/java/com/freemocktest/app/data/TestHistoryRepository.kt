@@ -24,8 +24,11 @@ object TestHistoryRepository {
         dao = database.testAttemptDao()
     }
 
+    private fun normalizeUserKey(userKey: String): String? =
+        userKey.trim().takeIf { it.isNotBlank() }
+
     fun observeAttempts(userKey: String): Flow<List<TestAttemptEntity>> {
-        val safeUserKey = userKey.trim().ifBlank { "guest" }
+        val safeUserKey = normalizeUserKey(userKey) ?: return flowOf(emptyList())
         return dao?.observeAllByUser(safeUserKey) ?: flowOf(emptyList())
     }
 
@@ -41,7 +44,10 @@ object TestHistoryRepository {
             Log.w(TAG, "recordAttempt skipped: database not initialized")
             return
         }
-        val safeUserKey = userKey.trim().ifBlank { "guest" }
+        val safeUserKey = normalizeUserKey(userKey) ?: run {
+            Log.w(TAG, "recordAttempt skipped: user key missing")
+            return
+        }
         withContext(Dispatchers.IO) {
             try {
                 d.insert(
@@ -86,7 +92,7 @@ object TestHistoryRepository {
 
     suspend fun clearAll(userKey: String) {
         val d = dao ?: return
-        val safeUserKey = userKey.trim().ifBlank { "guest" }
+        val safeUserKey = normalizeUserKey(userKey) ?: return
         withContext(Dispatchers.IO) {
             runCatching { d.deleteAllByUser(safeUserKey) }.onFailure { e ->
                 Log.e(TAG, "Failed to clear user test history", e)
@@ -96,7 +102,7 @@ object TestHistoryRepository {
 
     suspend fun countAttempts(userKey: String, testName: String): Int {
         val d = dao ?: return 0
-        val safeUserKey = userKey.trim().ifBlank { "guest" }
+        val safeUserKey = normalizeUserKey(userKey) ?: return 0
         val safeName = testName.trim()
         if (safeName.isBlank()) return 0
         return withContext(Dispatchers.IO) {
@@ -106,7 +112,7 @@ object TestHistoryRepository {
 
     suspend fun countAttemptsSince(userKey: String, testName: String, cycleStartedAtMillis: Long): Int {
         val d = dao ?: return 0
-        val safeUserKey = userKey.trim().ifBlank { "guest" }
+        val safeUserKey = normalizeUserKey(userKey) ?: return 0
         val safeName = testName.trim()
         if (safeName.isBlank() || cycleStartedAtMillis <= 0L) return 0
         return withContext(Dispatchers.IO) {
@@ -116,7 +122,7 @@ object TestHistoryRepository {
 
     suspend fun lastAttemptAtMillis(userKey: String, testName: String): Long? {
         val d = dao ?: return null
-        val safeUserKey = userKey.trim().ifBlank { "guest" }
+        val safeUserKey = normalizeUserKey(userKey) ?: return null
         val safeName = testName.trim()
         if (safeName.isBlank()) return null
         return withContext(Dispatchers.IO) {
@@ -126,7 +132,7 @@ object TestHistoryRepository {
 
     suspend fun lastAttemptAtMillisSince(userKey: String, testName: String, cycleStartedAtMillis: Long): Long? {
         val d = dao ?: return null
-        val safeUserKey = userKey.trim().ifBlank { "guest" }
+        val safeUserKey = normalizeUserKey(userKey) ?: return null
         val safeName = testName.trim()
         if (safeName.isBlank() || cycleStartedAtMillis <= 0L) return null
         return withContext(Dispatchers.IO) {

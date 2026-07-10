@@ -201,7 +201,8 @@ fun HomeScreenNew(
         ),
     )
     val attemptsUserKey = remember(profile.emailLine, profile.userIdFormatted) {
-        profile.emailLine.ifBlank { profile.userIdFormatted ?: "guest" }
+        profile.emailLine.trim().takeIf { it.isNotBlank() }
+            ?: profile.userIdFormatted?.trim().orEmpty()
     }
     val attempts by TestHistoryRepository.observeAttempts(attemptsUserKey).collectAsState(initial = emptyList())
     val scoreVisible by AppPreferencesRepository.scoreVisibilityEnabled.collectAsState(initial = true)
@@ -2166,7 +2167,7 @@ private fun DrawerHeader() {
         AppPreferencesRepository.ensureDrawerUserCode()
     }
 
-    val displayName = profile.displayName.ifBlank { "Guest" }
+    val displayName = profile.displayName.ifBlank { "User" }
     val emailShown = profile.emailLine.ifBlank { "No email saved" }
 
     Column(

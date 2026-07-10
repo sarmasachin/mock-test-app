@@ -47,8 +47,8 @@ function main() {
     line(
       repo.includes('getDailyQuizTodayScoped') &&
         repo.includes('DailyQuizRepository.isLoggedIn()') &&
-        repo.includes('publicApi.getDailyQuizToday()'),
-      'ContentRepository: auth scoped API + guest public fallback',
+        !repo.includes('publicApi.getDailyQuizToday()'),
+      'ContentRepository: login-only scoped API (no guest fallback)',
     ) && ok;
 
   ok =

@@ -95,9 +95,9 @@ function main() {
   const digest = read('server/src/routes/digest.js');
   ok =
     line(
-      digest.includes('filterEligibleDailyQuizItems') &&
-        digest.includes('DAILY_QUIZ_SCOPE_ALL_INDIA'),
-      'digest /quiz-today: public all_india fallback only',
+      digest.includes('res.status(410)') &&
+        digest.includes('replacement: \'/v1/daily-quiz/today\''),
+      'digest /quiz-today deprecated (login-only server)',
     ) && ok;
 
   const scopeUi = read('admin-web/src/components/dailyQuiz/dailyQuizScopeUi.ts');

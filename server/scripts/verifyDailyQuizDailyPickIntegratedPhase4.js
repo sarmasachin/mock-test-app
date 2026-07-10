@@ -91,11 +91,12 @@ function integratedMirrorTests() {
   let ok = true;
 
   const digest = read('server/src/routes/digest.js');
+  const dailyQuiz = read('server/src/routes/dailyQuiz.js');
   ok =
     line(
-      digest.includes('questionCount: quizItems.length') &&
-        digest.includes('selectDailyQuizItemsForDay(items, dayKey, quizDay, schedule)'),
-      'digest /quiz-today: picker + questionCount matches delivery length',
+      digest.includes('res.status(410)') &&
+        dailyQuiz.includes('selectScopedDailyQuizItemsForDay'),
+      'daily pick delivery on auth /v1/daily-quiz/today (public digest deprecated)',
     ) && ok;
 
   const schedule = normalizeDailyQuizSettingsFields({

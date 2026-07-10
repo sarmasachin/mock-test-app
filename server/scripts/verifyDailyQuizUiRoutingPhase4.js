@@ -42,8 +42,8 @@ function main() {
     line(
       ui.includes('buildDailyQuizSessionKey') &&
         ui.includes('dailyQuizSessionKey') &&
-        ui.includes('DailyQuizRepository.isLoggedIn()'),
-      'DailyDigestScreenNew: session identity key for account/guest changes',
+        ui.includes('!DailyQuizRepository.isLoggedIn()'),
+      'DailyDigestScreenNew: login gate + session identity key',
     ) && ok;
 
   ok =
@@ -51,7 +51,7 @@ function main() {
       ui.includes('LaunchedEffect(dailyQuizSessionKey)') &&
         ui.includes('showQuiz = false') &&
         ui.includes('showResult = false') &&
-        ui.includes('savedDayResult = null'),
+        ui.includes('pendingQuestionResults = emptyList()'),
       'session change resets in-flight quiz/result UI state',
     ) && ok;
 
@@ -64,16 +64,17 @@ function main() {
 
   ok =
     line(
-      ui.includes('loadDayResultForCurrentUser(selectedDate)') &&
-        ui.match(/onTakeTest[\s\S]{0,900}loadDayResultForCurrentUser\(selectedDate\)/),
-      'onTakeTest re-verifies server truth before opening dashboard',
+      ui.includes('loadDayResultForCurrentUser(selectedDate, selectedQuizScope)') &&
+        ui.match(/onTakeTest[\s\S]{0,900}loadDayResultForCurrentUser\(selectedDate, selectedQuizScope\)/),
+      'onTakeTest re-verifies scoped server truth before opening dashboard',
     ) && ok;
 
   ok =
     line(
-      ui.includes('LaunchedEffect(selectedDate, dailyQuizSessionKey)') &&
-        !ui.includes('LaunchedEffect(selectedDate) {\n        val result = withContext'),
-      'day reload keyed to session + selected date (not date alone)',
+      ui.includes('LaunchedEffect(selectedDate, dailyQuizSessionKey, selectedQuizScope)') &&
+        ui.includes('dayResultLoading') &&
+        ui.includes('isDayResultLoading'),
+      'day reload keyed to session + date + scope with loading guard',
     ) && ok;
 
   // Logic mirror

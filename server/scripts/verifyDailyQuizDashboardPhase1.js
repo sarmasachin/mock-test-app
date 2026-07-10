@@ -58,12 +58,14 @@ function main() {
 
   ok =
     line(
-      dashboard.includes('DAILY_QUIZ_DASHBOARD_TABS') &&
-        dashboard.includes("activeTab === 'overview'") &&
-        dashboard.includes("activeTab === 'leaderboard'") &&
-        dashboard.includes("activeTab === 'questionAnalysis'") &&
-        dashboard.includes("activeTab === 'answerReview'"),
-      'DailyQuizDashboard: 4 tab panels wired',
+      dashboard.includes('DAILY_QUIZ_ANALYTICS_TABS') &&
+        dashboard.includes('DailyQuizOverviewPanel') &&
+        dashboard.includes('activeAnalyticsTab') &&
+        dashboard.includes("activeAnalyticsTab === 'leaderboard'") &&
+        dashboard.includes("activeAnalyticsTab === 'questionAnalysis'") &&
+        dashboard.includes("activeAnalyticsTab === 'answerReview'") &&
+        dashboard.includes('dq-tab-panel-open'),
+      'DailyQuizDashboard: overview always visible + 3 expandable analytics tabs',
     ) && ok;
 
   ok =
@@ -84,11 +86,11 @@ function main() {
 
   ok =
     line(
-      types.includes("'overview'") &&
-        types.includes("'leaderboard'") &&
+      types.includes("'leaderboard'") &&
         types.includes("'questionAnalysis'") &&
-        types.includes("'answerReview'"),
-      'dailyQuizTypes: all dashboard tab ids defined',
+        types.includes("'answerReview'") &&
+        types.includes('DAILY_QUIZ_ANALYTICS_TABS'),
+      'dailyQuizTypes: analytics tab ids + expandable tab list',
     ) && ok;
 
   ok =

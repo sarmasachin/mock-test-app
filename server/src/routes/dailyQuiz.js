@@ -251,8 +251,15 @@ router.post('/attempts', async (req, res) => {
           buildSummaryFromAttempts(attempts),
           scopeParsed.userScope,
         );
+        const scopeFields = scopeParsed.userScope
+          ? {
+            scope: scopeParsed.userScope.scope || null,
+            stateName: scopeParsed.userScope.stateName || null,
+            scopeKey: buildDailyQuizScopeKey(scopeParsed.userScope),
+          }
+          : { scope: null, stateName: null, scopeKey: null };
         res.setHeader('X-Idempotent-Replay', 'true');
-        return res.status(200).json({ quizDay: day, attempts, summary });
+        return res.status(200).json({ quizDay: day, attempts, summary, ...scopeFields });
       }
     }
 
@@ -264,11 +271,19 @@ router.post('/attempts', async (req, res) => {
       buildSummaryFromAttempts(attempts),
       scopeParsed.userScope,
     );
+    const scopeFields = scopeParsed.userScope
+      ? {
+        scope: scopeParsed.userScope.scope || null,
+        stateName: scopeParsed.userScope.stateName || null,
+        scopeKey: buildDailyQuizScopeKey(scopeParsed.userScope),
+      }
+      : { scope: null, stateName: null, scopeKey: null };
     return res.status(201).json({
       attempt: mapAttemptRow(upsert.rows[0]),
       quizDay,
       attempts,
       summary,
+      ...scopeFields,
     });
   } catch (e) {
     console.error(e);
@@ -288,7 +303,14 @@ function batchItemsAllPresent(itemIds, savedIds) {
 async function buildBatchSuccessResponse(userId, quizDay, userScope) {
   const attempts = await loadUserDayAttempts(userId, quizDay);
   const summary = await attachRankForDay(userId, quizDay, buildSummaryFromAttempts(attempts), userScope);
-  return { quizDay, attempts, summary };
+  const scopeFields = userScope
+    ? {
+      scope: userScope.scope || null,
+      stateName: userScope.stateName || null,
+      scopeKey: buildDailyQuizScopeKey(userScope),
+    }
+    : { scope: null, stateName: null, scopeKey: null };
+  return { quizDay, attempts, summary, ...scopeFields };
 }
 
 /** POST /v1/daily-quiz/attempts/batch — submit all admin questions for one day. */
@@ -481,11 +503,27 @@ router.get('/leaderboard', async (req, res) => {
 router.get('/attempts/:quizDay', async (req, res) => {
   const quizDay = parseQuizDayInput(req.params.quizDay);
   if (!quizDay) return res.status(400).json({ error: 'Invalid quizDay (use yyyy-MM-dd)' });
+  const scopeRaw = String(req.query.scope || '').trim();
+  let userScope = null;
+  let scopeKey = null;
+  if (scopeRaw) {
+    const parsedScope = parseDailyQuizScopeQueryInput(req.query || {});
+    if (parsedScope.error) {
+      return res.status(400).json({ error: parsedScope.error });
+    }
+    userScope = parsedScope.userScope;
+    scopeKey = buildDailyQuizScopeKey(userScope);
+  }
   try {
     const attempts = await loadUserDayAttempts(req.userId, quizDay);
     if (!attempts.length) return res.status(404).json({ error: 'No daily quiz attempt for this day' });
-    const summary = await attachRankForDay(req.userId, quizDay, buildSummaryFromAttempts(attempts));
-    return res.json({ quizDay, attempts, summary });
+    const summary = await attachRankForDay(
+      req.userId,
+      quizDay,
+      buildSummaryFromAttempts(attempts),
+      userScope,
+    );
+    return res.json({ quizDay, attempts, summary, scope: userScope?.scope || null, stateName: userScope?.stateName || null, scopeKey });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to load daily quiz attempt' });

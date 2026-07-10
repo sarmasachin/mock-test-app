@@ -169,6 +169,16 @@ object AppPreferencesRepository {
         get() = storeOrNull()?.data?.map { mapPrefsToEditableProfile(it) }
             ?: flowOf(EditableProfileState("", "", "", "", ""))
 
+    /** One-shot owner id for user-scoped prefs (email / contact / uid). Empty when unknown. */
+    suspend fun peekContentStateOwnerIdNow(): String {
+        if (!::appContext.isInitialized) return ""
+        val prefs = runCatching { store().data.first() }.getOrNull() ?: return ""
+        return currentContentStateOwnerId(prefs)
+    }
+
+    private fun normalizeOwnerUserKey(userKey: String): String? =
+        userKey.trim().takeIf { it.isNotBlank() }
+
     /** One-shot read for Profile screen so DataStore-backed fields paint before first Flow emission. */
     suspend fun peekEditableProfileNow(): EditableProfileState {
         if (!::appContext.isInitialized) return EditableProfileState("", "", "", "", "")
@@ -1287,7 +1297,7 @@ object AppPreferencesRepository {
         if (!::appContext.isInitialized) return
         val want = testName.trim()
         if (want.isBlank()) return
-        val owner = currentOwnerUserKey.trim().ifBlank { "guest" }
+        val owner = normalizeOwnerUserKey(currentOwnerUserKey) ?: return
         val existing = peekSubmittedAttemptSnapshot(owner, want) ?: return
         if (!existing.testName.equals(want, ignoreCase = true)) return
         clearSubmittedAttemptSnapshotNow()
@@ -1302,7 +1312,7 @@ object AppPreferencesRepository {
     ) {
         if (!::appContext.isInitialized) return
         if (questions.isEmpty()) return
-        val owner = ownerUserKey.trim().ifBlank { "guest" }
+        val owner = normalizeOwnerUserKey(ownerUserKey) ?: return
         val name = testName.trim().ifBlank { return }
         runCatching {
             store().edit { prefs ->
@@ -1325,7 +1335,7 @@ object AppPreferencesRepository {
         testName: String,
     ): SubmittedAttemptSnapshot? {
         if (!::appContext.isInitialized) return null
-        val owner = ownerUserKey.trim().ifBlank { "guest" }
+        val owner = normalizeOwnerUserKey(ownerUserKey) ?: return null
         val want = testName.trim().ifBlank { return null }
         val raw = runCatching { store().data.first()[keySubmittedAttemptJson].orEmpty().trim() }.getOrDefault("")
         if (raw.isBlank()) return null
@@ -1356,7 +1366,7 @@ object AppPreferencesRepository {
             clearInProgressQuizNow()
             return null
         }
-        val owner = currentOwnerUserKey.trim().ifBlank { "guest" }
+        val owner = normalizeOwnerUserKey(currentOwnerUserKey) ?: return null
         if (!parsed.ownerUserKey.equals(owner, ignoreCase = true)) {
             clearInProgressQuizNow()
             return null
@@ -1448,6 +1458,8 @@ object AppPreferencesRepository {
         /** Daily Quiz leaderboard for that calendar day only (not mock-test rank). */
         val rank: Int? = null,
         val rankTotal: Int? = null,
+        /** Delivery scope key used when rank was computed (matches [DailyQuizScopeSelection.cacheKey]). */
+        val scopeKey: String? = null,
     ) {
         val correctCount: Int get() = questions.count { it.isAnswered && it.isCorrect }
         val wrongCount: Int get() = questions.count { it.isAnswered && !it.isCorrect }
@@ -1570,12 +1582,13 @@ object AppPreferencesRepository {
                 .put("totalTimeTakenSeconds", result.totalTimeTakenSeconds)
                 .put("savedAtMillis", result.savedAtMillis)
                 .put("rank", result.rank ?: JSONObject.NULL)
-                .put("rankTotal", result.rankTotal ?: JSONObject.NULL),
+                .put("rankTotal", result.rankTotal ?: JSONObject.NULL)
+                .put("scopeKey", result.scopeKey ?: JSONObject.NULL),
         )
     }
 
     /**
-     * Phase 1 — Load daily quiz cache only when it belongs to the current signed-in/guest user.
+     * Phase 1 — Load daily quiz cache only when it belongs to the current signed-in user.
      * Orphan legacy blobs (no owner) or another user's blob are discarded on read.
      */
     private suspend fun readDailyQuizResultsRootForCurrentUser(): JSONObject {
@@ -1593,8 +1606,9 @@ object AppPreferencesRepository {
         }
 
         val ownerMismatch = ownerStored.isNotBlank() && !ownerStored.equals(ownerNow, ignoreCase = true)
-        val orphanLegacy = ownerStored.isBlank()
-        if (ownerMismatch || orphanLegacy) {
+        val orphanLegacy = ownerStored.isBlank() || ownerStored.equals("guest", ignoreCase = true)
+        val ownerUnknown = ownerNow.isBlank()
+        if (ownerMismatch || orphanLegacy || ownerUnknown) {
             store().edit {
                 it[keyDailyQuizResultsOwner] = ownerNow
                 it[keyDailyQuizResultsByDayJson] = ""
@@ -1612,8 +1626,9 @@ object AppPreferencesRepository {
         val raw = prefs[keyDailyQuizResultsByDayJson].orEmpty()
 
         val ownerMismatch = ownerStored.isNotBlank() && !ownerStored.equals(ownerNow, ignoreCase = true)
-        val orphanLegacy = ownerStored.isBlank() && raw.isNotBlank()
-        if (ownerMismatch || orphanLegacy) {
+        val orphanLegacy = (ownerStored.isBlank() && raw.isNotBlank()) || ownerStored.equals("guest", ignoreCase = true)
+        val ownerUnknown = ownerNow.isBlank()
+        if (ownerMismatch || orphanLegacy || ownerUnknown) {
             prefs[keyDailyQuizResultsOwner] = ownerNow
             prefs[keyDailyQuizResultsByDayJson] = ""
             return JSONObject()
@@ -1678,6 +1693,11 @@ object AppPreferencesRepository {
             null, JSONObject.NULL -> null
             else -> entry.optInt("rankTotal", 0).takeIf { it > 0 }
         }
+        val scopeKeyRaw = entry.opt("scopeKey")
+        val scopeKey = when (scopeKeyRaw) {
+            null, JSONObject.NULL -> null
+            else -> entry.optString("scopeKey", "").trim().ifBlank { null }
+        }
         return DailyQuizDayResult(
             day = day,
             questions = questions,
@@ -1688,6 +1708,7 @@ object AppPreferencesRepository {
             savedAtMillis = entry.optLong("savedAtMillis", 0L),
             rank = rank,
             rankTotal = rankTotal,
+            scopeKey = scopeKey,
         )
     }
 
@@ -1982,7 +2003,7 @@ object AppPreferencesRepository {
             email.isNotBlank() -> email.lowercase(Locale.US)
             contact.isNotBlank() -> contact.lowercase(Locale.US)
             userCode.isNotBlank() -> "uid:$userCode"
-            else -> "guest"
+            else -> ""
         }
     }
 
@@ -1994,7 +2015,15 @@ object AppPreferencesRepository {
         return runCatching {
             val prefs = store().data.first()
             val ownerNow = currentContentStateOwnerId(prefs)
+            if (ownerNow.isBlank()) return@runCatching emptySet()
             val ownerStored = prefs[ownerKey].orEmpty().trim()
+            if (ownerStored.equals("guest", ignoreCase = true)) {
+                store().edit { next ->
+                    next[ownerKey] = ownerNow
+                    next[setKey] = "[]"
+                }
+                return@runCatching emptySet()
+            }
             if (ownerStored.isNotBlank() && !ownerStored.equals(ownerNow, ignoreCase = true)) {
                 // Different signed-in user: discard previous user's state.
                 store().edit { next ->

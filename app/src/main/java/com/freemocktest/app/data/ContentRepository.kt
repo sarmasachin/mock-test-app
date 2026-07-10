@@ -1280,13 +1280,14 @@ object ContentRepository {
 
     private fun quizQuestionsCacheKey(titleKey: String, userScope: String, cycleKey: String): String {
         val title = titleKey.trim().lowercase(Locale.US)
-        val user = userScope.trim().lowercase(Locale.US).ifBlank { "guest" }
+        val user = userScope.trim().lowercase(Locale.US).takeIf { it.isNotBlank() } ?: return ""
         val cycle = cycleKey.trim().ifBlank { "no_cycle" }
         return "$title|$user|$cycle"
     }
 
     private suspend fun findQuizQuestionsOnDisk(titleKey: String, userScope: String): QuizQuestionsCacheBundle? {
-        val prefix = "${titleKey.trim().lowercase(Locale.US)}|${userScope.trim().lowercase(Locale.US).ifBlank { "guest" }}|"
+        val scope = userScope.trim().lowercase(Locale.US).takeIf { it.isNotBlank() } ?: return null
+        val prefix = "${titleKey.trim().lowercase(Locale.US)}|$scope|"
         val raw = AppPreferencesRepository.peekCachedQuizQuestionsBlob() ?: return null
         val map = linkedKeyedQuizQuestionsBlobFromJson(raw)
         val matches = map.filterKeys { it.startsWith(prefix) }
@@ -1297,9 +1298,17 @@ object ContentRepository {
     private suspend fun resolveQuizCacheUserScope(explicit: String?): String {
         val direct = explicit?.trim().orEmpty()
         if (direct.isNotBlank()) return direct.lowercase(Locale.US)
-        val email = AppPreferencesRepository.peekEditableProfileNow().email.trim()
+        if (!AuthRepository.isLoggedIn()) {
+            throw IllegalStateException("Login required to load test questions")
+        }
+        val profile = AppPreferencesRepository.peekEditableProfileNow()
+        val email = profile.email.trim()
         if (email.isNotBlank()) return email.lowercase(Locale.US)
-        return "guest"
+        val mobile = profile.mobile.trim()
+        if (mobile.isNotBlank()) return mobile.lowercase(Locale.US)
+        val owner = AppPreferencesRepository.peekContentStateOwnerIdNow().trim()
+        if (owner.isNotBlank()) return owner.lowercase(Locale.US)
+        throw IllegalStateException("Login required to load test questions")
     }
 
     private fun isShuffleDeliveryEnabled(test: TestCardNew?): Boolean {
@@ -1308,7 +1317,8 @@ object ContentRepository {
     }
 
     private fun findUniqueQuizQuestionsCache(titleKey: String, userScope: String): QuizQuestionsCacheBundle? {
-        val prefix = "${titleKey.trim().lowercase(Locale.US)}|${userScope.trim().lowercase(Locale.US).ifBlank { "guest" }}|"
+        val scope = userScope.trim().lowercase(Locale.US).takeIf { it.isNotBlank() } ?: return null
+        val prefix = "${titleKey.trim().lowercase(Locale.US)}|$scope|"
         val matches = quizQuestionsMemory.filterKeys { it.startsWith(prefix) }
         if (matches.size == 1) return matches.values.first()
         return null
@@ -1316,7 +1326,7 @@ object ContentRepository {
 
     private suspend fun evictQuizQuestionsCacheForTitleUser(titleKey: String, userScope: String) {
         val title = titleKey.trim().lowercase(Locale.US)
-        val user = userScope.trim().lowercase(Locale.US).ifBlank { "guest" }
+        val user = userScope.trim().lowercase(Locale.US).takeIf { it.isNotBlank() } ?: return
         val prefix = "$title|$user|"
         quizQuestionsMemory.keys.toList().forEach { key ->
             if (key == title || key.startsWith(prefix)) {
@@ -1676,10 +1686,7 @@ object ContentRepository {
         }
     }
 
-    private fun dailyQuizScopeCacheKey(scope: DailyQuizScopeSelection): String {
-        if (!DailyQuizRepository.isLoggedIn()) return "all-india"
-        return scope.cacheKey()
-    }
+    private fun dailyQuizScopeCacheKey(scope: DailyQuizScopeSelection): String = scope.cacheKey()
 
     private fun mapDailyQuizTodayResponse(
         res: com.freemocktest.app.data.remote.DailyQuizTodayResponse,
@@ -1779,19 +1786,15 @@ object ContentRepository {
 
     suspend fun loadDailyQuizToday(scope: DailyQuizScopeSelection = DailyQuizScopeSelection.AllIndia): DailyQuizTodayRemote? =
         withContext(Dispatchers.IO) {
+            if (!DailyQuizRepository.isLoggedIn()) return@withContext null
             val cacheKey = dailyQuizScopeCacheKey(scope)
-            val loggedIn = DailyQuizRepository.isLoggedIn()
             try {
-                val res = if (loggedIn) {
-                    val scopeParam = if (scope.isState) DailyQuizScopeSelection.MODE_STATE else DailyQuizScopeSelection.MODE_ALL_INDIA
-                    val stateParam = scope.stateName.trim().takeIf { scope.isState && it.isNotBlank() }
-                    RetrofitProvider.appApi.getDailyQuizTodayScoped(
-                        scope = scopeParam,
-                        state = stateParam,
-                    )
-                } else {
-                    RetrofitProvider.publicApi.getDailyQuizToday()
-                }
+                val scopeParam = if (scope.isState) DailyQuizScopeSelection.MODE_STATE else DailyQuizScopeSelection.MODE_ALL_INDIA
+                val stateParam = scope.stateName.trim().takeIf { scope.isState && it.isNotBlank() }
+                val res = RetrofitProvider.appApi.getDailyQuizTodayScoped(
+                    scope = scopeParam,
+                    state = stateParam,
+                )
                 val mapped = mapDailyQuizTodayResponse(res, cacheKey) ?: return@withContext null
                 AppPreferencesRepository.saveCachedDailyQuizToday(cacheKey, encodeDailyQuizTodayRemote(mapped))
                 mapped

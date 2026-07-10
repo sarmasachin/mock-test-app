@@ -403,6 +403,84 @@ module.exports = {
   hasAdminScheduleFieldsChanged,
   hasPreviousCatalogCycleEnded,
   shouldRenewCycleOnAdminEdit,
+}
+
+/**
+ * Phase 5 — Application / attempt cycle boundary (epoch ms).
+ * Uses last_cycle_started_at when set (scheduler rollover or admin seed).
+ * Returns NaN when boundary is not established yet (e.g. future exam before first rollover).
+ */
+function resolveApplicationCycleBoundaryMs(row, nowMs = Date.now()) {
+  const startedMs = parseCycleStartedMs(row);
+  if (Number.isFinite(startedMs)) {
+    return startedMs;
+  }
+  return Number.NaN;
+}
+
+/**
+ * Phase 5 — Attempt counting boundary; null when no established cycle marker.
+ */
+function resolveAttemptCycleStartedAtMs(row, nowMs = Date.now()) {
+  const boundaryMs = resolveApplicationCycleBoundaryMs(row, nowMs);
+  return Number.isFinite(boundaryMs) ? boundaryMs : null;
+}
+
+/**
+ * Full snapshot for admin diagnostics, Phase 2 scheduler, and Phase 3 apply gates.
+ */
+function resolveCycleWindows(row, nowMs = Date.now()) {
+  const mode = classifyCycleMode(row);
+  const cycleDays = parseCycleDays(row);
+  const durationMinutes = parseDurationMinutes(row);
+  const cycleStartedMs = parseCycleStartedMs(row);
+  const schedulerCycleEndMs = resolveSchedulerCycleEndMs(row, mode);
+  const legacySchedulerCycleEndMs = legacyParseCycleEndMs(row);
+  const examWindow = resolveExamWindowMs(row, nowMs);
+  const applyState = resolveApplyWindowState(row, nowMs);
+
+  return {
+    mode,
+    modeLabel: cycleModeLabel(mode),
+    durationMinutes,
+    dateCycleDays: cycleDays,
+    dynamicDateEnabled: row?.dynamic_date_enabled === true,
+    cycleStartedMs: Number.isFinite(cycleStartedMs) ? cycleStartedMs : null,
+    schedulerCycleEndMs: Number.isFinite(schedulerCycleEndMs) ? schedulerCycleEndMs : null,
+    legacySchedulerCycleEndMs: Number.isFinite(legacySchedulerCycleEndMs)
+      ? legacySchedulerCycleEndMs
+      : null,
+    schedulerUsesDurationBug:
+      Number.isFinite(legacySchedulerCycleEndMs) &&
+      legacySchedulerCycleEndMs !== schedulerCycleEndMs,
+    examStartMs: Number.isFinite(examWindow.examStartMs) ? examWindow.examStartMs : null,
+    examEndMs: Number.isFinite(examWindow.examEndMs) ? examWindow.examEndMs : null,
+    resolvedExamDate: examWindow.resolvedExamDate,
+    examInProgress: isExamInProgress(row, nowMs),
+    applyOpen: applyState.open,
+    applyBlockReason: applyState.reason,
+    shouldRunSchedulerRollover: shouldRunSchedulerRollover(row, nowMs),
+    retainPublishedOnRollover: true,
+  };
+}
+
+module.exports = {
+  MS_PER_DAY,
+  MS_PER_MINUTE,
+  CYCLE_MODES,
+  classifyCycleMode,
+  cycleModeLabel,
+  parseDurationMinutes,
+  parseCycleDays,
+  parseCycleStartedMs,
+  resolveExamWindowMs,
+  resolveSchedulerCycleEndMs,
+  shouldRunSchedulerRollover,
+  isExamInProgress,
+  isPostExamPreRollover,
+  resolveApplyWindowState,
+  resolveCycleWindows,
+  shouldSeedCycleStartOnAdminPublish,
   resolveAdminCycleStartUpdate,
   resolveApplicationCycleBoundaryMs,
   resolveAttemptCycleStartedAtMs,

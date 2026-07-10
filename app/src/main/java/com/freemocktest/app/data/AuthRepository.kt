@@ -86,6 +86,18 @@ object AuthRepository {
 
     fun peekAccessToken(): String? = accessTokenMem
 
+    fun isLoggedIn(): Boolean = !peekAccessToken().isNullOrBlank()
+
+    /**
+     * Per-user local storage key for tests, quiz cache, and history.
+     * Returns null when logged out or profile owner id is not ready yet.
+     */
+    suspend fun resolveLoggedInUserScopeKey(): String? {
+        if (!isLoggedIn()) return null
+        val owner = AppPreferencesRepository.peekContentStateOwnerIdNow()
+        return owner.trim().takeIf { it.isNotBlank() }
+    }
+
     suspend fun loadStoredTokens() {
         accessTokenMem = AuthTokenStore.readAccess()
         refreshTokenMem = AuthTokenStore.readRefresh()

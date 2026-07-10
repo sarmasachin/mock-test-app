@@ -67,45 +67,21 @@ async function main() {
     console.log(`LIVE_SMOKE_SKIPPED: API unreachable (${res.body?.error || 'network error'})`);
     process.exit(0);
   }
-  if (res.status === 404) {
-    console.log('LIVE_SMOKE_SKIPPED: no daily quiz published (HTTP 404)');
-    process.exit(0);
-  }
 
-  ok = line(res.ok, `GET /digest/quiz-today → HTTP ${res.status}`) && ok;
-  if (!res.ok) {
+  ok =
+    line(
+      res.status === 410,
+      `GET /digest/quiz-today → HTTP ${res.status} (410 Gone expected — login-only)`,
+    ) && ok;
+
+  if (!ok) {
     console.error('VERIFY_DAILY_QUIZ_DAILY_PICK_LIVE_PHASE5_FAILED');
     process.exit(1);
   }
 
-  const quizDay = String(res.body?.quizDay || '').trim();
-  ok = line(/^\d{4}-\d{2}-\d{2}$/.test(quizDay), `quizDay ISO present (${quizDay || 'missing'})`) && ok;
-
-  const items = Array.isArray(res.body?.items) ? res.body.items : [];
-  const declaredCount = Number(res.body?.questionCount);
-  ok = line(items.length > 0, `items delivered: ${items.length}`) && ok;
-  ok = line(items.length <= 50, `items.length <= 50 (daily cap) → ${items.length}`) && ok;
-  ok =
-    line(
-      Number.isInteger(declaredCount) && declaredCount === items.length,
-      `questionCount matches items.length (${declaredCount} vs ${items.length})`,
-    ) && ok;
-
-  const ids = items.map((x) => String(x?.id || '')).filter(Boolean);
-  ok = line(new Set(ids).size === ids.length, 'all delivered item ids unique') && ok;
-
-  for (const item of items) {
-    const shape = verifyLiveDeliveryShape(item);
-    ok = line(shape.ok, `shape ${item.id}: ${shape.reason || 'ok'}`) && ok;
-  }
-
-  console.log('');
-  if (ok) {
-    console.log('VERIFY_DAILY_QUIZ_DAILY_PICK_LIVE_PHASE5_OK');
-    process.exit(0);
-  }
-  console.error('VERIFY_DAILY_QUIZ_DAILY_PICK_LIVE_PHASE5_FAILED');
-  process.exit(1);
+  console.log('LIVE_SMOKE_NOTE: public digest/quiz-today deprecated — use auth GET /daily-quiz/today');
+  console.log('VERIFY_DAILY_QUIZ_DAILY_PICK_LIVE_PHASE5_OK');
+  process.exit(0);
 }
 
 main();

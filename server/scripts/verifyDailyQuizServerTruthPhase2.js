@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * Phase 2 — daily quiz server truth priority (logged-in users).
+ * Phase 2 — daily quiz server truth priority (logged-in users only).
  *
  * Usage:
  *   node scripts/verifyDailyQuizServerTruthPhase2.js
@@ -25,12 +25,10 @@ function read(relPath) {
 }
 
 /** Mirror loadDayResultForCurrentUser decision tree. */
-function resolveDayResult({ loggedIn, localResult, serverResult, serverChecked404 }) {
-  if (loggedIn) {
-    if (serverResult != null) return serverResult;
-    if (serverChecked404) return null;
-    return null;
-  }
+function resolveDayResult({ loggedIn, localResult, serverResult, server404 }) {
+  if (!loggedIn) return null;
+  if (serverResult != null) return serverResult;
+  if (server404) return null;
   return localResult;
 }
 
@@ -52,9 +50,10 @@ function main() {
   ok =
     line(
       repo.includes('loadDayResultForCurrentUser') &&
-        repo.includes('if (isLoggedIn())') &&
-        repo.includes('loadDayFromServer(day)'),
-      'DailyQuizRepository: logged-in server-first loader',
+        repo.includes('if (!isLoggedIn())') &&
+        repo.includes('loadDayFromServer(day, scope)') &&
+        repo.includes('server ?: local'),
+      'DailyQuizRepository: logged-in server-first with offline local fallback',
     ) && ok;
 
   ok =
@@ -66,15 +65,17 @@ function main() {
   ok =
     line(
       repo.includes('replaceDailyQuizResultsForCurrentUser(attemptsByDay)') &&
-        !repo.match(/saveDailyQuizDayResult\(session\)/),
-      'syncHistoryFromServer: replace cache (no per-row local merge)',
+        repo.includes('prior.rank') &&
+        repo.includes('prior.scopeKey'),
+      'syncHistoryFromServer: replace cache + preserve rank/scopeKey',
     ) && ok;
 
   ok =
     line(
-      ui.includes('loadDayResultForCurrentUser(selectedDate)') &&
-        !ui.includes('AppPreferencesRepository.loadDailyQuizDayResult(selectedDate)'),
-      'DailyDigestScreenNew: day load uses server-first helper',
+      ui.includes('loadDayResultForCurrentUser(selectedDate, selectedQuizScope)') &&
+        ui.includes('dayResultLoading') &&
+        ui.includes('loadDailyQuizDayResult(selectedDate)'),
+      'DailyDigestScreenNew: local hydrate then scoped server load',
     ) && ok;
 
   ok =
@@ -90,7 +91,7 @@ function main() {
     loggedIn: true,
     localResult: { day: '2026-07-09' },
     serverResult: null,
-    serverChecked404: true,
+    server404: true,
   });
   ok = line(loggedInNewUser == null, 'mirror: logged-in + server 404 ⇒ not attempted') && ok;
 
@@ -98,17 +99,25 @@ function main() {
     loggedIn: true,
     localResult: null,
     serverResult: { day: '2026-07-09' },
-    serverChecked404: false,
+    server404: false,
   });
   ok = line(loggedInHasAttempt != null, 'mirror: logged-in + server hit ⇒ dashboard data') && ok;
 
-  const guestLocal = resolveDayResult({
+  const offlineFallback = resolveDayResult({
+    loggedIn: true,
+    localResult: { day: '2026-07-09' },
+    serverResult: null,
+    server404: false,
+  });
+  ok = line(offlineFallback != null, 'mirror: logged-in + network error ⇒ local fallback') && ok;
+
+  const loggedOut = resolveDayResult({
     loggedIn: false,
     localResult: { day: '2026-07-09' },
     serverResult: null,
-    serverChecked404: false,
+    server404: false,
   });
-  ok = line(guestLocal != null, 'mirror: guest still uses local cache') && ok;
+  ok = line(loggedOut == null, 'mirror: logged-out ⇒ no day result (login-only)') && ok;
 
   console.log('');
   if (ok) {

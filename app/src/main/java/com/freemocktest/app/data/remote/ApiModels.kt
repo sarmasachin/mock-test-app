@@ -321,6 +321,9 @@ data class DailyQuizBatchSubmitResponse(
     @SerializedName("quizDay") val quizDay: String,
     val attempts: List<DailyQuizAttemptDto>,
     val summary: DailyQuizDaySummaryDto,
+    val scope: String? = null,
+    @SerializedName("stateName") val stateName: String? = null,
+    @SerializedName("scopeKey") val scopeKey: String? = null,
 )
 
 data class DailyQuizAttemptSubmitResponse(
@@ -328,6 +331,9 @@ data class DailyQuizAttemptSubmitResponse(
     @SerializedName("quizDay") val quizDay: String? = null,
     val attempts: List<DailyQuizAttemptDto>? = null,
     val summary: DailyQuizDaySummaryDto? = null,
+    val scope: String? = null,
+    @SerializedName("stateName") val stateName: String? = null,
+    @SerializedName("scopeKey") val scopeKey: String? = null,
 )
 
 data class DailyQuizHistoryResponse(
@@ -339,6 +345,9 @@ data class DailyQuizDayAttemptResponse(
     @SerializedName("quizDay") val quizDay: String,
     val attempts: List<DailyQuizAttemptDto>,
     val summary: DailyQuizDaySummaryDto,
+    val scope: String? = null,
+    @SerializedName("stateName") val stateName: String? = null,
+    @SerializedName("scopeKey") val scopeKey: String? = null,
 )
 
 data class DailyQuizLeaderboardEntryDto(

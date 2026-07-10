@@ -165,7 +165,6 @@ function main() {
       testsSrc.includes('buildMyTestApplicationItem') &&
         testsSrc.includes('cycleState.mayReapplyForNewCycle'),
       'my-applications uses Phase 2 item builder + re-apply rows',
-    ) && ok;
   ok =
     line(
       attemptsSrc.includes('resolveAttemptCycleStartedAtMs'),

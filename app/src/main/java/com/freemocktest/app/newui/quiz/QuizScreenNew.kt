@@ -131,7 +131,7 @@ fun QuizScreenNew(
         questionsLoaded = false
         questionsLoadError = false
         val trimmedName = testName.trim().ifBlank { "Test" }
-        val owner = attemptsUserKey.trim().ifBlank { "guest" }
+        val owner = attemptsUserKey.trim()
         try {
             val saved = AppPreferencesRepository.getResumableQuizSession(owner, trimmedName)
             if (saved != null && saved.questionsSnapshot.isNotEmpty()) {
@@ -265,7 +265,7 @@ fun QuizScreenNew(
         if (quizSessionInitialized) return@LaunchedEffect
         quizSessionInitialized = true
         val trimmedName = testName.trim().ifBlank { "Test" }
-        val owner = attemptsUserKey.trim().ifBlank { "guest" }
+        val owner = attemptsUserKey.trim()
         var allowResume = true
         // Resume snapshot read can throw (DataStore corruption / IO). On any failure we fall
         // back to a fresh session with the configured duration so the user is never stranded
@@ -334,7 +334,7 @@ fun QuizScreenNew(
         // throws, the user's score still has to reach `onSubmit(...)` — otherwise their
         // entire timed attempt would be lost.
         try {
-            val owner = attemptsUserKey.trim().ifBlank { "guest" }
+            val owner = attemptsUserKey.trim()
             val trimmedName = testName.trim().ifBlank { "Test" }
             if (displayQuestions.isNotEmpty()) {
                 AppPreferencesRepository.saveSubmittedAttemptSnapshotNow(
@@ -378,7 +378,7 @@ fun QuizScreenNew(
     ) {
         if (!quizSessionReady || deadlineAtMillis <= 0L || !resumeEnabled) return@LaunchedEffect
         val trimmedName = testName.trim().ifBlank { "Test" }
-        val owner = attemptsUserKey.trim().ifBlank { "guest" }
+        val owner = attemptsUserKey.trim()
         snapshotFlow { current to answers.toMap() }
             .debounce(400L)
             .collectLatest { (idx, ans) ->
@@ -427,7 +427,7 @@ fun QuizScreenNew(
             scope.launch {
                 runCatching {
                     val trimmedName = testNameRef.value.trim().ifBlank { "Test" }
-                    val owner = attemptsUserKeyRef.value.trim().ifBlank { "guest" }
+                    val owner = attemptsUserKeyRef.value.trim()
                     AppPreferencesRepository.saveInProgressQuizNow(
                         AppPreferencesRepository.InProgressQuizState(
                             ownerUserKey = owner,
@@ -768,7 +768,7 @@ fun QuizScreenNew(
                     // to `onSubmit(...)`. A DataStore exception below would otherwise discard
                     // the user's entire attempt.
                     try {
-                        val owner = attemptsUserKey.trim().ifBlank { "guest" }
+                        val owner = attemptsUserKey.trim()
                         val trimmedName = testName.trim().ifBlank { "Test" }
                         if (displayQuestions.isNotEmpty()) {
                             AppPreferencesRepository.saveSubmittedAttemptSnapshotNow(
