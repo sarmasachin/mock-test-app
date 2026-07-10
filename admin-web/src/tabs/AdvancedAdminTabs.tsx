@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminAnalyticsDashboard } from '../components/AdminAnalyticsDashboard';
 import { useAdminDialog } from '../adminDialog';
 import { useAdminToast } from '../adminToast';
@@ -179,6 +179,27 @@ const DEFAULT_EXAM_CATEGORY_ICON_OPTIONS: ExamCategoryIconOption[] = [
   { id: 'skill', value: 'skill', label: 'Skills / Certification' },
   { id: 'diploma', value: 'diploma', label: 'Diploma / Polytechnic' },
 ];
+
+function mapExamCategoryItemsFromApi(raw: unknown): ExamCategoryItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((x: any, idx: number) => ({
+    id: String(x?.id || `exam-cat-${idx + 1}`),
+    level1: String(x?.level1 || ''),
+    level2: String(x?.level2 || ''),
+    level3: String(x?.level3 || ''),
+    iconKey: String(x?.iconKey || ''),
+    enabled: x?.enabled !== false,
+  }));
+}
+
+function validateExamCategoryItemsForSave(nextItems: ExamCategoryItem[]): string | null {
+  for (const item of nextItems) {
+    if (!String(item.level1 || '').trim() || !String(item.level2 || '').trim() || !String(item.level3 || '').trim()) {
+      return 'Each row needs Level 1, Level 2, and Level 3 before saving.';
+    }
+  }
+  return null;
+}
 
 type ApiClient = {
   get: (url: string, config?: any) => Promise<any>;
@@ -640,6 +661,7 @@ export function PublishSchedulingTabImpl({ apiClient }: { apiClient: ApiClient }
 
 export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const { pushToast } = useAdminToast();
+  const { confirm: adminConfirm } = useAdminDialog();
   const rbac = useAdminRbac();
   const guard = usePermissionGuard();
   const canUploadImages =
@@ -659,7 +681,9 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
   const [newEnabled, setNewEnabled] = useState(true);
   const [page, setPage] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [categoriesLoaded, setCategoriesLoaded] = useState(false);
   const [showIconManager, setShowIconManager] = useState(false);
+  const saveChainRef = useRef<Promise<boolean>>(Promise.resolve(true));
 
   function isUploadMimeSupported(mime: string): boolean {
     return ACCEPTED_IMAGE_MIME.includes((mime || '').toLowerCase() as (typeof ACCEPTED_IMAGE_MIME)[number]);
@@ -749,19 +773,11 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
             .filter((x: ExamCategoryIconOption) => x.value || x.label)
         : [];
       setIconOptions(mappedIcons.length ? mappedIcons : DEFAULT_EXAM_CATEGORY_ICON_OPTIONS);
-      const mapped = Array.isArray(s?.items)
-        ? s.items.map((x: any, idx: number) => ({
-            id: String(x.id || `exam-cat-${idx + 1}`),
-            level1: String(x.level1 || ''),
-            level2: String(x.level2 || ''),
-            level3: String(x.level3 || ''),
-            iconKey: String(x.iconKey || ''),
-            enabled: x.enabled !== false,
-          }))
-        : [];
-      setItems(mapped);
+      setItems(mapExamCategoryItemsFromApi(s?.items));
       setPage(1);
+      setCategoriesLoaded(true);
     } catch (err: any) {
+      setCategoriesLoaded(false);
       pushToast('error', err?.response?.data?.error || 'Failed to load exam categories');
     }
   }
@@ -769,21 +785,76 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  async function saveAll(nextItems: ExamCategoryItem[]) {
+
+  async function saveAll(
+    nextItems: ExamCategoryItem[],
+    opts?: { allowEmptyClear?: boolean },
+  ): Promise<boolean> {
     if (!guard('tab_exam_categories')) return false;
-    try {
-      setSaving(true);
-      const payload = {
-        examCategories: { items: nextItems },
-        examCategoryIconOptions: { items: iconOptions },
-      };
-      const res = await apiClient.patch('/admin/settings', payload);
-      setItems(res.data?.settings?.examCategories?.items || nextItems);
-    } catch (err: any) {
-      pushToast('error', err?.response?.data?.error || 'Failed to save exam categories');
-    } finally {
-      setSaving(false);
+    if (!categoriesLoaded) {
+      pushToast('error', 'Load exam categories first (click Load or wait for the list to finish loading).');
+      return false;
     }
+    if (nextItems.length === 0 && !opts?.allowEmptyClear) {
+      pushToast('error', 'Cannot save an empty category list. Add rows or delete the last row with confirmation.');
+      return false;
+    }
+    if (nextItems.length > 0) {
+      const validationError = validateExamCategoryItemsForSave(nextItems);
+      if (validationError) {
+        pushToast('error', validationError);
+        return false;
+      }
+    }
+
+    const run = async (): Promise<boolean> => {
+      try {
+        setSaving(true);
+        const payload: {
+          examCategories: { items: ExamCategoryItem[] };
+          confirmClearExamCategories?: boolean;
+        } = {
+          examCategories: { items: nextItems },
+        };
+        if (opts?.allowEmptyClear) {
+          payload.confirmClearExamCategories = true;
+        }
+        const res = await apiClient.patch('/admin/settings', payload);
+        const fromServer = res.data?.settings?.examCategories?.items;
+        setItems(mapExamCategoryItemsFromApi(Array.isArray(fromServer) ? fromServer : nextItems));
+        pushToast('success', 'Exam categories saved.');
+        return true;
+      } catch (err: any) {
+        pushToast('error', err?.response?.data?.error || 'Failed to save exam categories');
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    };
+
+    const chained = saveChainRef.current.then(run, run);
+    saveChainRef.current = chained.then(
+      () => true,
+      () => false,
+    );
+    return chained;
+  }
+
+  async function deleteItem(itemId: string) {
+    const next = items.filter((x) => x.id !== itemId);
+    if (next.length === 0) {
+      const confirmed = await adminConfirm({
+        title: 'Delete all exam categories?',
+        message: 'This removes every hierarchy row from the server. You can add categories again later.',
+        confirmLabel: 'Delete all',
+        cancelLabel: 'Cancel',
+        variant: 'danger',
+      });
+      if (!confirmed) return;
+      await saveAll(next, { allowEmptyClear: true });
+      return;
+    }
+    await saveAll(next);
   }
 
   async function saveIconOptions(nextOptions: ExamCategoryIconOption[]) {
@@ -826,9 +897,9 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
     setIconOptions(next);
     setNewIconValue('');
     setNewIconLabel('');
-    saveIconOptions(next);
+    void saveIconOptions(next);
   }
-  function addItem(e: FormEvent) {
+  async function addItem(e: FormEvent) {
     e.preventDefault();
     const level1 = newLevel1.trim();
     const level2 = newLevel2.trim();
@@ -839,7 +910,8 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
       return;
     }
     const next = [{ id: `exam-cat-${Date.now()}`, level1, level2, level3, iconKey, enabled: newEnabled }, ...items];
-    saveAll(next);
+    const ok = await saveAll(next);
+    if (!ok) return;
     setNewLevel1('');
     setNewLevel2('');
     setNewLevel3('');
@@ -890,9 +962,22 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
           </button>
         ) : null}
         <label className="check-wrap"><input type="checkbox" checked={newEnabled} onChange={(e) => setNewEnabled(e.target.checked)} />enabled</label>
-        <button type="submit">Add Hierarchy</button>
+        <button type="submit" disabled={!categoriesLoaded || saving || newIconUploading}>
+          {saving ? 'Saving...' : 'Add Hierarchy'}
+        </button>
       </form>
-      <div className="inline-form"><button type="button" className="ghost" onClick={load}>Load</button><button type="button" onClick={() => saveAll(items)} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button></div>
+      <div className="inline-form">
+        <button type="button" className="ghost" onClick={() => void load()} disabled={saving}>
+          Load
+        </button>
+        <button
+          type="button"
+          onClick={() => void saveAll(items)}
+          disabled={!categoriesLoaded || saving || items.length === 0}
+        >
+          {saving ? 'Saving...' : 'Save All'}
+        </button>
+      </div>
       <div className="table-scroll-x">
         <div className="list table exam-categories-table">
           <div className="row row-head"><span>Level 1</span><span>Level 2</span><span>Level 3</span><span>Icon Key</span><span>Upload Icon</span><span>Icon Mode</span><span>Enabled</span><span>Update</span><span>Delete</span></div>
@@ -938,8 +1023,17 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
               <span />
             )}
             <label className="check-wrap"><input type="checkbox" checked={item.enabled} onChange={(e) => setItems((p) => p.map((x) => (x.id === item.id ? { ...x, enabled: e.target.checked } : x)))} />{item.enabled ? 'on' : 'off'}</label>
-            <button type="button" onClick={() => saveAll(items)}>Save</button>
-            <button type="button" className="danger" onClick={() => { const next = items.filter((x) => x.id !== item.id); setItems(next); saveAll(next); }}>Delete</button>
+            <button type="button" onClick={() => void saveAll(items)} disabled={saving || rowIconUploadingId === item.id}>
+              Save
+            </button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() => void deleteItem(item.id)}
+              disabled={saving || rowIconUploadingId === item.id}
+            >
+              Delete
+            </button>
             </div>
           ))}
         </div>

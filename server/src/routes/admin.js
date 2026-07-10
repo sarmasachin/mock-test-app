@@ -700,12 +700,41 @@ function normalizeExamCategories(value) {
         level1: String(x.level1 || '').trim().slice(0, 80),
         level2: String(x.level2 || '').trim().slice(0, 80),
         level3: String(x.level3 || '').trim().slice(0, 80),
-        iconKey: String(x.iconKey || '').trim().slice(0, 40),
+        iconKey: String(x.iconKey || '').trim().slice(0, 800),
         enabled: x.enabled !== false,
       };
     })
     .filter((x) => x.level1 && x.level2 && x.level3);
-  return { value: { items } };
+  return { value: { items }, rawCount: rawItems.length };
+}
+
+function isTruthyAdminConfirmFlag(value) {
+  const raw = String(value ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function validateExamCategoriesPatch({
+  rawItemCount,
+  normalizedItemCount,
+  existingItemCount,
+  confirmClear,
+}) {
+  if (rawItemCount > 0 && normalizedItemCount === 0) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'Each exam category row needs Level 1, Level 2, and Level 3.',
+    };
+  }
+  if (rawItemCount === 0 && existingItemCount > 0 && !confirmClear) {
+    return {
+      ok: false,
+      status: 409,
+      error:
+        'Cannot clear all exam categories without explicit confirmation. Delete the last row in the admin panel or send confirmClearExamCategories.',
+    };
+  }
+  return { ok: true };
 }
 
 function normalizeSignupRegions(value) {
@@ -2202,6 +2231,21 @@ router.patch('/settings', async (req, res) => {
     body.instructionContent === undefined ? null : normalizeInstructionContent(body.instructionContent);
   const normalizedExamCategories =
     body.examCategories === undefined ? null : normalizeExamCategories(body.examCategories);
+  if (normalizedExamCategories !== null) {
+    const existingExamCategories = await getJsonSetting('examCategories', { items: [] });
+    const existingItemCount = Array.isArray(existingExamCategories?.items)
+      ? existingExamCategories.items.length
+      : 0;
+    const examCategoriesPatchCheck = validateExamCategoriesPatch({
+      rawItemCount: normalizedExamCategories.rawCount,
+      normalizedItemCount: normalizedExamCategories.value.items.length,
+      existingItemCount,
+      confirmClear: isTruthyAdminConfirmFlag(body.confirmClearExamCategories),
+    });
+    if (!examCategoriesPatchCheck.ok) {
+      return res.status(examCategoriesPatchCheck.status).json({ error: examCategoriesPatchCheck.error });
+    }
+  }
   const normalizedSignupRegions =
     body.signupRegions === undefined ? null : normalizeSignupRegions(body.signupRegions);
   const normalizedExamCategoryIconOptions =
