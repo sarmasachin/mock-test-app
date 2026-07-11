@@ -106,7 +106,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import com.freemocktest.app.BuildConfig
 import com.freemocktest.app.MockTestApp
+import com.freemocktest.app.util.HomeAttemptStatsUtils
 import com.freemocktest.app.util.TestScheduleUtils
+import com.freemocktest.app.util.AppliedTestCatalogLoader
+import com.freemocktest.app.util.AppliedTestHomeUi
+import com.freemocktest.app.util.HomeAppliedTestNavigation
+import com.freemocktest.app.util.HomeCarouselNavigation
+import com.freemocktest.app.util.HomeCategoryNavigation
+import com.freemocktest.app.newui.tests.TestCardNew
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.data.ContentRepository
@@ -164,6 +171,7 @@ private data class StartSeriesCardState(
     val countdownText: String,
     val activeTestName: String?,
     val statusSubtitle: String = "",
+    val routeName: String = "applied",
 )
 
 @Composable
@@ -177,6 +185,7 @@ fun HomeScreenNew(
     onOpenCategory: (String) -> Unit,
     onSeeAllCategories: () -> Unit,
     onStartTest: (String) -> Unit,
+    onApplyForTest: (String) -> Unit,
     onLeaderboard: () -> Unit,
     onResults: () -> Unit,
     onOpenPendingResult: (String, Int, Int, Int, Int, Long) -> Unit,
@@ -201,11 +210,8 @@ fun HomeScreenNew(
             userIdFormatted = null,
         ),
     )
-    val attemptsUserKey = remember(profile.emailLine, profile.userIdFormatted) {
-        profile.emailLine.trim().takeIf { it.isNotBlank() }
-            ?: profile.userIdFormatted?.trim().orEmpty()
-    }
-    val attempts by TestHistoryRepository.observeAttempts(attemptsUserKey).collectAsState(initial = emptyList())
+    val userScopeKey by AppPreferencesRepository.userScopeKey.collectAsState(initial = "")
+    val attempts by TestHistoryRepository.observeAttemptsForLoggedInUser().collectAsState(initial = emptyList())
     val scoreVisible by AppPreferencesRepository.scoreVisibilityEnabled.collectAsState(initial = true)
     val attemptsCount = attempts.size.toString()
     val bestScoreValue = remember(attempts, scoreVisible) {
@@ -213,13 +219,8 @@ fun HomeScreenNew(
             "-"
         } else {
             attempts
-                .maxWithOrNull(
-                    compareBy<com.freemocktest.app.data.local.TestAttemptEntity> {
-                        it.correct.toFloat() / it.total.coerceAtLeast(1).toFloat()
-                    }.thenBy { it.correct }
-                        .thenBy { it.completedAtMillis },
-                )
-                ?.let { "${it.correct}/${it.total.coerceAtLeast(1)}" }
+                .maxWithOrNull(HomeAttemptStatsUtils.compareAttemptsForBest())
+                ?.let { HomeAttemptStatsUtils.formatHomeAttemptScore(it) }
                 ?: "--"
         }
     }
@@ -229,9 +230,7 @@ fun HomeScreenNew(
         } else {
             attempts
                 .maxByOrNull { it.completedAtMillis }
-                ?.let { latest ->
-                    "${latest.correct}/${latest.total.coerceAtLeast(1)}"
-                }
+                ?.let { HomeAttemptStatsUtils.formatHomeAttemptScore(it) }
                 ?: "--"
         }
     }
@@ -289,52 +288,132 @@ fun HomeScreenNew(
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var hiddenSessionAt by remember { mutableStateOf(0L) }
     var scheduleTimerEnabled by remember { mutableStateOf(false) }
-    val startSeriesState = remember(appliedSeries, nowMs, pendingResult, scheduleTimerEnabled) {
-        val eligible = appliedSeries
-            .filter { nowMs < it.expiresAtMillis || it.serverCanStart == true }
-            .sortedBy { it.startUnlockAtMillis(nowMs) }
-            .firstOrNull { entry ->
-                !AppPreferencesRepository.isTestBlockedByPendingResult(entry.testName, pendingResult)
+    val appliedSnapshots = remember { mutableStateMapOf<String, TestCardNew?>() }
+    var appliedSnapshotsLoading by remember { mutableStateOf(false) }
+    var appliedSnapshotsReloadKey by remember { mutableIntStateOf(0) }
+    val loginPickedSubcategories by AppPreferencesRepository.loginPickedSubcategories.collectAsState(initial = emptyList())
+    val appliedHomeState = remember(
+        appliedSeries,
+        appliedSnapshots,
+        scheduleTimerEnabled,
+        pendingResult,
+        nowMs,
+        loginPickedSubcategories,
+    ) {
+        AppliedTestHomeUi.buildHomeAppliedTestsUiState(
+            appliedSeries = appliedSeries,
+            snapshots = appliedSnapshots,
+            scheduleTimerEnabled = scheduleTimerEnabled,
+            pendingResult = pendingResult,
+            nowMs = nowMs,
+            interestSubcategories = loginPickedSubcategories,
+        )
+    }
+    val startSeriesState = remember(appliedHomeState, appliedSeries, nowMs, scheduleTimerEnabled, pendingResult) {
+        val firstEntry = appliedHomeState.activeEntries.firstOrNull()
+        val effectiveTimer = scheduleTimerEnabled || (firstEntry?.scheduledStartAtMillis ?: 0L) > 0L
+        val firstCard = appliedHomeState.cardStates.firstOrNull()
+        StartSeriesCardState(
+            isLocked = firstCard?.isLocked == true && firstCard.isPendingResultWaiting.not(),
+            countdownText = firstCard?.countdownText.orEmpty(),
+            activeTestName = appliedHomeState.nextEligibleTestName,
+            statusSubtitle = appliedHomeState.startTestSubtitle,
+            routeName = appliedHomeState.startTestRouteName,
+        )
+    }
+
+    fun openHomeCategoryTarget(category: String) {
+        scope.launch {
+            when (val target = HomeCategoryNavigation.resolveOpenTarget(category)) {
+                is HomeCategoryNavigation.OpenTarget.Apply -> onApplyForTest(target.testTitle)
+                is HomeCategoryNavigation.OpenTarget.StartPreview -> onStartTest(target.testTitle)
+                is HomeCategoryNavigation.OpenTarget.TestsCatalog -> onOpenCategory(target.subcategory)
             }
-        if (eligible == null) {
-            StartSeriesCardState(
-                isLocked = false,
-                countdownText = "",
-                activeTestName = null,
-                statusSubtitle = "",
+        }
+    }
+
+    fun openHomeSuggestApply(interest: String) {
+        scope.launch {
+            when (val target = HomeCategoryNavigation.resolveOpenTarget(interest)) {
+                is HomeCategoryNavigation.OpenTarget.Apply -> onApplyForTest(target.testTitle)
+                is HomeCategoryNavigation.OpenTarget.StartPreview -> onStartTest(target.testTitle)
+                is HomeCategoryNavigation.OpenTarget.TestsCatalog -> onOpenCategory(target.subcategory)
+            }
+        }
+    }
+
+    fun handleHomeAppliedCarouselTap(testName: String) {
+        val item = appliedHomeState.carouselItems.firstOrNull {
+            it.kind == AppliedTestHomeUi.HomeTestCarouselKind.APPLIED &&
+                it.testName.equals(testName, ignoreCase = true)
+        } ?: return
+        when (
+            val tap = HomeCarouselNavigation.resolveCarouselTapAction(
+                item = item,
+                cardStates = appliedHomeState.cardStates,
+                pendingResult = pendingResult,
+                nowMs = nowMs,
             )
-        } else {
-            val serverAuthoritative = eligible.serverCanStart != null
-            val effectiveTimer = scheduleTimerEnabled || eligible.scheduledStartAtMillis > 0L
-            val remainingMs = when {
-                eligible.serverCanStart == true -> 0L
-                serverAuthoritative && eligible.serverCanStart == false -> 0L
-                !effectiveTimer -> 0L
-                else -> (eligible.startUnlockAtMillis(nowMs) - nowMs).coerceAtLeast(0L)
-            }
-            val hours = (remainingMs / 3_600_000L).toInt()
-            val mins = ((remainingMs % 3_600_000L) / 60_000L).toInt()
-            val secs = ((remainingMs % 60_000L) / 1_000L).toInt()
-            val countdown = String.format("%02d:%02d:%02d", hours, mins, secs)
-            val isLocked = when {
-                eligible.serverCanStart == true -> false
-                eligible.serverCanStart == false -> true
-                !effectiveTimer -> false
-                else -> remainingMs > 0L
-            }
-            val statusSubtitle = when {
-                eligible.serverCanStart == false ->
-                    eligible.startBlockReason?.trim()?.takeIf { it.isNotBlank() } ?: "Cannot start yet"
-                isLocked -> "Starts in $countdown"
-                eligible.testName.isNotBlank() -> "Ready to start"
-                else -> ""
-            }
-            StartSeriesCardState(
-                isLocked = isLocked,
-                countdownText = countdown,
-                activeTestName = eligible.testName,
-                statusSubtitle = statusSubtitle,
+        ) {
+            is HomeCarouselNavigation.CarouselTapAction.OpenSuggestApply ->
+                openHomeSuggestApply(tap.interestLabel)
+            is HomeCarouselNavigation.CarouselTapAction.OpenApplied ->
+                when (val action = tap.appliedAction) {
+                    is HomeAppliedTestNavigation.CardTapAction.OpenStartPreview ->
+                        onStartTest(action.testName)
+                    is HomeAppliedTestNavigation.CardTapAction.Blocked ->
+                        Toast.makeText(context, action.message, Toast.LENGTH_SHORT).show()
+                    is HomeAppliedTestNavigation.CardTapAction.OpenPendingResult -> {
+                        AppPreferencesRepository.markPendingResultViewedAndClear()
+                        onOpenPendingResult(
+                            action.testName,
+                            action.answered,
+                            action.correct,
+                            action.wrong,
+                            action.total,
+                            action.publishAtMillis,
+                        )
+                    }
+                }
+        }
+    }
+
+    LaunchedEffect(
+        appliedSeries.map { it.testName.trim().lowercase() }.joinToString("|"),
+        loginPickedSubcategories.joinToString("|") { it.trim().lowercase() },
+        appliedSnapshotsReloadKey,
+        scheduleTimerEnabled,
+    ) {
+        val activeEntries = appliedSeries.filter { it.isActive(nowMs) }
+        val appliedNames = activeEntries
+            .map { it.testName.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+        val interestNames = AppliedTestHomeUi.resolvePendingInterestTests(
+            interests = loginPickedSubcategories,
+            activeEntries = activeEntries,
+        )
+        val names = (appliedNames + interestNames).distinct()
+        if (names.isEmpty()) {
+            appliedSnapshots.clear()
+            appliedSnapshotsLoading = false
+            return@LaunchedEffect
+        }
+        appliedSnapshotsLoading = true
+        try {
+            val loaded = AppliedTestCatalogLoader.loadSnapshotsForHomeCarousel(
+                testNames = names,
+                forceRefresh = appliedSnapshotsReloadKey > 0,
+                existing = appliedSnapshots,
             )
+            appliedSnapshots.clear()
+            appliedSnapshots.putAll(loaded)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Keep prior snapshots on failure.
+        } finally {
+            appliedSnapshotsLoading = false
         }
     }
 
@@ -580,9 +659,18 @@ fun HomeScreenNew(
                     lastHomeContentFetchAt = System.currentTimeMillis()
                     applyHomeRemote(remote)
                     homeRemoteRefreshFailed = false
+                    scheduleTimerEnabled = remote.startSeriesScheduleTimerEnabled == true
+                    AppPreferencesRepository.reconcileAppliedTestSeriesForTimerMode(scheduleTimerEnabled)
                 } else {
                     homeRemoteRefreshFailed = remoteResult.isFailure || remote == null
                 }
+                // Step 5: always sync applied tests on pull, even when CMS refresh fails.
+                runCatching {
+                    AuthRepository.syncAppliedTestSeriesFromServer(
+                        scheduleTimerEnabled = scheduleTimerEnabled,
+                    )
+                }
+                appliedSnapshotsReloadKey++
             } catch (e: CancellationException) {
                 throw e
             } finally {
@@ -622,6 +710,7 @@ fun HomeScreenNew(
                                 scheduleTimerEnabled = timerEnabled,
                             )
                         }
+                        appliedSnapshotsReloadKey++
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {
@@ -648,6 +737,7 @@ fun HomeScreenNew(
                     onOpenHistory = onOpenHistory,
                     onOpenActivity = onOpenActivity,
                     onOpenProgressReport = onOpenProgressReport,
+                    onOpenAppliedTests = { onStartTest("applied") },
                     onOpenJobAlert = onOpenJobAlert,
                     onOpenExamAlert = onOpenExamAlert,
                     onOpenNews = onOpenNews,
@@ -813,6 +903,16 @@ fun HomeScreenNew(
                             )
                         }
                     }
+                    if (appliedHomeState.showSection) {
+                        Spacer(Modifier.height(14.dp))
+                        HomeAppliedTestsSection(
+                            uiState = appliedHomeState,
+                            catalogLoading = appliedSnapshotsLoading,
+                            onOpenAppliedTest = { testName -> handleHomeAppliedCarouselTap(testName) },
+                            onSuggestApply = { interest -> openHomeSuggestApply(interest) },
+                            onViewAll = { onStartTest("applied") },
+                        )
+                    }
                     if (showLastVisit && lastVisitMillis > 0L) {
                         val formatter = remember { DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a") }
                         val lastVisitText = remember(lastVisitMillis) {
@@ -853,7 +953,7 @@ fun HomeScreenNew(
                             Box(modifier = Modifier.padding(horizontal = 14.dp)) {
                                 CategoryRow(
                                     categories = section.items,
-                                    onClick = onOpenCategory,
+                                    onClick = { openHomeCategoryTarget(it) },
                                     onSeeAll = onSeeAllCategories,
                                 )
                             }
@@ -893,16 +993,8 @@ fun HomeScreenNew(
                                     onAction = { actionKey ->
                                         val normalizedKey = actionKey.trim().lowercase()
                                         when {
-                                            normalizedKey == "starttest" || normalizedKey == "start_test" || normalizedKey == "start test" -> {
-                                                val targetName = startSeriesState.activeTestName
-                                                val startName = when {
-                                                    targetName != null &&
-                                                        AppPreferencesRepository.canStartTest(targetName, pendingResult) ->
-                                                        targetName
-                                                    else -> "applied"
-                                                }
-                                                onStartTest(startName)
-                                            }
+                                            normalizedKey == "starttest" || normalizedKey == "start_test" || normalizedKey == "start test" ->
+                                                onStartTest(startSeriesState.routeName)
                                             normalizedKey == "leaderboard" || normalizedKey == "leader_board" || normalizedKey == "leader board" -> onLeaderboard()
                                             normalizedKey.contains("result") || normalizedKey == "score" || normalizedKey == "results_history" -> onResults()
                                             normalizedKey == "bookmarks" || normalizedKey == "bookmark" || normalizedKey == "tool" || normalizedKey == "tools" -> onBookmarks()
@@ -1994,6 +2086,7 @@ private fun AppDrawer(
     onOpenHistory: () -> Unit,
     onOpenActivity: () -> Unit,
     onOpenProgressReport: () -> Unit,
+    onOpenAppliedTests: () -> Unit,
     onOpenJobAlert: () -> Unit,
     onOpenExamAlert: () -> Unit,
     onOpenNews: () -> Unit,
@@ -2059,6 +2152,11 @@ private fun AppDrawer(
                     icon = Icons.Outlined.BarChart,
                     label = "Progress report",
                     onClick = { postDrawerNavigation { onOpenProgressReport() } },
+                )
+                DrawerItem(
+                    icon = Icons.Outlined.PlayArrow,
+                    label = "My Applied Tests",
+                    onClick = { postDrawerNavigation { onOpenAppliedTests() } },
                 )
                 DrawerItem(
                     icon = Icons.Outlined.WorkOutline,

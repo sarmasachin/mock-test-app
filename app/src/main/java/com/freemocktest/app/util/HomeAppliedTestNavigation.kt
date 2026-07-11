@@ -3,7 +3,8 @@ package com.freemocktest.app.util
 import com.freemocktest.app.data.AppPreferencesRepository
 
 /**
- * Phase 3 — safe navigation when user taps a Home applied-test card.
+ * Safe navigation when user taps a Home / View-all applied-test card.
+ * Locked cards stay on screen until [AppliedTestHomeUi.AppliedTestCardUiState.actionButtonEnabled].
  */
 object HomeAppliedTestNavigation {
 
@@ -17,6 +18,9 @@ object HomeAppliedTestNavigation {
             val total: Int,
             val publishAtMillis: Long,
         ) : CardTapAction()
+
+        /** Tap ignored — test locked, result pending, or late join closed. */
+        data class Blocked(val message: String) : CardTapAction()
     }
 
     fun resolveCardTapAction(
@@ -42,6 +46,32 @@ object HomeAppliedTestNavigation {
                 )
             }
         }
-        return CardTapAction.OpenStartPreview(name)
+        if (card.actionButtonEnabled) {
+            return CardTapAction.OpenStartPreview(name)
+        }
+        return CardTapAction.Blocked(blockedTapMessage(card))
+    }
+
+    fun blockedTapMessage(card: AppliedTestHomeUi.AppliedTestCardUiState): String {
+        if (!card.catalogLoaded) return "Loading test details..."
+        if (card.isPendingResultWaiting) {
+            return card.statusMessage.ifBlank { "Result will be available soon" }
+        }
+        if (card.lateJoinClosed) {
+            return card.statusMessage.ifBlank { "Late join closed" }
+        }
+        if (card.isLocked) {
+            card.startTimeDisplay?.trim()?.takeIf { it.isNotBlank() }?.let {
+                return "Test unlocks at $it"
+            }
+            card.examStartLabel?.trim()?.takeIf { it.isNotBlank() }?.let {
+                return "Test starts $it"
+            }
+            if (card.countdownText.isNotBlank()) {
+                return "Starts in ${card.countdownText}"
+            }
+            return card.statusMessage.ifBlank { "Test is locked" }
+        }
+        return card.statusMessage.ifBlank { "Not available yet" }
     }
 }

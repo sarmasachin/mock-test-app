@@ -44,6 +44,10 @@ function main() {
     'verifyApplyOncePhase3.js',
     'verifyAndroidEnrollmentCachePhase4.js',
     'verifyResolveEnrollmentPhase5.js',
+    'verifyApplyOncePhase1.js',
+    'verifyQuizSubmitCatalogIdFallback.js',
+    'verifyApplyOncePhase1.js',
+    'verifyQuizSubmitCatalogIdFallback.js',
   ];
 
   console.log('-- Offline phase checks (1–5) --');
@@ -71,5 +75,9 @@ function main() {
   console.error('VERIFY_ENROLLMENT_PHASE6_FAILED');
   process.exit(1);
 }
+
+main();
+
+main();
 
 main();

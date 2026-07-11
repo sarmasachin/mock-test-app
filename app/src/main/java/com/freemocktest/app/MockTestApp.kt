@@ -23,8 +23,9 @@ class MockTestApp : Application() {
             AppPreferencesRepository.applyInterestCatalogDefaultsMigration()
             AuthRepository.loadStoredTokens()
             ContentRepository.warmCachesFromDisk()
+            TestHistoryRepository.init(MockTestDatabase.getInstance(this@MockTestApp))
+            TestHistoryRepository.migrateLegacyUserKeysIfNeeded()
         }
-        TestHistoryRepository.init(MockTestDatabase.getInstance(this))
         MockTestNotificationChannels.ensure(this)
         PushTokenRegistrar.syncInBackground(this)
     }

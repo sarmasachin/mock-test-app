@@ -19,13 +19,13 @@ function read(rel) {
 
 function deriveStartPreviewUi({
   isListRoute,
-  activeAppliedCount,
+  carouselCount,
   showLoading,
   hasSpecificTest,
   specificStartEntry,
   resolveAlreadyApplied,
 }) {
-  const showAppliedList = isListRoute && activeAppliedCount > 0;
+  const showAppliedList = isListRoute && carouselCount > 0;
   const showSpecificStart =
     !showAppliedList && !showLoading && hasSpecificTest && specificStartEntry != null;
   const showSpecificApply =
@@ -38,8 +38,8 @@ let ok = true;
 
 const kt = read('app/src/main/java/com/freemocktest/app/newui/tests/StartTestPreviewScreenNew.kt');
 ok = line(
-  /val showAppliedList = isListRoute && activeAppliedEntries\.isNotEmpty\(\)/.test(kt),
-  'Kotlin: showAppliedList gated by isListRoute',
+  /val showAppliedList = isListRoute && appliedHomeState\.carouselItems\.isNotEmpty\(\)/.test(kt),
+  'Kotlin: showAppliedList gated by isListRoute + full carousel',
 ) && ok;
 ok = line(
   !/val showAppliedList = activeAppliedEntries\.isNotEmpty\(\)/.test(kt),
@@ -49,7 +49,7 @@ ok = line(
 // User applied HP GK, opens ff from Tests list (specific route).
 const ffNotApplied = deriveStartPreviewUi({
   isListRoute: false,
-  activeAppliedCount: 1,
+  carouselCount: 1,
   showLoading: false,
   hasSpecificTest: true,
   specificStartEntry: null,
@@ -61,7 +61,7 @@ ok = line(ffNotApplied.showSpecificApply === true, 'ff route: shows Apply Now') 
 // User applied HP GK, opens HP GK (specific route).
 const hpGkApplied = deriveStartPreviewUi({
   isListRoute: false,
-  activeAppliedCount: 1,
+  carouselCount: 1,
   showLoading: false,
   hasSpecificTest: true,
   specificStartEntry: { testName: 'HP GK' },
@@ -73,19 +73,30 @@ ok = line(hpGkApplied.showSpecificStart === true, 'HP GK route: shows its own st
 // Home → Start Test ("applied" list route) with applications.
 const homeList = deriveStartPreviewUi({
   isListRoute: true,
-  activeAppliedCount: 1,
+  carouselCount: 2,
   showLoading: false,
-  hasSpecificTest: true,
-  specificStartEntry: { testName: 'HP GK' },
-  resolveAlreadyApplied: true,
+  hasSpecificTest: false,
+  specificStartEntry: null,
+  resolveAlreadyApplied: false,
 });
-ok = line(homeList.showAppliedList === true, 'applied route: shows applied list') && ok;
+ok = line(homeList.showAppliedList === true, 'applied route: shows full carousel list') && ok;
 ok = line(homeList.showSpecificStart === false, 'applied route: hides specific start') && ok;
 
-// Home list route, nothing applied yet.
+// Home list route, interests only (e.g. Bihar GK suggest card).
+const homeInterestOnly = deriveStartPreviewUi({
+  isListRoute: true,
+  carouselCount: 1,
+  showLoading: false,
+  hasSpecificTest: false,
+  specificStartEntry: null,
+  resolveAlreadyApplied: false,
+});
+ok = line(homeInterestOnly.showAppliedList === true, 'applied route: shows suggest cards when no applied tests') && ok;
+
+// Home list route, nothing applied and no interests.
 const homeEmpty = deriveStartPreviewUi({
   isListRoute: true,
-  activeAppliedCount: 0,
+  carouselCount: 0,
   showLoading: false,
   hasSpecificTest: false,
   specificStartEntry: null,

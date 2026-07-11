@@ -92,6 +92,8 @@ function runStaticChecks() {
   const routes = read('server/src/routes/tests.js');
   const models = read('app/src/main/java/com/freemocktest/app/data/remote/ApiModels.kt');
   const applyScreen = read('app/src/main/java/com/freemocktest/app/newui/apply/ApplyForTestScreenNew.kt');
+  const applyState = read('app/src/main/java/com/freemocktest/app/util/TestApplyState.kt');
+  const cyclePhase = read('app/src/main/java/com/freemocktest/app/util/TestCyclePhase.kt');
 
   ok = line(lib.includes('buildApplyResponseBody'), 'testApplicationCycle.js exists') && ok;
   ok = line(lib.includes('return false'), 'testApplicationCycle: safe default for unknown cycle') && ok;
@@ -100,7 +102,14 @@ function runStaticChecks() {
   ok = line(routes.includes('alreadyAppliedInCurrentCycle: true'), 'my-applications exposes cycle flags') && ok;
   ok = line(models.includes('alreadyAppliedInCurrentCycle'), 'Android ApplyTestResponse cycle flags') && ok;
   ok = line(models.includes('enrolledInCurrentCycle'), 'Android enrolledInCurrentCycle field') && ok;
-  ok = line(applyScreen.includes('alreadyAppliedInCurrentCycle'), 'Apply screen uses server cycle flags') && ok;
+  ok =
+    line(
+      applyState.includes('alreadyAppliedInCurrentCycle') &&
+        applyScreen.includes('TestCyclePhase.resolveApplyUiState') &&
+        applyScreen.includes('TestApplyState.pickPreferredMyTestApplication'),
+      'Apply screen uses server cycle flags via TestApplyState/TestCyclePhase',
+    ) && ok;
+  ok = line(cyclePhase.includes('userMayReapplyForNewCycle'), 'TestCyclePhase delegates mayReapply to TestApplyState') && ok;
 
   return ok;
 }

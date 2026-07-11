@@ -51,10 +51,14 @@ function matchesApplication(app, routeKey, card) {
   return false;
 }
 
-function matchMyTestApplication(applications, routeKey, card) {
-  const key = String(routeKey || '').trim();
-  if (!key) return null;
-  return (applications || []).find((app) => matchesApplication(app, key, card)) || null;
+function pickPreferredMyTestApplication(applications, routeKey, card) {
+  const matches = (applications || []).filter((app) => matchesApplication(app, routeKey, card));
+  if (matches.length === 0) return null;
+  return (
+    matches.find((m) => m.alreadyAppliedInCurrentCycle && !m.mayReapplyForNewCycle) ||
+    matches.find((m) => m.mayReapplyForNewCycle && !m.alreadyAppliedInCurrentCycle) ||
+    matches[0]
+  );
 }
 
 function userMayReapplyForNewCycle(resolve) {
@@ -132,8 +136,22 @@ function runLogicMirrorTests() {
       'preferStableTestId: prefers locked id',
     ) && ok;
 
-  const matched = matchMyTestApplication([app], 'SSC CGL', card);
-  ok = line(matched?.testId === 'uuid-a', 'matchMyTestApplication: finds by subcategory') && ok;
+  const matched = pickPreferredMyTestApplication([app], 'SSC CGL', card);
+  ok = line(matched?.testId === 'uuid-a', 'pickPreferredMyTestApplication: finds by subcategory') && ok;
+
+  const currentCycle = pickPreferredMyTestApplication(
+    [
+      { testId: 'old', testTitle: 'SSC CGL Mock 1', mayReapplyForNewCycle: true, alreadyAppliedInCurrentCycle: false },
+      { testId: 'uuid-a', testTitle: 'SSC CGL Mock 1', alreadyAppliedInCurrentCycle: true, mayReapplyForNewCycle: false },
+    ],
+    'SSC CGL Mock 1',
+    card,
+  );
+  ok =
+    line(
+      currentCycle?.testId === 'uuid-a',
+      'pickPreferredMyTestApplication: prefers current-cycle row over may-reapply',
+    ) && ok;
 
   return ok;
 }
@@ -141,30 +159,35 @@ function runLogicMirrorTests() {
 function runStaticChecks() {
   let ok = true;
   const applyState = read('app/src/main/java/com/freemocktest/app/util/TestApplyState.kt');
+  const cyclePhase = read('app/src/main/java/com/freemocktest/app/util/TestCyclePhase.kt');
   const contentRepo = read('app/src/main/java/com/freemocktest/app/data/ContentRepository.kt');
   const applyScreen = read('app/src/main/java/com/freemocktest/app/newui/apply/ApplyForTestScreenNew.kt');
   const startScreen = read('app/src/main/java/com/freemocktest/app/newui/tests/StartTestPreviewScreenNew.kt');
 
   ok = line(applyState.includes('object TestApplyState'), 'TestApplyState.kt exists') && ok;
+  ok = line(applyState.includes('pickPreferredMyTestApplication'), 'TestApplyState: pickPreferredMyTestApplication') && ok;
   ok = line(applyState.includes('userHasAppliedForCurrentCycle'), 'TestApplyState: userHasAppliedForCurrentCycle') && ok;
   ok = line(applyState.includes('preferStableTestId'), 'TestApplyState: preferStableTestId') && ok;
+  ok = line(applyState.includes('alreadyAppliedInCurrentCycle'), 'TestApplyState: server cycle flags in picker') && ok;
 
   ok =
     line(
       contentRepo.includes('resolveTestForApply(') &&
-        contentRepo.includes('buildTestApplyLoadResult(') &&
-        !contentRepo.match(/loadTestForApplyScreen[\s\S]{0,800}return@withContext TestApplyLoadResult\(catalog/),
-      'ContentRepository: loadTestForApplyScreen always merges resolve (no early catalog-only return)',
+        contentRepo.includes('attachResolveToCatalogCard') &&
+        contentRepo.includes('loadTestForApplyScreen'),
+      'ContentRepository: loadTestForApplyScreen merges catalog + resolve fallback',
     ) && ok;
 
-  ok = mustInclude(applyScreen, 'TestApplyState.matchMyTestApplication', 'ApplyForTestScreenNew') && ok;
+  ok = mustInclude(applyScreen, 'TestApplyState.pickPreferredMyTestApplication', 'ApplyForTestScreenNew') && ok;
   ok = mustInclude(applyScreen, 'TestApplyState.userHasAppliedForCurrentCycle', 'ApplyForTestScreenNew') && ok;
-  ok = mustInclude(applyScreen, 'lockedAppliedTestId', 'ApplyForTestScreenNew') && ok;
   ok = mustInclude(applyScreen, 'TestApplyState.preferStableTestId', 'ApplyForTestScreenNew') && ok;
+  ok = mustInclude(applyScreen, 'TestCyclePhase.resolveApplyUiState', 'ApplyForTestScreenNew') && ok;
   ok = mustInclude(applyScreen, 'response.alreadyApplied', 'ApplyForTestScreenNew') && ok;
 
-  ok = mustInclude(startScreen, 'TestApplyState.matchMyTestApplication', 'StartTestPreviewScreenNew') && ok;
-  ok = mustInclude(startScreen, 'TestApplyState.userHasAppliedForCurrentCycle', 'StartTestPreviewScreenNew') && ok;
+  ok = mustInclude(startScreen, 'TestApplyState.pickPreferredMyTestApplication', 'StartTestPreviewScreenNew') && ok;
+  ok = mustInclude(startScreen, 'TestApplyState.resolveAlreadyAppliedFromSources', 'StartTestPreviewScreenNew') && ok;
+  ok = mustInclude(startScreen, 'TestCyclePhase.resolvePreviewApplyState', 'StartTestPreviewScreenNew') && ok;
+  ok = line(cyclePhase.includes('resolveApplyUiState'), 'TestCyclePhase: shared apply UI state') && ok;
   ok =
     line(
       !startScreen.includes('matchesAppliedTestLookup'),

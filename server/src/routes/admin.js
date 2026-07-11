@@ -8,6 +8,7 @@ const { normalizeFeedKindSlug, FEED_KIND_INVALID_HINT } = require('../constants/
 const { getArticleFeedKindList, setArticleFeedKindList } = require('../lib/articleFeedKindOptions');
 const { getArticleCategoryList, setArticleCategoryList } = require('../lib/articleCategoryOptions');
 const { getDailyQuizCategoryList, setDailyQuizCategoryList } = require('../lib/dailyQuizCategoryOptions');
+const { resolveExamCategoryIconKey } = require('../lib/allIndiaExamVisualCatalog');
 const {
   buildCampaignDedupeKey,
   sendPushToAudience,
@@ -701,7 +702,12 @@ function normalizeExamCategories(value) {
         level1: String(x.level1 || '').trim().slice(0, 80),
         level2: String(x.level2 || '').trim().slice(0, 80),
         level3: String(x.level3 || '').trim().slice(0, 80),
-        iconKey: String(x.iconKey || '').trim().slice(0, 800),
+        iconKey: resolveExamCategoryIconKey(
+          String(x.level1 || '').trim(),
+          String(x.level2 || '').trim(),
+          String(x.level3 || '').trim(),
+          String(x.iconKey || '').trim(),
+        ).slice(0, 800),
         enabled: x.enabled !== false,
       };
     })

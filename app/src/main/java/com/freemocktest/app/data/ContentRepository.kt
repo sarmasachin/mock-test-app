@@ -13,6 +13,7 @@ import com.freemocktest.app.newui.alerts.ManualJobAlertContent
 import com.freemocktest.app.newui.news.ManualNewsContent
 import com.freemocktest.app.newui.news.ManualNewsItem
 import com.freemocktest.app.newui.tests.TestCardNew
+import com.freemocktest.app.util.TestApplyState
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId

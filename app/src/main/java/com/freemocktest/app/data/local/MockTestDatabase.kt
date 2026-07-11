@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [TestAttemptEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class MockTestDatabase : RoomDatabase() {

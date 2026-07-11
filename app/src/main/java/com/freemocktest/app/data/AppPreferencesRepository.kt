@@ -25,6 +25,7 @@ import com.freemocktest.app.newui.auth.isValidMobile
 import com.freemocktest.app.newui.tests.TestCardNew
 import com.freemocktest.app.util.TestScheduleUtils
 import com.freemocktest.app.util.UserInterestUtils
+import com.freemocktest.app.util.UserScopeKeys
 import com.freemocktest.app.util.AppliedTestSeriesSync
 import java.time.Instant
 import java.time.LocalDate
@@ -174,6 +175,22 @@ object AppPreferencesRepository {
         if (!::appContext.isInitialized) return ""
         val prefs = runCatching { store().data.first() }.getOrNull() ?: return ""
         return currentContentStateOwnerId(prefs)
+    }
+
+    /** Canonical user scope key for history / stats (email lowercase or uid:123456). */
+    val userScopeKey: Flow<String>
+        get() = storeOrNull()?.data?.map { prefs ->
+            UserScopeKeys.resolveCanonicalKey(
+                email = prefs[keyProfileEmail].orEmpty(),
+                contact = prefs[keyProfileContact].orEmpty(),
+                userIdFormatted = formatUserIdForDisplay(prefs[keyProfileUserCode] ?: 0),
+            )
+        } ?: flowOf("")
+
+    suspend fun peekUserIdFormattedNow(): String? {
+        if (!::appContext.isInitialized) return null
+        val prefs = runCatching { store().data.first() }.getOrNull() ?: return null
+        return formatUserIdForDisplay(prefs[keyProfileUserCode] ?: 0)
     }
 
     private fun normalizeOwnerUserKey(userKey: String): String? =

@@ -513,6 +513,9 @@ fun MainBottomNavHost(
                         }
                         mainNavController.navigate("${RoutesNew.START_TEST_PREVIEW}/$routeName")
                     },
+                    onApplyForTest = { testName ->
+                        mainNavController.navigateToTestApply(testName)
+                    },
                     onLeaderboard = { mainNavController.navigate(RoutesNew.LEADERBOARD) },
                     onResults = {
                         val pending = pendingResult

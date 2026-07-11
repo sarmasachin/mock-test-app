@@ -115,11 +115,8 @@ fun ProgressReportScreenNew(
             userIdFormatted = null,
         ),
     )
-    val attemptsUserKey = remember(profile.emailLine, profile.userIdFormatted) {
-        profile.emailLine.trim().takeIf { it.isNotBlank() }
-            ?: profile.userIdFormatted?.trim().orEmpty()
-    }
-    val attempts by TestHistoryRepository.observeAttempts(attemptsUserKey).collectAsState(initial = emptyList())
+    val userScopeKey by AppPreferencesRepository.userScopeKey.collectAsState(initial = "")
+    val attempts by TestHistoryRepository.observeAttemptsForLoggedInUser().collectAsState(initial = emptyList())
     val scoreVisible by AppPreferencesRepository.scoreVisibilityEnabled.collectAsState(initial = true)
 
     val sortedChrono = remember(attempts) {

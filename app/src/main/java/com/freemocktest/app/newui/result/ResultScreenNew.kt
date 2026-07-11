@@ -137,7 +137,7 @@ fun ResultScreenNew(
     val scoreDisplayText = when {
         !scoreVisible -> "-"
         totalMarksValue > 0 || scored.negativeMarkingEnabled -> {
-            "${formatScoreMarks(scored.scoreMarks)} / ${formatScoreMarks(scored.maxMarks)} marks"
+            "${com.freemocktest.app.util.HomeAttemptStatsUtils.formatScoreMarks(scored.scoreMarks)} / ${com.freemocktest.app.util.HomeAttemptStatsUtils.formatScoreMarks(scored.maxMarks)} marks"
         }
         else -> "$correct / ${safeTotal.coerceAtLeast(1)}"
     }

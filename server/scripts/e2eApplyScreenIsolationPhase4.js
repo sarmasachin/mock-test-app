@@ -79,13 +79,13 @@ function userHasAppliedForCurrentCycle(resolve, matchedApplication) {
 // --- Phase 1 Start preview UI ---
 function deriveStartPreviewUi({
   isListRoute,
-  activeAppliedCount,
+  carouselCount,
   showLoading,
   hasSpecificTest,
   specificStartEntry,
   resolveAlreadyApplied,
 }) {
-  const showAppliedList = isListRoute && activeAppliedCount > 0;
+  const showAppliedList = isListRoute && carouselCount > 0;
   const showSpecificStart =
     !showAppliedList && !showLoading && hasSpecificTest && specificStartEntry != null;
   const showSpecificApply =
@@ -194,7 +194,7 @@ ok = line(pendingMerged.length === 2, 'journey4: keeps testId row pending server
 // Journey 5: after sync, ff UI isolated (Phase 1)
 const ffUi = deriveStartPreviewUi({
   isListRoute: false,
-  activeAppliedCount: merged.length,
+  carouselCount: 1,
   showLoading: false,
   hasSpecificTest: true,
   specificStartEntry: null,
@@ -219,13 +219,13 @@ ok = line(findAppliedEntry('ff', ffCard, merged) == null, 'journey6: ff not in a
 // Journey 7: home applied route unchanged
 const homeUi = deriveStartPreviewUi({
   isListRoute: true,
-  activeAppliedCount: 1,
+  carouselCount: 2,
   showLoading: false,
-  hasSpecificTest: true,
-  specificStartEntry: { testName: 'HP GK' },
-  resolveAlreadyApplied: true,
+  hasSpecificTest: false,
+  specificStartEntry: null,
+  resolveAlreadyApplied: false,
 });
-ok = line(homeUi.showAppliedList === true, 'journey7: home applied list still works') && ok;
+ok = line(homeUi.showAppliedList === true, 'journey7: home View all shows full carousel') && ok;
 
 // Journey 8: prior-cycle re-apply row evicted from local appliedSeries (Phase 3)
 const mayReapplyLocal = [

@@ -5,6 +5,9 @@ import { useAdminToast } from '../adminToast';
 import { useAdminRbac } from '../adminRbacContext';
 import { usePermissionGuard } from '../hooks/usePermissionGuard';
 import { isProtectedSuperAdminEmail } from '../protectedSuperAdmin';
+import { findIndianStateVisual, resolveAutoStateIconKey } from '../lib/indianStateVisualCatalog';
+import { isAllIndiaExamLevel1, resolveAutoAllIndiaIconKey } from '../lib/allIndiaExamVisualCatalog';
+import { isHimachalStateLevel2, resolveAutoHimachalIconKey } from '../lib/himachalExamVisualCatalog';
 
 /** Display stored ISO (or parseable) times in India timezone for admin lists. */
 function formatScheduleAtDisplay(iso: string): string {
@@ -904,7 +907,11 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
     const level1 = newLevel1.trim();
     const level2 = newLevel2.trim();
     const level3 = newLevel3.trim();
-    const iconKey = newIconKey.trim();
+    const iconKey = isAllIndiaExamLevel1(level1)
+      ? resolveAutoAllIndiaIconKey(level1, level2, level3, newIconKey.trim())
+      : isHimachalStateLevel2(level2)
+        ? resolveAutoHimachalIconKey(level1, level2, level3, newIconKey.trim())
+        : resolveAutoStateIconKey(level1, level2, newIconKey.trim());
     if (!level1 || !level2 || !level3) {
       pushToast('error', 'All hierarchy levels are required');
       return;
@@ -912,6 +919,14 @@ export function ExamCategoriesTabImpl({ apiClient }: { apiClient: ApiClient }) {
     const next = [{ id: `exam-cat-${Date.now()}`, level1, level2, level3, iconKey, enabled: newEnabled }, ...items];
     const ok = await saveAll(next);
     if (!ok) return;
+    const stateVisual = findIndianStateVisual(level2, iconKey);
+    if (stateVisual) {
+      pushToast('success', `State icon auto-assigned for ${stateVisual.english} (${stateVisual.iconKey}).`);
+    } else if (isAllIndiaExamLevel1(level1) && iconKey.startsWith('allindia:')) {
+      pushToast('success', `All India test icon auto-assigned (${iconKey}).`);
+    } else if (isHimachalStateLevel2(level2) && iconKey.startsWith('hp:')) {
+      pushToast('success', `Himachal test icon auto-assigned (${iconKey}).`);
+    }
     setNewLevel1('');
     setNewLevel2('');
     setNewLevel3('');

@@ -85,7 +85,8 @@ function main() {
       applyScreen.includes('pickPreferredMyTestApplication') &&
         applyScreen.includes('reenrolledForNewCycle') &&
         applyScreen.includes('refreshTick += 1') &&
-        applyScreen.includes('mayReapplyForNewCycle && !hasAlreadyApplied && !revealSubmitSection') &&
+        applyScreen.includes('mayReapplyForNewCycle && !hasAlreadyApplied') &&
+        applyScreen.includes('showApplyConfirmDialog = true') &&
         applyScreen.includes('testBetweenCycles && !hasAlreadyApplied && !mayReapplyForNewCycle'),
       'Apply screen re-enroll submit + refresh + reveal submit on re-apply CTA',
     ) && ok;

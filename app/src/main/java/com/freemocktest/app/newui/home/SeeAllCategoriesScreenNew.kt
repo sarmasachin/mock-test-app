@@ -62,7 +62,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import com.freemocktest.app.data.AppPreferencesRepository
 import com.freemocktest.app.data.ContentRepository
 import com.freemocktest.app.util.UserInterestUtils
+import com.freemocktest.app.util.AllIndiaExamVisualCatalog
+import com.freemocktest.app.util.HimachalExamVisualCatalog
+import com.freemocktest.app.util.IndianStateVisualCatalog
 import kotlinx.coroutines.launch
+import java.util.Locale
 import com.freemocktest.app.newui.theme.palette.categoryLabelTintColor
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
@@ -109,10 +113,20 @@ private fun isCentralExamLevel1(label: String): Boolean {
 }
 
 /** Level 3 test name used for Apply when this node has exactly one enabled test child. */
-private fun centralDirectApplyTarget(node: ExamHierarchyNode): String? {
+private fun soleChildApplyTarget(node: ExamHierarchyNode): String? {
     val sole = node.children.singleOrNull() ?: return null
     val name = sole.label.trim()
     return name.takeIf { it.isNotEmpty() }
+}
+
+private fun directApplyTargetForLevel2Pick(
+    hierarchy: List<ExamHierarchyNode>,
+    level1: String,
+    level2Pick: String,
+): String? {
+    val l1Node = hierarchy.firstOrNull { it.label == level1 } ?: return null
+    val l2Node = l1Node.children.firstOrNull { it.label == level2Pick.trim() } ?: return null
+    return soleChildApplyTarget(l2Node)
 }
 
 private fun handleExamCategoryPick(
@@ -132,10 +146,8 @@ private fun handleExamCategoryPick(
             setLevel1(trimmedPicked)
         }
         level2 == null -> {
-            if (isCentralExamLevel1(level1)) {
-                val l1Node = hierarchy.firstOrNull { it.label == level1 }
-                val l2Node = l1Node?.children?.firstOrNull { it.label == trimmedPicked }
-                val applyTarget = l2Node?.let { centralDirectApplyTarget(it) }
+            if (isCentralExamLevel1(level1) || isStateExamLevel1(level1)) {
+                val applyTarget = directApplyTargetForLevel2Pick(hierarchy, level1, trimmedPicked)
                 if (applyTarget != null) {
                     onOpenCategory(applyTarget)
                     setLevel1(null)
@@ -191,6 +203,113 @@ private fun filterExamHierarchyForInterests(
     }
 }
 
+private enum class ExamCatalogScopeTab {
+    State,
+    AllIndia,
+}
+
+private fun findLevel1Node(
+    hierarchy: List<ExamHierarchyNode>,
+    predicate: (String) -> Boolean,
+): ExamHierarchyNode? = hierarchy.firstOrNull { predicate(it.label) }
+
+private fun findStateChildNode(
+    stateNode: ExamHierarchyNode?,
+    drill: String,
+): ExamHierarchyNode? {
+    if (stateNode == null || drill.isBlank()) return null
+    val trimmed = drill.trim()
+    return stateNode.children.firstOrNull { it.label.trim().equals(trimmed, ignoreCase = true) }
+        ?: stateNode.children.firstOrNull {
+            IndianStateVisualCatalog.resolveSlug(it.label, it.iconKey) ==
+                IndianStateVisualCatalog.resolveSlug(trimmed, null)
+        }
+}
+
+private fun buildHimachalSections(
+    stateNode: ExamHierarchyNode?,
+    stateDrill: String?,
+): List<Pair<HimachalExamVisualCatalog.SectionVisual, List<HimachalTestCardModel>>> {
+    val grouped = linkedMapOf<String, LinkedHashMap<String, HimachalTestCardModel>>()
+
+    for (seed in HimachalExamVisualCatalog.catalogTestSeeds()) {
+        val bucket = grouped.getOrPut(seed.sectionSlug) { linkedMapOf() }
+        bucket[seed.catalogSlug] = HimachalTestCardModel(
+            applyTestName = seed.applyTestName,
+            iconKey = seed.iconKey,
+        )
+    }
+
+    val level2 = findStateChildNode(stateNode, stateDrill.orEmpty())
+    for (level3 in level2?.children.orEmpty()) {
+        val name = level3.label.trim()
+        if (name.isEmpty()) continue
+        val sectionSlug = HimachalExamVisualCatalog.resolveSectionSlug(name)
+        val catalogSlug = HimachalExamVisualCatalog.matchCatalogSlug(name, level3.iconKey)
+            ?: "admin-${name.lowercase(Locale.US)}"
+        val bucket = grouped.getOrPut(sectionSlug) { linkedMapOf() }
+        bucket[catalogSlug] = HimachalTestCardModel(
+            applyTestName = name,
+            iconKey = level3.iconKey?.trim()?.takeIf { it.isNotEmpty() }
+                ?: catalogSlug.takeIf { !it.startsWith("admin-") }
+                    ?.let { HimachalExamVisualCatalog.iconKeyForSlug(it) },
+        )
+    }
+
+    val ordered = HimachalExamVisualCatalog.sectionOrder()
+    return ordered.mapNotNull { slug ->
+        val items = grouped[slug]?.values?.toList().orEmpty()
+        if (items.isEmpty()) null else HimachalExamVisualCatalog.sectionVisual(slug) to items
+    }
+}
+
+private fun findAllIndiaNode(
+    hierarchy: List<ExamHierarchyNode>,
+): ExamHierarchyNode? =
+    findLevel1Node(hierarchy, AllIndiaExamVisualCatalog::isAllIndiaExamLevel1)
+        ?: findLevel1Node(hierarchy, ::isCentralExamLevel1)
+
+private fun buildAllIndiaSections(
+    node: ExamHierarchyNode?,
+): List<Pair<AllIndiaExamVisualCatalog.SectionVisual, List<AllIndiaTestCardModel>>> {
+    val grouped = linkedMapOf<String, LinkedHashMap<String, AllIndiaTestCardModel>>()
+
+    for (seed in AllIndiaExamVisualCatalog.catalogTestSeeds()) {
+        val bucket = grouped.getOrPut(seed.sectionSlug) { linkedMapOf() }
+        bucket[seed.catalogSlug] = AllIndiaTestCardModel(
+            applyTestName = seed.applyTestName,
+            sectionLabel = seed.sectionLabel,
+            iconKey = seed.iconKey,
+        )
+    }
+
+    if (node != null) {
+        for (level2 in node.children) {
+            val sectionSlug = AllIndiaExamVisualCatalog.resolveSectionSlug(level2.label)
+            val sectionLabel = level2.label.trim()
+            for (level3 in level2.children) {
+                val name = level3.label.trim()
+                if (name.isEmpty()) continue
+                val catalogSlug = AllIndiaExamVisualCatalog.matchCatalogSlug(name, sectionLabel, level3.iconKey)
+                    ?: "admin-${name.lowercase(Locale.US)}"
+                val bucket = grouped.getOrPut(sectionSlug) { linkedMapOf() }
+                bucket[catalogSlug] = AllIndiaTestCardModel(
+                    applyTestName = name,
+                    sectionLabel = sectionLabel,
+                    iconKey = level3.iconKey?.trim()?.takeIf { it.isNotEmpty() }
+                        ?: catalogSlug.takeIf { !it.startsWith("admin-") }
+                            ?.let { AllIndiaExamVisualCatalog.iconKeyForSlug(it) },
+                )
+            }
+        }
+    }
+
+    return AllIndiaExamVisualCatalog.sectionOrder().mapNotNull { slug ->
+        val items = grouped[slug]?.values?.toList().orEmpty()
+        if (items.isEmpty()) null else AllIndiaExamVisualCatalog.sectionVisual(slug) to items
+    }
+}
+
 @Composable
 fun SeeAllCategoriesScreenNew(
     modifier: Modifier = Modifier,
@@ -215,18 +334,39 @@ fun SeeAllCategoriesScreenNew(
     }
     var hierarchyFetchError by remember { mutableStateOf(false) }
     var hierarchyReloadKey by remember { mutableIntStateOf(0) }
-    var level1 by remember { mutableStateOf<String?>(null) }
-    var level2 by remember { mutableStateOf<String?>(null) }
+    var scopeTab by remember { mutableStateOf(ExamCatalogScopeTab.State) }
+    var stateDrill by remember { mutableStateOf<String?>(null) }
     var didApplyPreload by remember { mutableStateOf(false) }
+
+    val stateNode = remember(hierarchy) { findLevel1Node(hierarchy, ::isStateExamLevel1) }
+    val fullStateNode = remember(fullHierarchy) { findLevel1Node(fullHierarchy, ::isStateExamLevel1) }
+    val fullAllIndiaNode = remember(fullHierarchy) { findAllIndiaNode(fullHierarchy) }
+    val allIndiaSections = remember(fullAllIndiaNode) { buildAllIndiaSections(fullAllIndiaNode) }
+    val stateCircleItems = remember(stateNode) {
+        val adminLevel2 = stateNode?.children?.map { it.label to it.iconKey }.orEmpty()
+        IndianStateVisualCatalog.buildStateCircleItems(adminLevel2)
+    }
+    val stateTestItems = remember(stateNode, stateDrill) {
+        findStateChildNode(stateNode, stateDrill.orEmpty())?.children.orEmpty()
+    }
+    val himachalSections = remember(fullStateNode, stateDrill) {
+        val drill = stateDrill
+        if (drill != null && HimachalExamVisualCatalog.isHimachalStateLabel(drill)) {
+            buildHimachalSections(fullStateNode, drill)
+        } else {
+            emptyList()
+        }
+    }
+    val isHimachalDrill = stateDrill != null &&
+        HimachalExamVisualCatalog.isHimachalStateLabel(stateDrill.orEmpty())
 
     fun applyRemoteItems(remote: List<ContentRepository.ExamCategoryItemRemote>) {
         fullHierarchy = buildExamHierarchy(remote.filter { it.enabled })
         hierarchyFetchError = false
     }
 
-    LaunchedEffect(showAllTests) {
-        level1 = null
-        level2 = null
+    LaunchedEffect(showAllTests, scopeTab) {
+        stateDrill = null
     }
 
     androidx.compose.runtime.SideEffect {
@@ -256,11 +396,8 @@ fun SeeAllCategoriesScreenNew(
 
     val navigateUp: () -> Unit = {
         when {
-            level2 != null -> {
-                level2 = null
-            }
-            level1 != null -> {
-                level1 = null
+            scopeTab == ExamCatalogScopeTab.State && stateDrill != null -> {
+                stateDrill = null
             }
             else -> {
                 onBack()
@@ -270,25 +407,37 @@ fun SeeAllCategoriesScreenNew(
 
     BackHandler(onBack = navigateUp)
 
-    val showEmptyMessage =
-        !hierarchyFetchError && hierarchy.isEmpty() && level1 == null && level2 == null
+    val tabHasContent = when (scopeTab) {
+        ExamCatalogScopeTab.State -> stateCircleItems.isNotEmpty() || stateDrill != null
+        ExamCatalogScopeTab.AllIndia -> allIndiaSections.isNotEmpty()
+    }
+    val showEmptyMessage = !hierarchyFetchError && !tabHasContent && stateDrill == null
     val showInterestFilterEmpty =
         showEmptyMessage && interestFilterActive && fullHierarchy.isNotEmpty()
     val showLoadError = hierarchyFetchError && fullHierarchy.isEmpty()
-    val showBackInAppBar = showAppBarBack || level1 != null || level2 != null
-
-    val shownItems = when {
-        level1 == null -> hierarchy
-        level2 == null -> hierarchy.firstOrNull { it.label == level1 }?.children ?: emptyList()
-        else -> hierarchy.firstOrNull { it.label == level1 }?.children?.firstOrNull { it.label == level2 }?.children ?: emptyList()
-    }
-    val rows = shownItems.chunked(2)
+    val showBackInAppBar = showAppBarBack || stateDrill != null
+    val stateTestRows = stateTestItems.chunked(2)
+    val showStateCircleGrid =
+        scopeTab == ExamCatalogScopeTab.State && stateDrill == null && stateCircleItems.isNotEmpty()
+    val showAllIndiaGrid =
+        scopeTab == ExamCatalogScopeTab.AllIndia && allIndiaSections.isNotEmpty()
+    val showHimachalInnerGrid =
+        scopeTab == ExamCatalogScopeTab.State && isHimachalDrill && himachalSections.isNotEmpty()
+    val showStateTestsList =
+        scopeTab == ExamCatalogScopeTab.State &&
+            stateDrill != null &&
+            !showHimachalInnerGrid &&
+            stateTestItems.isNotEmpty()
     val title = when {
-        level1 == null -> "Exam Categories"
-        level2 == null -> level1 ?: "Exam Categories"
-        else -> level2 ?: "Exam Categories"
+        scopeTab == ExamCatalogScopeTab.State && stateDrill != null -> stateDrill ?: "State"
+        scopeTab == ExamCatalogScopeTab.State -> "State"
+        else -> "All India"
     }
-    val breadcrumb = listOfNotNull(level1, level2).joinToString(" > ")
+    val breadcrumb = if (scopeTab == ExamCatalogScopeTab.State && stateDrill != null) {
+        "State > $stateDrill"
+    } else {
+        ""
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -315,7 +464,7 @@ fun SeeAllCategoriesScreenNew(
                     fontWeight = FontWeight.SemiBold,
                 )
             }
-            if (level1 == null) {
+            if (stateDrill == null) {
                 Spacer(Modifier.height(10.dp))
                 ExamCatalogModeToggleRow(
                     showAllTests = showAllTests,
@@ -329,6 +478,12 @@ fun SeeAllCategoriesScreenNew(
                             AppPreferencesRepository.setShowAllTestsCatalog(true)
                         }
                     },
+                )
+                Spacer(Modifier.height(10.dp))
+                ExamScopeTabRow(
+                    selected = scopeTab,
+                    onSelectState = { scopeTab = ExamCatalogScopeTab.State },
+                    onSelectAllIndia = { scopeTab = ExamCatalogScopeTab.AllIndia },
                 )
             }
             Spacer(Modifier.height(16.dp))
@@ -404,35 +559,74 @@ fun SeeAllCategoriesScreenNew(
                         Text("Retry", fontWeight = FontWeight.Bold)
                     }
                 }
-            } else {
+            } else if (showStateCircleGrid) {
+                StateCircleCategoryGrid(
+                    items = stateCircleItems,
+                    onOpenCategory = { picked -> stateDrill = picked.trim() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                )
+            } else if (showAllIndiaGrid) {
+                AllIndiaExamSectionedGrid(
+                    sections = allIndiaSections,
+                    onOpenTest = onOpenCategory,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                )
+            } else if (showHimachalInnerGrid) {
+                HimachalExamSectionedGrid(
+                    sections = himachalSections,
+                    onOpenTest = onOpenCategory,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                )
+            } else if (showStateTestsList) {
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    itemsIndexed(rows) { _, rowCats ->
+                    itemsIndexed(stateTestRows) { _, rowCats ->
                         AllCategoryRow(
                             left = rowCats.getOrNull(0)?.label.orEmpty(),
                             leftIconKey = rowCats.getOrNull(0)?.iconKey,
                             right = rowCats.getOrNull(1)?.label,
                             rightIconKey = rowCats.getOrNull(1)?.iconKey,
-                            onOpenCategory = { picked ->
-                                handleExamCategoryPick(
-                                    hierarchy = hierarchy,
-                                    level1 = level1,
-                                    level2 = level2,
-                                    picked = picked,
-                                    onOpenCategory = onOpenCategory,
-                                    setLevel1 = { level1 = it },
-                                    setLevel2 = { level2 = it },
-                                )
-                            },
+                            onOpenCategory = onOpenCategory,
                         )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ExamScopeTabRow(
+    selected: ExamCatalogScopeTab,
+    onSelectState: () -> Unit,
+    onSelectAllIndia: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ExamCatalogModeChip(
+            label = "State",
+            selected = selected == ExamCatalogScopeTab.State,
+            onClick = onSelectState,
+            modifier = Modifier.weight(1f),
+        )
+        ExamCatalogModeChip(
+            label = "All India",
+            selected = selected == ExamCatalogScopeTab.AllIndia,
+            onClick = onSelectAllIndia,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

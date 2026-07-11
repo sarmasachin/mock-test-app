@@ -65,6 +65,7 @@ import com.freemocktest.app.data.AuthRepository
 import com.freemocktest.app.data.remote.MyTestApplicationDto
 import com.freemocktest.app.newui.theme.palette.gradientColors
 import com.freemocktest.app.newui.theme.palette.mockTestPalette
+import com.freemocktest.app.util.AppliedTestCatalogLoader
 import com.freemocktest.app.util.TestApplyState
 import com.freemocktest.app.util.TestCyclePhase
 import com.freemocktest.app.util.TestScheduleUtils
@@ -78,26 +79,6 @@ private fun isGenericStartTestRoute(name: String): Boolean {
     return route.isBlank() ||
         route.equals("Test", ignoreCase = true) ||
         route.equals("applied", ignoreCase = true)
-}
-
-private fun matchesAppliedTestLookup(
-    app: MyTestApplicationDto,
-    lookupKey: String,
-    loadedCard: TestCardNew?,
-): Boolean {
-    val key = lookupKey.trim()
-    if (key.isBlank()) return false
-    if (app.testTitle.equals(key, ignoreCase = true)) return true
-    val card = loadedCard ?: return false
-    if (card.id.isNotBlank() && app.testId == card.id) return true
-    if (card.title.isNotBlank() && app.testTitle.equals(card.title, ignoreCase = true)) return true
-    if (card.subcategory.isNotBlank() &&
-        key.equals(card.subcategory, ignoreCase = true) &&
-        app.testTitle.equals(card.title, ignoreCase = true)
-    ) {
-        return true
-    }
-    return false
 }
 
 @Composable
@@ -115,30 +96,15 @@ fun StartTestPreviewScreenNew(
     var instructionItems by remember(testName) { mutableStateOf<List<String>>(emptyList()) }
     var instructionsLoaded by remember { mutableStateOf(false) }
     val appliedSnapshots = remember { mutableStateMapOf<String, TestCardNew?>() }
+    var carouselSnapshotsLoading by remember { mutableStateOf(false) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val appliedSeries by AppPreferencesRepository.appliedTestSeries.collectAsState(initial = emptyList())
     val pendingResult by AppPreferencesRepository.pendingResultState.collectAsState(initial = null)
-    val loginPickedTitles by AppPreferencesRepository.loginPickedTestTitles.collectAsState(initial = emptyList())
-    val loginPickedSubcategories by AppPreferencesRepository.loginPickedSubcategories.collectAsState(initial = emptyList())
-    val pickedTitlesForApply = remember(loginPickedTitles, loginPickedSubcategories) {
-        val titles = loginPickedTitles
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .distinctBy { it.lowercase(Locale.US) }
-        if (titles.isNotEmpty()) {
-            titles
-        } else {
-            loginPickedSubcategories
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .distinctBy { it.lowercase(Locale.US) }
-        }
-    }
     val isListRoute = remember(testName) { isGenericStartTestRoute(testName) }
     /** Specific catalog title when opening a single test (Apply flow); null on the applied-tests list route. */
-    val specificTestName = remember(testName, pickedTitlesForApply, isListRoute) {
+    val specificTestName = remember(testName, isListRoute) {
         if (isListRoute) {
-            pickedTitlesForApply.firstOrNull()
+            null
         } else {
             testName.trim().takeIf { it.isNotBlank() }
         }
@@ -222,22 +188,34 @@ fun StartTestPreviewScreenNew(
             primaryLoading = false
         }
     }
-    LaunchedEffect(appliedSeries, reloadKey) {
+    LaunchedEffect(
+        appliedSeries.map { it.testName.trim().lowercase() }.joinToString("|"),
+        reloadKey,
+        scheduleTimerEnabled,
+    ) {
+        val activeEntries = appliedSeries.filter { it.isActive(nowMs) }
+        val names = activeEntries
+            .map { it.testName.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+        if (names.isEmpty()) {
+            appliedSnapshots.clear()
+            carouselSnapshotsLoading = false
+            return@LaunchedEffect
+        }
+        carouselSnapshotsLoading = true
         try {
-            val names = appliedSeries.map { it.testName.trim() }.filter { it.isNotBlank() }.distinct()
-            appliedSnapshots.keys.toList().forEach { existing ->
-                if (existing !in names) appliedSnapshots.remove(existing)
-            }
-            names.forEach { name ->
-                val loaded = runCatching {
-                    ContentRepository.loadTestForApplyScreen(name, forceRefresh = true).effectiveCard
-                }.getOrNull()
-                appliedSnapshots[name] = loaded?.takeIf {
-                    ContentRepository.hasCatalogDisplayFields(it)
-                } ?: appliedSnapshots[name]
-            }
+            val loaded = AppliedTestCatalogLoader.loadSnapshotsForHomeCarousel(
+                testNames = names,
+                forceRefresh = reloadKey > 0,
+                existing = appliedSnapshots,
+            )
+            appliedSnapshots.clear()
+            appliedSnapshots.putAll(loaded)
         } catch (e: CancellationException) {
             throw e
+        } finally {
+            carouselSnapshotsLoading = false
         }
     }
     LaunchedEffect(Unit) {
@@ -261,11 +239,11 @@ fun StartTestPreviewScreenNew(
 
     val activeAppliedEntries = remember(appliedSeries, nowMs) {
         appliedSeries
-            .filter { it.expiresAtMillis > nowMs || it.serverCanStart == true }
+            .filter { it.isActive(nowMs) }
             .sortedBy { (it.startUnlockAtMillis(nowMs) - nowMs).coerceAtLeast(0L) }
     }
-    val hiddenExpiredCount = remember(appliedSeries, nowMs) {
-        appliedSeries.count { !it.isActive(nowMs) }
+    val hiddenExpiredCount = remember(appliedSeries, activeAppliedEntries) {
+        (appliedSeries.size - activeAppliedEntries.size).coerceAtLeast(0)
     }
     val specificTest = testSnapshot
     val specificStartEntry = remember(
@@ -295,13 +273,16 @@ fun StartTestPreviewScreenNew(
         0L
     }
     val fallbackLocked = fallbackRemainingMs > 0L
-    // List route only (Home → "applied"): show all applied tests. Specific catalog routes
-    // (e.g. START_TEST_PREVIEW/ff) must show that test's Apply/Start UI — not HP GK's list.
+    // List route (Home → View all): classic full-width preview cards per applied test.
     val previewApplyState = remember(resolveSnapshot, resolveAlreadyApplied) {
         TestCyclePhase.resolvePreviewApplyState(resolveSnapshot, resolveAlreadyApplied)
     }
     val showAppliedList = isListRoute && activeAppliedEntries.isNotEmpty()
-    val showLoading = appliedSyncLoading || (specificTestName != null && primaryLoading && !showAppliedList)
+    val showLoading = when {
+        showAppliedList -> false
+        isListRoute -> appliedSyncLoading || (carouselSnapshotsLoading && activeAppliedEntries.isEmpty())
+        else -> appliedSyncLoading || (specificTestName != null && primaryLoading)
+    }
     val showSpecificStart = !showAppliedList && !showLoading && specificTest != null && specificStartEntry != null
     val showSpecificApply = !showAppliedList && !showLoading && specificTest != null &&
         !showSpecificStart && !resolveAlreadyApplied && previewApplyState.showApplyButton
@@ -371,7 +352,10 @@ fun StartTestPreviewScreenNew(
                                 .height(120.dp),
                             contentAlignment = Alignment.Center,
                         ) {
-                            CircularProgressIndicator(color = p.accent, modifier = Modifier.size(24.dp))
+                            CircularProgressIndicator(
+                                color = p.accent,
+                                modifier = Modifier.size(24.dp),
+                            )
                         }
                         Spacer(Modifier.height(14.dp))
                         return@forEach
