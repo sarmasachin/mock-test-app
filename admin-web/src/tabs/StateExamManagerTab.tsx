@@ -383,7 +383,7 @@ export function StateExamManagerTabImpl({
             />
           ) : null}
 
-          <div className="state-exam-manager-grid">
+          <div className="state-exam-manager-stack">
           <form className="state-exam-wizard-form" onSubmit={onSubmit}>
             <label className="all-tests-field">
               <span>State</span>
@@ -498,7 +498,9 @@ export function StateExamManagerTabImpl({
             </button>
           </form>
 
-          <aside className="state-exam-wizard-aside">
+          <div className="state-exam-manager-below">
+            <div className="state-exam-preview-checks-grid">
+              <section className="state-exam-wizard-aside state-exam-wizard-preview-card">
             <h4>Preview</h4>
             {previewDraft ? (
               <ul className="state-exam-preview-list">
@@ -525,6 +527,9 @@ export function StateExamManagerTabImpl({
               <p className="muted">Enter exam name to see preview.</p>
             )}
 
+              </section>
+
+              <section className="state-exam-wizard-aside state-exam-wizard-checks-card">
             <h4>Checks</h4>
             {warnings.length === 0 ? (
               <p className="state-exam-ok">Ready to save.</p>
@@ -538,6 +543,14 @@ export function StateExamManagerTabImpl({
               </ul>
             )}
 
+              </section>
+            </div>
+
+            <section className="state-exam-wizard-aside state-exam-wizard-reorder-card">
+            <h4>Reorder exams in app</h4>
+            <p className="muted state-exam-reorder-card-intro">
+              Drag within each section for the selected state. Changes save instantly.
+            </p>
             {showReorderPanel ? (
               <StateExamReorderPanel
                 categories={categories}
@@ -554,7 +567,8 @@ export function StateExamManagerTabImpl({
             ) : (
               <p className="muted">Preparing reorder list…</p>
             )}
-          </aside>
+            </section>
+          </div>
         </div>
         </>
       )}
