@@ -65,6 +65,7 @@ import com.freemocktest.app.util.UserInterestUtils
 import com.freemocktest.app.util.AllIndiaExamVisualCatalog
 import com.freemocktest.app.util.HimachalExamVisualCatalog
 import com.freemocktest.app.util.IndianStateVisualCatalog
+import com.freemocktest.app.util.StateExamDynamicCatalog
 import kotlinx.coroutines.launch
 import java.util.Locale
 import com.freemocktest.app.newui.theme.palette.categoryLabelTintColor
@@ -226,6 +227,55 @@ private fun findStateChildNode(
         }
 }
 
+private fun filterRemoteExamCategoriesForInterests(
+    items: List<ContentRepository.ExamCategoryItemRemote>,
+    interests: List<String>,
+    showAllTests: Boolean,
+): List<ContentRepository.ExamCategoryItemRemote> {
+    if (showAllTests || UserInterestUtils.normalizeInterestSubcategories(interests).isEmpty()) {
+        return items
+    }
+    return items.filter { UserInterestUtils.subcategoryMatchesAnyInterest(it.level3, interests) }
+}
+
+private fun filterStateExamSectionsForInterests(
+    sections: List<Pair<StateExamDynamicCatalog.SectionVisual, List<StateExamDynamicCatalog.TestCardModel>>>,
+    interests: List<String>,
+    showAllTests: Boolean,
+): List<Pair<StateExamDynamicCatalog.SectionVisual, List<StateExamDynamicCatalog.TestCardModel>>> {
+    if (showAllTests || UserInterestUtils.normalizeInterestSubcategories(interests).isEmpty()) {
+        return sections
+    }
+    return sections.mapNotNull { (section, tests) ->
+        val filtered = tests.filter {
+            UserInterestUtils.subcategoryMatchesAnyInterest(it.applyTestName, interests)
+        }
+        if (filtered.isEmpty()) null else section to filtered
+    }
+}
+
+private fun buildHimachalSectionsAsGeneric(
+    stateNode: ExamHierarchyNode?,
+    stateDrill: String?,
+): List<Pair<StateExamDynamicCatalog.SectionVisual, List<StateExamDynamicCatalog.TestCardModel>>> {
+    val order = HimachalExamVisualCatalog.sectionOrder()
+    return buildHimachalSections(stateNode, stateDrill).map { (section, tests) ->
+        StateExamDynamicCatalog.SectionVisual(
+            slug = section.slug,
+            title = section.titleHindi,
+            sortOrder = order.indexOf(section.slug).coerceAtLeast(0),
+            accentColor = section.accentColor,
+            hoverBackground = section.hoverBackground,
+            icon = section.icon,
+        ) to tests.map { test ->
+            StateExamDynamicCatalog.TestCardModel(
+                applyTestName = test.applyTestName,
+                iconKey = test.iconKey,
+            )
+        }
+    }
+}
+
 private fun buildHimachalSections(
     stateNode: ExamHierarchyNode?,
     stateDrill: String?,
@@ -326,6 +376,9 @@ fun SeeAllCategoriesScreenNew(
         !showAllTests && UserInterestUtils.normalizeInterestSubcategories(userInterests).isNotEmpty()
     }
     val preloadedItems = remember { ContentRepository.peekExamCategoriesMemory() }
+    var examCategoryRemote by remember {
+        mutableStateOf(preloadedItems?.filter { it.enabled }.orEmpty())
+    }
     var fullHierarchy by remember {
         mutableStateOf(preloadedItems?.let { buildExamHierarchy(it) } ?: emptyList())
     }
@@ -349,19 +402,26 @@ fun SeeAllCategoriesScreenNew(
     val stateTestItems = remember(stateNode, stateDrill) {
         findStateChildNode(stateNode, stateDrill.orEmpty())?.children.orEmpty()
     }
-    val himachalSections = remember(fullStateNode, stateDrill) {
-        val drill = stateDrill
-        if (drill != null && HimachalExamVisualCatalog.isHimachalStateLabel(drill)) {
-            buildHimachalSections(fullStateNode, drill)
+    val filteredRemoteItems = remember(examCategoryRemote, userInterests, showAllTests) {
+        filterRemoteExamCategoriesForInterests(examCategoryRemote, userInterests, showAllTests)
+    }
+    val stateExamSections = remember(filteredRemoteItems, stateDrill, fullStateNode, userInterests, showAllTests) {
+        val drill = stateDrill ?: return@remember emptyList()
+        val dynamic = StateExamDynamicCatalog.buildSectionsForState(filteredRemoteItems, drill)
+        val built = if (dynamic.isNotEmpty()) {
+            dynamic
+        } else if (HimachalExamVisualCatalog.isHimachalStateLabel(drill)) {
+            buildHimachalSectionsAsGeneric(fullStateNode, drill)
         } else {
             emptyList()
         }
+        filterStateExamSectionsForInterests(built, userInterests, showAllTests)
     }
-    val isHimachalDrill = stateDrill != null &&
-        HimachalExamVisualCatalog.isHimachalStateLabel(stateDrill.orEmpty())
 
     fun applyRemoteItems(remote: List<ContentRepository.ExamCategoryItemRemote>) {
-        fullHierarchy = buildExamHierarchy(remote.filter { it.enabled })
+        val enabled = remote.filter { it.enabled }
+        examCategoryRemote = enabled
+        fullHierarchy = buildExamHierarchy(enabled)
         hierarchyFetchError = false
     }
 
@@ -408,10 +468,12 @@ fun SeeAllCategoriesScreenNew(
     BackHandler(onBack = navigateUp)
 
     val tabHasContent = when (scopeTab) {
-        ExamCatalogScopeTab.State -> stateCircleItems.isNotEmpty() || stateDrill != null
+        ExamCatalogScopeTab.State ->
+            stateCircleItems.isNotEmpty() ||
+                (stateDrill != null && (stateExamSections.isNotEmpty() || stateTestItems.isNotEmpty()))
         ExamCatalogScopeTab.AllIndia -> allIndiaSections.isNotEmpty()
     }
-    val showEmptyMessage = !hierarchyFetchError && !tabHasContent && stateDrill == null
+    val showEmptyMessage = !hierarchyFetchError && !tabHasContent
     val showInterestFilterEmpty =
         showEmptyMessage && interestFilterActive && fullHierarchy.isNotEmpty()
     val showLoadError = hierarchyFetchError && fullHierarchy.isEmpty()
@@ -421,12 +483,14 @@ fun SeeAllCategoriesScreenNew(
         scopeTab == ExamCatalogScopeTab.State && stateDrill == null && stateCircleItems.isNotEmpty()
     val showAllIndiaGrid =
         scopeTab == ExamCatalogScopeTab.AllIndia && allIndiaSections.isNotEmpty()
-    val showHimachalInnerGrid =
-        scopeTab == ExamCatalogScopeTab.State && isHimachalDrill && himachalSections.isNotEmpty()
+    val showStateExamSectionedGrid =
+        scopeTab == ExamCatalogScopeTab.State &&
+            stateDrill != null &&
+            stateExamSections.isNotEmpty()
     val showStateTestsList =
         scopeTab == ExamCatalogScopeTab.State &&
             stateDrill != null &&
-            !showHimachalInnerGrid &&
+            !showStateExamSectionedGrid &&
             stateTestItems.isNotEmpty()
     val title = when {
         scopeTab == ExamCatalogScopeTab.State && stateDrill != null -> stateDrill ?: "State"
@@ -575,9 +639,10 @@ fun SeeAllCategoriesScreenNew(
                         .fillMaxWidth()
                         .weight(1f),
                 )
-            } else if (showHimachalInnerGrid) {
-                HimachalExamSectionedGrid(
-                    sections = himachalSections,
+            } else if (showStateExamSectionedGrid) {
+                StateExamSectionedGrid(
+                    sections = stateExamSections,
+                    stateDrillLabel = stateDrill.orEmpty(),
                     onOpenTest = onOpenCategory,
                     modifier = Modifier
                         .fillMaxWidth()

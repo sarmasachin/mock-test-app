@@ -44,6 +44,8 @@ const STATE_VISUALS: IndianStateVisualRow[] = [
   { slug: 'py', english: 'Puducherry', hindi: 'पुडुचेरी', aliases: ['pondicherry', 'puducherry'] },
 ];
 
+export const INDIA_STATE_OPTIONS: IndianStateVisualRow[] = STATE_VISUALS;
+
 function normalizeStateLookupKey(value: string): string {
   return String(value || '')
     .trim()

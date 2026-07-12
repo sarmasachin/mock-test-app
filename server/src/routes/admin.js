@@ -10,6 +10,17 @@ const { getArticleCategoryList, setArticleCategoryList } = require('../lib/artic
 const { getDailyQuizCategoryList, setDailyQuizCategoryList } = require('../lib/dailyQuizCategoryOptions');
 const { resolveExamCategoryIconKey } = require('../lib/allIndiaExamVisualCatalog');
 const {
+  normalizeExamCategoriesValue,
+  normalizeStateExamSectionTemplates,
+  validateExamCategoriesCollisions,
+  buildExamCategoriesSettingsForApi,
+  parseJsonObject,
+} = require('../lib/examCategoriesAdmin');
+const {
+  parseStateExamSyncPayload,
+  syncExamCategoryForTestSave,
+} = require('../lib/testExamCategorySync');
+const {
   buildCampaignDedupeKey,
   sendPushToAudience,
 } = require('../lib/pushAudienceDelivery');
@@ -47,6 +58,18 @@ const {
 } = require('../lib/schedulingQueueLimits');
 const { runSchedulingQueueCleanup } = require('../lib/schedulingQueueCleanup');
 const { syncTestQuestionCount } = require('../lib/syncTestQuestionCount');
+const {
+  assertTestPublishable,
+  assertCanRemovePublishedQuestion,
+} = require('../lib/testPublishGuard');
+const {
+  shouldAddDraftStubOnTestCreate,
+  insertDraftStubQuestionIfEmpty,
+} = require('../lib/draftStubQuestion');
+const {
+  applyStateExamDynamicFluctuationDefault,
+  resolveDynamicFluctuationOnPublishForSave,
+} = require('../lib/stateExamTestDefaults');
 const {
   INPUT_MIME_TO_EXT,
   normalizeAdminImageExportFormats,
@@ -154,6 +177,7 @@ const SETTINGS_KEYS = [
   'submitApplicationContent',
   'instructionContent',
   'examCategories',
+  'stateExamSectionTemplates',
   'signupRegions',
   'examCategoryIconOptions',
   'notificationScheduling',
@@ -691,28 +715,41 @@ function normalizeInstructionContent(value) {
   };
 }
 
-function normalizeExamCategories(value) {
-  const safe = value || {};
-  const rawItems = Array.isArray(safe.items) ? safe.items : [];
-  const items = rawItems
-    .map((item, index) => {
-      const x = item || {};
-      return {
-        id: String(x.id || `exam-cat-${index + 1}`).trim().slice(0, 60),
-        level1: String(x.level1 || '').trim().slice(0, 80),
-        level2: String(x.level2 || '').trim().slice(0, 80),
-        level3: String(x.level3 || '').trim().slice(0, 80),
-        iconKey: resolveExamCategoryIconKey(
-          String(x.level1 || '').trim(),
-          String(x.level2 || '').trim(),
-          String(x.level3 || '').trim(),
-          String(x.iconKey || '').trim(),
-        ).slice(0, 800),
-        enabled: x.enabled !== false,
-      };
-    })
-    .filter((x) => x.level1 && x.level2 && x.level3);
-  return { value: { items }, rawCount: rawItems.length };
+function normalizeExamCategories(value, options = {}) {
+  return normalizeExamCategoriesValue(value, options);
+}
+
+async function normalizeExamCategoriesForPatch(bodyValue, sectionTemplatesOverride = null) {
+  const existingExamCategories = await getJsonSetting('examCategories', { items: [] });
+  const existingItems = Array.isArray(existingExamCategories?.items) ? existingExamCategories.items : [];
+
+  let sectionTemplates = sectionTemplatesOverride;
+  if (!sectionTemplates) {
+    try {
+      const templatesSetting = await getJsonSetting('stateExamSectionTemplates', null);
+      sectionTemplates = templatesSetting
+        ? normalizeStateExamSectionTemplates(templatesSetting).value.items
+        : normalizeStateExamSectionTemplates(null).value.items;
+    } catch (_e) {
+      sectionTemplates = normalizeStateExamSectionTemplates(null).value.items;
+    }
+  }
+
+  const normalized = normalizeExamCategoriesValue(bodyValue, { sectionTemplates, existingItems });
+  if (normalized.errors && normalized.errors.length > 0) {
+    const first = normalized.errors[0];
+    return {
+      error: first.error || 'Invalid exam category row.',
+      status: 400,
+    };
+  }
+
+  const collisionCheck = validateExamCategoriesCollisions(normalized.value.items);
+  if (!collisionCheck.ok) {
+    return collisionCheck;
+  }
+
+  return normalized;
 }
 
 function isTruthyAdminConfirmFlag(value) {
@@ -1254,10 +1291,23 @@ async function getSettingsMap() {
     })(),
     examCategories: (() => {
       try {
-        const parsed = JSON.parse(String(map.examCategories || '{}'));
-        return parsed && typeof parsed === 'object' ? parsed : {};
+        const rawTemplates = map.stateExamSectionTemplates
+          ? parseJsonObject(map.stateExamSectionTemplates, null)
+          : null;
+        const rawExam = parseJsonObject(map.examCategories, { items: [] });
+        return buildExamCategoriesSettingsForApi(rawExam, rawTemplates).examCategories;
       } catch (_e) {
-        return {};
+        return { items: [] };
+      }
+    })(),
+    stateExamSectionTemplates: (() => {
+      try {
+        const rawTemplates = map.stateExamSectionTemplates
+          ? parseJsonObject(map.stateExamSectionTemplates, null)
+          : null;
+        return buildExamCategoriesSettingsForApi({ items: [] }, rawTemplates).stateExamSectionTemplates;
+      } catch (_e) {
+        return normalizeStateExamSectionTemplates(null).value;
       }
     })(),
     signupRegions: (() => {
@@ -2236,8 +2286,21 @@ router.patch('/settings', async (req, res) => {
     body.submitApplicationContent === undefined ? null : normalizeSubmitApplicationContent(body.submitApplicationContent);
   const normalizedInstructionContent =
     body.instructionContent === undefined ? null : normalizeInstructionContent(body.instructionContent);
+  const normalizedStateExamSectionTemplates =
+    body.stateExamSectionTemplates === undefined
+      ? null
+      : normalizeStateExamSectionTemplates(body.stateExamSectionTemplates);
+  const sectionTemplatesForExamNormalize =
+    normalizedStateExamSectionTemplates !== null
+      ? normalizedStateExamSectionTemplates.value.items
+      : null;
   const normalizedExamCategories =
-    body.examCategories === undefined ? null : normalizeExamCategories(body.examCategories);
+    body.examCategories === undefined
+      ? null
+      : await normalizeExamCategoriesForPatch(body.examCategories, sectionTemplatesForExamNormalize);
+  if (normalizedExamCategories !== null && normalizedExamCategories.error) {
+    return res.status(normalizedExamCategories.status || 400).json({ error: normalizedExamCategories.error });
+  }
   if (normalizedExamCategories !== null) {
     const existingExamCategories = await getJsonSetting('examCategories', { items: [] });
     const existingItemCount = Array.isArray(existingExamCategories?.items)
@@ -2481,6 +2544,15 @@ router.patch('/settings', async (req, res) => {
           [JSON.stringify(normalizedExamCategories.value), req.userId],
         );
       }
+      if (normalizedStateExamSectionTemplates !== null) {
+        await client.query(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by)
+           VALUES ('stateExamSectionTemplates', $1, $2::uuid)
+           ON CONFLICT (setting_key)
+           DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [JSON.stringify(normalizedStateExamSectionTemplates.value), req.userId],
+        );
+      }
       if (normalizedSignupRegions !== null) {
         await client.query(
           `INSERT INTO app_settings (setting_key, setting_value, updated_by)
@@ -2620,6 +2692,7 @@ router.patch('/settings', async (req, res) => {
       submitApplicationContentUpdated: normalizedSubmitApplicationContent !== null,
       instructionContentUpdated: normalizedInstructionContent !== null,
       examCategoriesUpdated: normalizedExamCategories !== null,
+      stateExamSectionTemplatesUpdated: normalizedStateExamSectionTemplates !== null,
       signupRegionsUpdated: normalizedSignupRegions !== null,
       examCategoryIconOptionsUpdated: normalizedExamCategoryIconOptions !== null,
       notificationSchedulingUpdated: normalizedNotificationScheduling !== null,
@@ -2940,15 +3013,18 @@ router.post('/tests/badge/bulk-live', async (req, res) => {
 });
 
 router.post('/tests', async (req, res) => {
+  const syncParsed = parseStateExamSyncPayload(req.body);
+  if (syncParsed.error) return res.status(400).json({ error: syncParsed.error });
   const parsed = normalizeTestPayload(req.body);
   if (parsed.error) return res.status(400).json({ error: parsed.error });
   const data = parsed.value;
+  applyStateExamDynamicFluctuationDefault({ body: req.body, syncParsed, data });
   const advancedParsed = normalizeTestAdvancedConfig((req.body || {}).advancedConfig);
   if (advancedParsed.error) return res.status(400).json({ error: advancedParsed.error });
   const advancedConfig = advancedParsed.value;
   const storedPublished = data.isPublished !== false;
   try {
-    const { createdRow } = await withPgTransaction(async (client) => {
+    const txResult = await withPgTransaction(async (client) => {
       const { rows } = await client.query(
         `INSERT INTO tests (
            slug, title, subcategory, meta_line, duration_minutes, question_count, test_kind, is_published,
@@ -2990,6 +3066,21 @@ router.post('/tests', async (req, res) => {
         ],
       );
       const createdRow = rows[0];
+      let draftStubQuestion = { inserted: false, skipped: true };
+
+      if (shouldAddDraftStubOnTestCreate({
+        isPublished: storedPublished,
+        syncParsed,
+        body: req.body,
+      })) {
+        draftStubQuestion = await insertDraftStubQuestionIfEmpty(client, createdRow.id, {
+          testTitle: data.title,
+        });
+        if (draftStubQuestion?.inserted) {
+          await syncTestQuestionCount(client, createdRow.id);
+        }
+      }
+
       if (storedPublished) {
         const cycleAction = resolveAdminCycleStartUpdate(createdRow, null, { justPublished: true });
         if (cycleAction.setCycleStart) {
@@ -3001,9 +3092,40 @@ router.post('/tests', async (req, res) => {
           );
         }
         await regenerateTestFromSubcategoryPool(createdRow.id, { client });
+        const publishGuard = await assertTestPublishable(client, createdRow.id);
+        if (!publishGuard.ok) {
+          const err = new Error(publishGuard.error);
+          err.statusCode = publishGuard.status || 400;
+          throw err;
+        }
       }
-      return { createdRow };
+
+      let examCategorySync = null;
+      if (syncParsed.mode === 'upsert') {
+        examCategorySync = await syncExamCategoryForTestSave({
+          client,
+          userId: req.userId,
+          test: {
+            id: createdRow.id,
+            title: data.title,
+            subcategory: data.subcategory,
+          },
+          body: req.body,
+          previousSubcategory: '',
+        });
+        if (!examCategorySync.ok) {
+          const err = new Error(examCategorySync.error || 'Exam category sync failed');
+          err.statusCode = examCategorySync.status || 409;
+          throw err;
+        }
+      }
+
+      return { createdRow, examCategorySync, draftStubQuestion };
     });
+
+    const createdRow = txResult.createdRow;
+    const examCategorySync = txResult.examCategorySync;
+    const draftStubQuestion = txResult.draftStubQuestion;
 
     let advancedConfigToSave = advancedConfig;
     if (storedPublished) {
@@ -3040,9 +3162,14 @@ router.post('/tests', async (req, res) => {
     nextAdvancedMap[testSettingKey(createdRow.id)] = advancedConfigToSave;
     await setJsonSetting('testAdvancedConfigs', nextAdvancedMap, req.userId);
     await syncTestPublishScheduleFromAdvancedConfig(createdRow.id, advancedConfigToSave, req.userId);
-    return res.status(201).json({ item: { ...createdRow, advanced_config: advancedConfigToSave } });
+    return res.status(201).json({
+      item: { ...createdRow, advanced_config: advancedConfigToSave },
+      examCategorySync: examCategorySync || { skipped: true },
+      draftStubQuestion: draftStubQuestion || { inserted: false },
+    });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'Slug already exists' });
+    if (e.statusCode) return res.status(e.statusCode).json({ error: e.message || 'Exam category sync failed' });
     console.error('admin_create_test_error', e);
     return res.status(500).json({ error: 'Failed to create test' });
   }
@@ -3051,6 +3178,8 @@ router.post('/tests', async (req, res) => {
 router.patch('/tests/:id', async (req, res) => {
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid test id' });
+  const syncParsed = parseStateExamSyncPayload(req.body);
+  if (syncParsed.error) return res.status(400).json({ error: syncParsed.error });
   const parsed = normalizeTestPayload(req.body, { skipEnrolledCapacityCheck: true });
   if (parsed.error) return res.status(400).json({ error: parsed.error });
   const data = parsed.value;
@@ -3065,7 +3194,7 @@ router.patch('/tests/:id', async (req, res) => {
   try {
     const txResult = await withPgTransaction(async (client) => {
       const before = await client.query(
-        `SELECT id, title, is_published, last_cycle_started_at, enrolled_count,
+        `SELECT id, title, subcategory, is_published, last_cycle_started_at, enrolled_count,
                 exam_date, slot_label, dynamic_date_enabled, date_cycle_days, duration_minutes,
                 COALESCE(dynamic_fluctuation_on_publish, true) AS dynamic_fluctuation_on_publish
          FROM tests
@@ -3080,9 +3209,13 @@ router.patch('/tests/:id', async (req, res) => {
         err.statusCode = 404;
         throw err;
       }
-      const dynamicFluctuationOnPublish = hasDynamicFluctuationValue
-        ? data.dynamicFluctuationOnPublish
-        : beforeRow.dynamic_fluctuation_on_publish !== false;
+      const dynamicFluctuationOnPublish = resolveDynamicFluctuationOnPublishForSave({
+        body: req.body,
+        syncParsed,
+        hasExplicitValue: hasDynamicFluctuationValue,
+        explicitValue: data.dynamicFluctuationOnPublish,
+        existingValue: beforeRow.dynamic_fluctuation_on_publish,
+      });
       const { rows } = await client.query(
         `UPDATE tests
          SET slug = $1, title = $2, subcategory = $3, meta_line = $4, duration_minutes = $5,
@@ -3156,10 +3289,40 @@ router.patch('/tests/:id', async (req, res) => {
       if (justPublished) {
         await regenerateTestFromSubcategoryPool(rows[0].id, { client });
       }
-      return { savedRow: rows[0], justPublished, cycleRenewed };
+      if (rows[0].is_published) {
+        const publishGuard = await assertTestPublishable(client, rows[0].id);
+        if (!publishGuard.ok) {
+          const err = new Error(publishGuard.error);
+          err.statusCode = publishGuard.status || 400;
+          throw err;
+        }
+      }
+
+      const beforeSubcategory = String(beforeRow.subcategory || '').trim();
+      let examCategorySync = null;
+      if (syncParsed.mode !== 'off') {
+        examCategorySync = await syncExamCategoryForTestSave({
+          client,
+          userId: req.userId,
+          test: {
+            id: rows[0].id,
+            title: rows[0].title,
+            subcategory: rows[0].subcategory,
+          },
+          body: req.body,
+          previousSubcategory: beforeSubcategory,
+        });
+        if (!examCategorySync.ok) {
+          const err = new Error(examCategorySync.error || 'Exam category sync failed');
+          err.statusCode = examCategorySync.status || 409;
+          throw err;
+        }
+      }
+
+      return { savedRow: rows[0], justPublished, cycleRenewed, examCategorySync };
     });
 
-    const { savedRow, justPublished, cycleRenewed } = txResult;
+    const { savedRow, justPublished, cycleRenewed, examCategorySync } = txResult;
     const cycleRes = await pool.query(
       `SELECT last_cycle_started_at FROM tests WHERE id = $1::uuid LIMIT 1`,
       [id],
@@ -3206,9 +3369,16 @@ router.patch('/tests/:id', async (req, res) => {
       [id],
     );
     const refreshedRow = refreshed.rows[0] || savedRow;
-    return res.json({ item: { ...refreshedRow, advanced_config: advancedConfig }, cycleRenewed });
+    return res.json({
+      item: { ...refreshedRow, advanced_config: advancedConfig },
+      cycleRenewed,
+      examCategorySync: examCategorySync || { skipped: true },
+    });
   } catch (e) {
     if (e.statusCode === 404) return res.status(404).json({ error: 'Test not found' });
+    if (e.statusCode && e.statusCode !== 404) {
+      return res.status(e.statusCode).json({ error: e.message || 'Exam category sync failed' });
+    }
     if (e.code === '23505') return res.status(409).json({ error: 'Slug already exists' });
     console.error('admin_update_test_error', e);
     return res.status(500).json({ error: 'Failed to update test' });
@@ -3254,6 +3424,7 @@ router.get('/tests/:id/questions', async (req, res) => {
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Invalid test id' });
   try {
+    const sync = await syncTestQuestionCount(pool, id);
     const { rows } = await pool.query(
       `SELECT id, test_id, position, stem, choice_a, choice_b, choice_c, choice_d, correct_index, explanation, is_published,
               COALESCE(subject_key, '') AS subject_key
@@ -3262,7 +3433,7 @@ router.get('/tests/:id/questions', async (req, res) => {
        ORDER BY position ASC`,
       [id],
     );
-    return res.json({ items: rows });
+    return res.json({ items: rows, ...sync });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to list questions' });
@@ -3315,8 +3486,8 @@ router.post('/tests/:id/questions', async (req, res) => {
     if (!created) {
       return res.status(409).json({ error: 'Please retry. Could not assign question position safely.' });
     }
-    await syncTestQuestionCount(pool, id);
-    return res.status(201).json({ item: created });
+    const sync = await syncTestQuestionCount(pool, id);
+    return res.status(201).json({ item: created, ...sync });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to create question' });
@@ -3392,9 +3563,21 @@ router.post('/tests/:id/questions/import', async (req, res) => {
         );
         inserted += 1;
       }
+      const testPubRes = await client.query(
+        `SELECT is_published FROM tests WHERE id = $1::uuid LIMIT 1`,
+        [id],
+      );
+      if (testPubRes.rows[0]?.is_published === true) {
+        const publishGuard = await assertTestPublishable(client, id);
+        if (!publishGuard.ok) {
+          const err = new Error(publishGuard.error);
+          err.statusCode = publishGuard.status || 400;
+          throw err;
+        }
+      }
       await client.query('COMMIT');
-      await syncTestQuestionCount(pool, id);
-      return res.status(201).json({ ok: true, inserted, mode });
+      const sync = await syncTestQuestionCount(pool, id);
+      return res.status(201).json({ ok: true, inserted, mode, ...sync });
     } catch (e) {
       await client.query('ROLLBACK').catch(() => {});
       throw e;
@@ -3402,6 +3585,7 @@ router.post('/tests/:id/questions/import', async (req, res) => {
       client.release();
     }
   } catch (e) {
+    if (e.statusCode) return res.status(e.statusCode).json({ error: e.message || 'Import blocked' });
     console.error(e);
     return res.status(500).json({ error: 'Failed to import questions' });
   }
@@ -3420,6 +3604,17 @@ router.patch('/tests/:id/questions/:questionId', async (req, res) => {
     if (subjectErr) return res.status(400).json({ error: subjectErr });
     if (await hasDuplicateStemInTest(id, q.stem, qid)) {
       return res.status(409).json({ error: 'Duplicate question detected for this test' });
+    }
+    const beforeQ = await pool.query(
+      `SELECT is_published FROM questions WHERE id = $1 AND test_id = $2::uuid LIMIT 1`,
+      [qid, id],
+    );
+    if (!beforeQ.rows[0]) return res.status(404).json({ error: 'Question not found' });
+    const wasPublished = beforeQ.rows[0].is_published === true;
+    const willBePublished = q.isPublished !== false;
+    if (wasPublished && !willBePublished) {
+      const guard = await assertCanRemovePublishedQuestion(pool, id, qid, { unpublishing: true });
+      if (!guard.ok) return res.status(guard.status || 400).json({ error: guard.error });
     }
     const { rows } = await pool.query(
       `UPDATE questions
@@ -3441,8 +3636,8 @@ router.patch('/tests/:id/questions/:questionId', async (req, res) => {
       ],
     );
     if (!rows[0]) return res.status(404).json({ error: 'Question not found' });
-    await syncTestQuestionCount(pool, id);
-    return res.json({ item: rows[0] });
+    const sync = await syncTestQuestionCount(pool, id);
+    return res.json({ item: rows[0], ...sync });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to update question' });
@@ -3455,10 +3650,19 @@ router.delete('/tests/:id/questions/:questionId', async (req, res) => {
   const qid = Number(questionId);
   if (!Number.isInteger(qid) || qid <= 0) return res.status(400).json({ error: 'Invalid question id' });
   try {
+    const beforeQ = await pool.query(
+      `SELECT is_published FROM questions WHERE id = $1 AND test_id = $2::uuid LIMIT 1`,
+      [qid, id],
+    );
+    if (!beforeQ.rows[0]) return res.status(404).json({ error: 'Question not found' });
+    if (beforeQ.rows[0].is_published === true) {
+      const guard = await assertCanRemovePublishedQuestion(pool, id, qid);
+      if (!guard.ok) return res.status(guard.status || 400).json({ error: guard.error });
+    }
     const del = await pool.query(`DELETE FROM questions WHERE id = $1 AND test_id = $2::uuid`, [qid, id]);
     if (!del.rowCount) return res.status(404).json({ error: 'Question not found' });
-    await syncTestQuestionCount(pool, id);
-    return res.status(204).send();
+    const sync = await syncTestQuestionCount(pool, id);
+    return res.json({ ok: true, ...sync });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to delete question' });

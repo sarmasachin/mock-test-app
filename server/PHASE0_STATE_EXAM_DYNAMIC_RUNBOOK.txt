@@ -1,0 +1,76 @@
+Phase 0 — Dynamic state exam catalog spec (SAFE: no runtime changes)
+=====================================================================
+Status: COMPLETE when verify exits 0
+Last updated: 2026-07-12
+
+WHAT PHASE 0 DID
+----------------
+- Locked product rules + data model (STATE_EXAM_DYNAMIC_PLAN.txt).
+- Added pure library: server/src/lib/stateExamDynamicSpec.js
+- Added offline verify: npm run verify:state-exam-phase0
+- NO database migration.
+- NO admin.js save path changes.
+- NO admin-web / Android changes.
+  → Existing app behaviour is 100% unchanged.
+
+WHY PHASE 0 FIRST
+-----------------
+Phases 1–6 all depend on the same schema, sort rules, and icon key format.
+Building UI before spec = bugs (HP TGT collision, subcategory mismatch).
+Phase 0 verify must pass before starting Phase 1.
+
+LOCKED RULES (summary)
+----------------------
+1. level3 === test.subcategory (interest + Apply routing).
+2. State UI groups by sectionSlug; sort: featured → itemSortOrder → title.
+3. New iconKey format: <stateSlug>:<testSlug> (e.g. br:police-constable).
+4. Legacy hp: / allindia: / https: keys preserved.
+5. Duplicate iconKey or duplicate state+level3 → reject on save (Phase 1).
+6. Himachal hardcoded catalog = fallback seed only (Phase 3+), not admin requirement.
+
+LIBRARY API (stateExamDynamicSpec.js)
+-------------------------------------
+normalizeStateExamCategoryRow(raw, index)  — legacy + new fields, safe defaults
+migrateLegacyExamCategoryRow(legacy)       — alias for normalize
+buildStateExamIconKey(l1, l2, l3, existing)
+buildStateExamSectionsForState(categories, stateName)
+sortStateExamItems(items)
+findStateExamCatalogCollisions(rows)
+auditStateExamTestAlignment(categories, tests)
+buildWizardExamCategoryDraft({ stateName, sectionSlug, testTitle, ... })
+suggestSectionSlugFromLevel3(level3)       — wizard hint only
+
+DEFAULT SECTIONS (11)
+---------------------
+gk, admin, police, teaching, revenue, medical, technical, judiciary, forest, transport, other
+
+See STATE_EXAM_DYNAMIC_PLAN.txt for Hindi titles and sortOrder.
+
+VERIFY (offline — run before Phase 1)
+-------------------------------------
+  cd server
+  npm run verify:state-exam-phase0
+
+Expected last line:
+  VERIFY_STATE_EXAM_PHASE0_OK
+
+Exit code 0 = Phase 0 ship-ready.
+
+WHAT PHASE 1 WILL DO (not yet)
+------------------------------
+- admin.js normalizeExamCategories uses stateExamDynamicSpec
+- PATCH validates collisions
+- app_settings stateExamSectionTemplates
+- scripts/migrateExamCategoriesStateExam.js
+
+ADMIN TODAY (unchanged until Phase 2)
+-------------------------------------
+Still use Exam Categories tab with Level 1 / 2 / 3 manually.
+Use this cheat sheet until wizard ships:
+
+  Level 1: State
+  Level 2: Full state name (Bihar, Himachal Pradesh, ...)
+  Level 3: Same as test subcategory
+  Avoid "TGT" in multiple titles if using Himachal hardcoded UI (collision)
+
+END

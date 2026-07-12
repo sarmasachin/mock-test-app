@@ -1,0 +1,55 @@
+Phase 2 — State Exam Manager wizard (admin-web)
+===============================================
+Status: COMPLETE when verify exits 0
+Last updated: 2026-07-12
+Depends on: Phase 1 (npm run verify:state-exam-phase1)
+
+WHAT PHASE 2 DID
+----------------
+- New admin sidebar tab: **State Exam Manager** (permission: tab_exam_categories).
+- Wizard UI: State dropdown → Section dropdown → Test link → Exam name → Featured/Order → Save.
+- Live preview + warnings (collision, subcategory mismatch, unpublished test).
+- Optional: create draft test + exam circle in one save.
+- Existing test: auto-sync subcategory to exam name on save.
+- Exam Categories tab kept for power users (manual Level 1/2/3).
+
+FILES
+-----
+  admin-web/src/tabs/StateExamManagerTab.tsx
+  admin-web/src/lib/stateExamWizard.ts
+  admin-web/src/lib/indianStateVisualCatalog.ts (INDIA_STATE_OPTIONS export)
+  admin-web/src/App.tsx, tabTypes.ts, adminRbac.ts, App.css
+
+ADMIN HOW-TO
+------------
+1. Open admin → **State Exam Manager**
+2. **State:** e.g. Himachal Pradesh
+3. **Section:** e.g. शिक्षक भर्ती (teaching)
+4. **Test link:**
+   - *Use existing test* — pick from All Tests list
+   - *Create new test* — tick "Create draft test" (add questions later)
+5. **Exam name:** e.g. HP Math Teacher (this becomes Level 3 + circle label)
+6. **Featured** ⭐ if important (shows first in section — Phase 3 UI)
+7. **Order:** 1 = top among non-featured
+8. Click **Save state exam circle**
+
+Checks panel shows errors before save. Preview shows iconKey auto (e.g. hp:hp-math-teacher).
+
+NOT YET (Phase 3+)
+------------------
+- Android sectioned UI for all states (Himachal-style)
+- Drag-drop reorder in admin
+- Home carousel boost for featured
+
+VERIFY
+------
+  cd server
+  npm run verify:state-exam-phase0
+  npm run verify:state-exam-phase1
+  npm run verify:state-exam-phase2
+
+Admin build check:
+  cd admin-web
+  npm run build
+
+END

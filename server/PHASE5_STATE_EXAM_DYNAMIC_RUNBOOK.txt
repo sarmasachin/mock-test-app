@@ -1,0 +1,72 @@
+Phase 5 — Test create/update auto-sync examCategories
+========================================================
+Status: COMPLETE when verify exits 0
+Last updated: 2026-07-12
+Depends on: Phase 4 verify pass
+
+WHAT PHASE 5 DID
+----------------
+When admin creates or updates a test, examCategories row can auto-sync:
+
+1. **Server** (`testExamCategorySync.js`)
+   - POST/PATCH `/admin/tests` accepts optional `stateExamSync` body
+   - Upserts examCategories row: level1=State, level2, level3=subcategory, section, featured, linkedTestId
+   - PATCH auto-updates linked row when subcategory changes (mode: auto)
+   - Collision check → 409 (test + category not saved on create — transaction rollback)
+
+2. **State Exam Manager**
+   - Create draft test sends `stateExamSync` in one POST (test + circle atomic)
+
+3. **All Tests tab**
+   - Checkbox "Add / sync State exam circle" with State + Section + Featured + Order
+   - Same `stateExamSync` on create/update
+
+API — stateExamSync body
+------------------------
+```json
+{
+  "stateExamSync": {
+    "enabled": true,
+    "stateName": "Bihar",
+    "sectionSlug": "police",
+    "featured": true,
+    "itemSortOrder": 1
+  }
+}
+```
+
+Response fields:
+```json
+{
+  "item": { ...test },
+  "examCategorySync": { "synced": true, "action": "created", "level3": "...", "stateName": "Bihar" }
+}
+```
+
+RULES (locked)
+--------------
+- level3 === test.subcategory (interest filter unit unchanged)
+- linkedTestId = tests.id when synced
+- Same state + same level3 → update existing row (no duplicate)
+- iconKey collision → reject save
+
+ADMIN HOW-TO
+------------
+**Easy:** State Exam Manager → create test + save (one step)
+
+**All Tests:** Fill test form → tick "Add / sync State exam circle" → pick state/section → Save
+
+**Edit:** Linked tests auto-update circle name when subcategory changes.
+
+VERIFY
+------
+  cd server
+  npm run verify:state-exam-phase5
+
+  cd admin-web && npm run build
+
+NOT YET (Phase 6)
+-----------------
+  HP/AllIndia catalog migration + production ship
+
+END

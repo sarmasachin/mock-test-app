@@ -24,6 +24,7 @@ export type Tab =
   | 'submitApplicationContent'
   | 'instructionContent'
   | 'examCategories'
+  | 'stateExamManager'
   | 'analyticsInsights'
   | 'userManagementAdvanced'
   | 'settings'
@@ -57,6 +58,7 @@ export const TAB_LABELS: Record<Tab, string> = {
   submitApplicationContent: 'Submit Application',
   instructionContent: 'Instruction Content',
   examCategories: 'Exam Categories',
+  stateExamManager: 'State Exam Manager',
   analyticsInsights: 'Analytics & Insights',
   userManagementAdvanced: 'User Management Advanced',
   settings: 'Settings',
@@ -91,6 +93,7 @@ export const TAB_ICONS: Record<Tab, string> = {
   submitApplicationContent: 'SA',
   instructionContent: 'IN',
   examCategories: 'EX',
+  stateExamManager: 'SE',
   analyticsInsights: 'AN',
   userManagementAdvanced: 'UM',
   settings: 'ST',

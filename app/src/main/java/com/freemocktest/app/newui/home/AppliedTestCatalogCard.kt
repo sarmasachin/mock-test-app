@@ -113,11 +113,13 @@ fun AppliedTestCatalogCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
         border = androidx.compose.foundation.BorderStroke(
             width = when {
+                card.isFeaturedStateExamBoost -> 2.dp
                 card.isReadyHighlight -> 1.5.dp
                 card.isSuggestApplyHighlight -> 1.5.dp
                 else -> 1.dp
             },
             color = when {
+                card.isFeaturedStateExamBoost -> Color(0xFFEAB308)
                 card.isReadyHighlight -> Color(0xFF16A34A)
                 card.isSuggestApplyHighlight -> Color(0xFF2563EB)
                 card.isPendingResult -> Color(0xFFF59E0B)
@@ -146,6 +148,14 @@ fun AppliedTestCatalogCard(
                         else -> Icons.Outlined.Schedule
                     },
                 )
+                if (card.isFeaturedStateExamBoost) {
+                    CatalogStatusBadge(
+                        label = "IMPORTANT",
+                        background = Color(0xFFFEF3C7),
+                        content = Color(0xFFB45309),
+                        icon = Icons.Outlined.Star,
+                    )
+                }
                 if (!card.registeredDisplay.isNullOrBlank()) {
                     CatalogStatusBadge(
                         label = card.registeredDisplay,

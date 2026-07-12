@@ -52,8 +52,8 @@ let ok = true;
 
 const syncSrc = readRepoFile('server/src/lib/syncTestQuestionCount.js');
 ok = line(
-  syncSrc.includes('CASE WHEN sub.c > 0 THEN sub.c ELSE tests.question_count END'),
-  'Phase 1: syncTestQuestionCount preserves question_count when published count is 0',
+  syncSrc.includes('resolveSyncedQuestionCount'),
+  'syncTestQuestionCount uses published-or-total resolver',
 ) && ok;
 
 ok = line(

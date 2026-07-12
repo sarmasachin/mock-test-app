@@ -1,0 +1,60 @@
+Phase 4 — Featured UI + drag reorder + home boost
+=================================================
+Status: COMPLETE when verify exits 0
+Last updated: 2026-07-12
+Depends on: Phase 3 verify pass
+
+WHAT PHASE 4 DID
+----------------
+1. **Featured UI (Android)**
+   - Gold border + higher elevation on featured exam circles
+   - Section card amber highlight when section has featured exams
+   - "⭐ Important" badge on section header
+
+2. **Admin drag reorder**
+   - State Exam Manager → right panel: exams grouped by section
+   - Drag-drop OR ↑↓ buttons to reorder within section
+   - ★ button toggles featured (auto-saves)
+   - itemSortOrder updated 1..n per section on save
+
+3. **Home carousel boost**
+   - Featured exams for user's **signup state** appear first in
+     "My Applied Tests" suggest carousel (before login interests)
+   - Gold "IMPORTANT" badge on home carousel cards
+   - Skips exams user already applied for
+
+FILES
+-----
+  server/src/lib/stateExamDynamicSpec.js — buildFeaturedStateExamsForHome
+  admin-web/src/lib/stateExamWizard.ts — reorder helpers
+  admin-web/src/tabs/StateExamManagerTab.tsx — drag UI
+  app/.../StateExamFeaturedHomeBoost.kt
+  app/.../AppliedTestHomeUi.kt, HomeScreenNew.kt
+  app/.../StateExamSectionedGrid.kt, AppliedTestCatalogCard.kt
+
+ADMIN HOW-TO
+------------
+1. State Exam Manager → pick state
+2. Right panel → drag exams within section OR use ↑↓
+3. Click ★ to mark featured (shows on Home + top of section in app)
+4. Add new exams with Featured checkbox as before
+
+USER APP
+--------
+- Tests → State → featured circles have gold ring
+- Home → signup state featured exams show first with IMPORTANT badge
+
+VERIFY
+------
+  cd server
+  npm run verify:state-exam-phase4
+
+  cd admin-web && npm run build
+  cd MockTestApp && ./gradlew :app:compileDebugKotlin
+
+NOT YET (Phase 5+)
+------------------
+  Test create auto-sync category
+  HP/AllIndia catalog migration
+
+END

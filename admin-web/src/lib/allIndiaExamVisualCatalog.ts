@@ -45,7 +45,7 @@ function resolveTestSlug(level3: string, iconKey = ''): string {
 
 export function resolveAutoAllIndiaIconKey(
   level1: string,
-  level2: string,
+  _level2: string,
   level3: string,
   iconKey = '',
 ): string {

@@ -1,0 +1,82 @@
+Phase 1 — Dynamic state exam catalog (server wiring)
+====================================================
+Status: COMPLETE when verify exits 0
+Last updated: 2026-07-12
+Depends on: Phase 0 (npm run verify:state-exam-phase0)
+
+WHAT PHASE 1 DID
+----------------
+- Wired examCategoriesAdmin.js into admin PATCH/GET and public GET /v1/home/content.
+- Extended examCategories rows with sectionSlug, sectionTitle, sectionSortOrder,
+  itemSortOrder, featured, linkedTestId (normalized on every save/read).
+- Added app_settings key: stateExamSectionTemplates (11 default sections).
+- Reject duplicate iconKey or duplicate level3 per state on admin save (HTTP 409).
+- Preserved legacy hp: / allindia: / https: icon keys.
+- admin-web + Android DTO/cache preserve new fields (UI uses them in Phase 3).
+- Migration script for existing DB rows.
+
+NO Phase 2 wizard yet.
+NO Android sectioned UI for all states yet (Phase 3).
+
+NEW app_settings KEY
+--------------------
+stateExamSectionTemplates: { items: [ { slug, titleHi, titleEn, sortOrder } ] }
+
+If missing, server uses 11 built-in defaults from stateExamDynamicSpec.js.
+
+ADMIN SAVE (PATCH /admin/settings)
+----------------------------------
+examCategories patch now:
+  1. Merges each row with existing DB row by id (keeps section/featured if UI omits)
+  2. Normalizes extended fields + iconKey
+  3. Rejects collisions (409)
+  4. Persists full extended JSON
+
+Optional same request:
+  stateExamSectionTemplates: { items: [...] }
+
+PUBLIC API (GET /v1/home/content)
+-----------------------------------
+examCategories.items[] now includes extended fields (backward compatible:
+old app ignores unknown keys).
+
+MIGRATION (existing production / local DB)
+------------------------------------------
+  cd server
+  node scripts/migrateExamCategoriesStateExam.js          # dry-run
+  node scripts/migrateExamCategoriesStateExam.js --apply  # write
+
+Safe: only updates examCategories (+ seeds templates if missing).
+
+VERIFY
+------
+  cd server
+  npm run verify:state-exam-phase0
+  npm run verify:state-exam-phase1
+
+Both must exit 0 before Phase 2.
+
+ADMIN TODAY
+-----------
+Still use Exam Categories tab (Level 1/2/3). Server auto-fills section + sort on save.
+To set featured / order before Phase 2 wizard, PATCH JSON manually or wait Phase 2.
+
+Example extended row after save:
+{
+  "id": "exam-cat-1",
+  "level1": "State",
+  "level2": "Bihar",
+  "level3": "Bihar Police Constable",
+  "iconKey": "br:bihar-police-constable",
+  "enabled": true,
+  "sectionSlug": "police",
+  "sectionTitle": "पुलिस भर्ती",
+  "sectionSortOrder": 30,
+  "itemSortOrder": 999,
+  "featured": false,
+  "linkedTestId": null
+}
+
+NEXT: Phase 2 — Admin State Exam Manager wizard.
+
+END

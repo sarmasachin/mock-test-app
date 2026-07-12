@@ -15,6 +15,10 @@ const {
   resolveApplyWindowState,
   resolveSchedulerCycleEndMs,
 } = require('./testCycleWindow');
+const {
+  catalogErrorIfNoPublishedQuestions,
+  PUBLISHED_QUESTION_COUNT_SQL,
+} = require('./testPublishGuard');
 
 /**
  * @typedef {'live'|'between_cycles'|'unpublished'|'scheduled'|'closed'|'not_found'} TestCyclePhase
@@ -149,6 +153,7 @@ function buildTestResolvePayload({
   examDate = null,
   slotLabel = '',
   attemptAccess = null,
+  publishedQuestionCount = null,
 }) {
   if (!row) {
     return {
@@ -165,7 +170,11 @@ function buildTestResolvePayload({
 
   const adv = advancedConfig && typeof advancedConfig === 'object' ? advancedConfig : {};
   const catalogVisible = isTestCatalogVisible(row, adv, nowMs);
-  const catalogError = catalogVisibilityError(row, adv, nowMs);
+  const catalogError = catalogErrorIfNoPublishedQuestions(
+    row,
+    publishedQuestionCount,
+    catalogVisibilityError(row, adv, nowMs),
+  );
   const cyclePhase = resolveTestCyclePhase(row, adv, nowMs, publishScheduleItems);
   const republishAt = cyclePhase === 'between_cycles' ? resolveRepublishAtIso(row, adv, publishScheduleItems) : null;
   const applyWindow = resolveApplyWindowState(row, nowMs);
@@ -210,6 +219,7 @@ function buildTestResolvePayload({
     nowMs,
     row,
     advancedConfig: adv,
+    publishedQuestionCount,
   });
 
   const enrollment = resolveEnrollmentFromTestRow(row);
@@ -264,7 +274,8 @@ async function lookupTestForResolve(db, { testId, title, slug }) {
     const byId = await db.query(
       `SELECT id, slug, title, subcategory, is_published, duration_minutes, last_cycle_started_at,
               valid_until, exam_date, dynamic_date_enabled, date_cycle_days,
-              capacity_total, enrolled_count, slot_label
+              capacity_total, enrolled_count, slot_label,
+              ${PUBLISHED_QUESTION_COUNT_SQL} AS published_question_count
        FROM tests
        WHERE id = $1::uuid
        LIMIT 1`,
@@ -277,7 +288,8 @@ async function lookupTestForResolve(db, { testId, title, slug }) {
   const res = await db.query(
     `SELECT id, slug, title, subcategory, is_published, duration_minutes, last_cycle_started_at,
             valid_until, exam_date, dynamic_date_enabled, date_cycle_days,
-            capacity_total, enrolled_count, slot_label
+            capacity_total, enrolled_count, slot_label,
+            ${PUBLISHED_QUESTION_COUNT_SQL} AS published_question_count
      FROM tests
      WHERE lower(trim(title)) = lower(trim($1))
         OR lower(trim(slug)) = lower(trim($1))

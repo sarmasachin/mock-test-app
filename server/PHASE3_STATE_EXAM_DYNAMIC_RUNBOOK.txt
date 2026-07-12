@@ -1,0 +1,68 @@
+Phase 3 — Android sectioned state exam UI (all states)
+=====================================================
+Status: COMPLETE when verify exits 0
+Last updated: 2026-07-12
+Depends on: Phase 1 + Phase 2 verify pass
+
+WHAT PHASE 3 DID
+----------------
+- Generic **StateExamSectionedGrid** for every state (Himachal-style circular sections).
+- **StateExamDynamicCatalog.kt** groups admin examCategories by sectionSlug,
+  sorts featured → itemSortOrder → title (matches server spec).
+- **SeeAllCategoriesScreenNew**: State tap → sectioned grid (not flat list).
+- Himachal hardcoded catalog = fallback ONLY when zero admin rows for HP.
+- Interest filter applies to sectioned tests.
+- Featured tests sort to top of each section (star badge on circle).
+
+FILES
+-----
+  app/.../util/StateExamDynamicCatalog.kt
+  app/.../newui/home/StateExamSectionedGrid.kt
+  app/.../newui/home/SeeAllCategoriesScreenNew.kt (wired)
+
+USER APP PATH
+-------------
+  Tests → State → [State circle] → [Section cards] → [Exam circles] → Apply
+
+Example Bihar with admin rows:
+  पुलिस भर्ती section → Bihar Police SI circle
+  शिक्षक भर्ती section → Bihar TET circle
+
+FALLBACK
+--------
+  Himachal Pradesh with NO admin examCategories rows → old HP hardcoded catalog.
+  Other states with NO admin rows → "Mock Test Exam Not Available".
+
+ADMIN SETUP (Phase 2 wizard)
+----------------------------
+  Add exams via State Exam Manager with Section + Featured + Order.
+  Run migration if legacy rows lack sectionSlug:
+    cd server
+    node scripts/migrateExamCategoriesStateExam.js --apply
+
+NOT YET (Phase 4+)
+------------------
+  Drag reorder in admin
+  Home carousel boost for featured
+  Phase 5 test auto-sync
+
+VERIFY
+------
+  cd server
+  npm run verify:state-exam-phase0
+  npm run verify:state-exam-phase1
+  npm run verify:state-exam-phase2
+  npm run verify:state-exam-phase3
+
+Android compile:
+  cd MockTestApp
+  ./gradlew :app:compileDebugKotlin
+
+MANUAL QA
+---------
+1. Admin: add Bihar Police + Bihar TET via State Exam Manager (police + teaching sections).
+2. App: Tests → State → Bihar → see 2 sections with circular cards.
+3. Himachal: with admin rows → dynamic sections; without → hardcoded HP catalog.
+4. Featured exam appears first in its section with star badge.
+
+END

@@ -14,24 +14,14 @@ const {
   resolveAdminRouteRule,
 } = require('../src/lib/adminRoutePermissions');
 
-// Copy of admin.js normalizeExamCategories (must stay in sync for diagnosis)
-function normalizeExamCategories(value) {
-  const safe = value || {};
-  const rawItems = Array.isArray(safe.items) ? safe.items : [];
-  const items = rawItems
-    .map((item, index) => {
-      const x = item || {};
-      return {
-        id: String(x.id || `exam-cat-${index + 1}`).trim().slice(0, 60),
-        level1: String(x.level1 || '').trim().slice(0, 80),
-        level2: String(x.level2 || '').trim().slice(0, 80),
-        level3: String(x.level3 || '').trim().slice(0, 80),
-        iconKey: String(x.iconKey || '').trim().slice(0, 800),
-        enabled: x.enabled !== false,
-      };
-    })
-    .filter((x) => x.level1 && x.level2 && x.level3);
-  return { value: { items }, rawCount: rawItems.length };
+// Copy of admin.js normalize path (Phase 1 — uses examCategoriesAdmin)
+const {
+  normalizeExamCategoriesValue,
+  validateExamCategoriesCollisions,
+} = require('../src/lib/examCategoriesAdmin');
+
+function normalizeExamCategories(value, options = {}) {
+  return normalizeExamCategoriesValue(value, options);
 }
 
 function validateExamCategoriesPatch({

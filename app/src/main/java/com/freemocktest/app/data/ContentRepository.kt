@@ -309,6 +309,12 @@ object ContentRepository {
         val level3: String,
         val iconKey: String?,
         val enabled: Boolean,
+        val sectionSlug: String? = null,
+        val sectionTitle: String? = null,
+        val sectionSortOrder: Int? = null,
+        val itemSortOrder: Int? = null,
+        val featured: Boolean = false,
+        val linkedTestId: String? = null,
     )
     data class PollItemRemote(
         val id: String,
@@ -2212,6 +2218,12 @@ object ContentRepository {
                 level3 = it.level3,
                 iconKey = it.iconKey,
                 enabled = it.enabled,
+                sectionSlug = it.sectionSlug,
+                sectionTitle = it.sectionTitle,
+                sectionSortOrder = it.sectionSortOrder,
+                itemSortOrder = it.itemSortOrder,
+                featured = it.featured,
+                linkedTestId = it.linkedTestId,
             )
         }.filter { it.level1.isNotBlank() && it.level2.isNotBlank() && it.level3.isNotBlank() && it.enabled }
     }
@@ -2234,6 +2246,12 @@ object ContentRepository {
             o.put("level3", item.level3)
             item.iconKey?.let { o.put("iconKey", it) }
             o.put("enabled", item.enabled)
+            item.sectionSlug?.let { o.put("sectionSlug", it) }
+            item.sectionTitle?.let { o.put("sectionTitle", it) }
+            item.sectionSortOrder?.let { o.put("sectionSortOrder", it) }
+            item.itemSortOrder?.let { o.put("itemSortOrder", it) }
+            if (item.featured) o.put("featured", true)
+            item.linkedTestId?.let { o.put("linkedTestId", it) }
             arr.put(o)
         }
         return arr.toString()
@@ -2252,6 +2270,12 @@ object ContentRepository {
                     level3 = o.optString("level3", ""),
                     iconKey = o.optString("iconKey", "").trim().ifBlank { null },
                     enabled = o.optBoolean("enabled", true),
+                    sectionSlug = o.optString("sectionSlug", "").trim().ifBlank { null },
+                    sectionTitle = o.optString("sectionTitle", "").trim().ifBlank { null },
+                    sectionSortOrder = o.optInt("sectionSortOrder", -1).takeIf { it >= 0 },
+                    itemSortOrder = o.optInt("itemSortOrder", -1).takeIf { it >= 0 },
+                    featured = o.optBoolean("featured", false),
+                    linkedTestId = o.optString("linkedTestId", "").trim().ifBlank { null },
                 ),
             )
         }

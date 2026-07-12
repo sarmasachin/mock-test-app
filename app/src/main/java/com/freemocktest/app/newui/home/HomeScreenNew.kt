@@ -106,6 +106,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import com.freemocktest.app.BuildConfig
 import com.freemocktest.app.MockTestApp
+import com.freemocktest.app.util.StateExamFeaturedHomeBoost
 import com.freemocktest.app.util.HomeAttemptStatsUtils
 import com.freemocktest.app.util.TestScheduleUtils
 import com.freemocktest.app.util.AppliedTestCatalogLoader
@@ -292,6 +293,11 @@ fun HomeScreenNew(
     var appliedSnapshotsLoading by remember { mutableStateOf(false) }
     var appliedSnapshotsReloadKey by remember { mutableIntStateOf(0) }
     val loginPickedSubcategories by AppPreferencesRepository.loginPickedSubcategories.collectAsState(initial = emptyList())
+    val examCategoriesForHome = remember { ContentRepository.peekExamCategoriesMemory().orEmpty() }
+    var signupStateForHome by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        signupStateForHome = AppPreferencesRepository.peekSignupStateNow()
+    }
     val appliedHomeState = remember(
         appliedSeries,
         appliedSnapshots,
@@ -299,6 +305,8 @@ fun HomeScreenNew(
         pendingResult,
         nowMs,
         loginPickedSubcategories,
+        examCategoriesForHome,
+        signupStateForHome,
     ) {
         AppliedTestHomeUi.buildHomeAppliedTestsUiState(
             appliedSeries = appliedSeries,
@@ -307,6 +315,8 @@ fun HomeScreenNew(
             pendingResult = pendingResult,
             nowMs = nowMs,
             interestSubcategories = loginPickedSubcategories,
+            examCategories = examCategoriesForHome,
+            signupState = signupStateForHome,
         )
     }
     val startSeriesState = remember(appliedHomeState, appliedSeries, nowMs, scheduleTimerEnabled, pendingResult) {
@@ -389,9 +399,11 @@ fun HomeScreenNew(
             .map { it.testName.trim() }
             .filter { it.isNotBlank() }
             .distinct()
-        val interestNames = AppliedTestHomeUi.resolvePendingInterestTests(
+        val interestNames = StateExamFeaturedHomeBoost.resolveCarouselSuggestTests(
             interests = loginPickedSubcategories,
             activeEntries = activeEntries,
+            examCategories = examCategoriesForHome,
+            signupState = signupStateForHome,
         )
         val names = (appliedNames + interestNames).distinct()
         if (names.isEmpty()) {

@@ -1,0 +1,77 @@
+Phase 6 — HP/All India catalog migration + production ship
+==========================================================
+Status: COMPLETE when verify exits 0
+Last updated: 2026-07-12
+Depends on: Phases 0–5 verify pass
+
+WHAT PHASE 6 DID
+----------------
+1. **catalogExamCategorySeeds.js**
+   - 34 Himachal + 28 All India catalog rows → examCategories seeds
+   - Preserves legacy iconKey (`hp:*`, `allindia:*`)
+   - HP sections mapped to dynamic sectionSlug (gk, police, teaching, …)
+   - Idempotent merge (skip if iconKey or state+level3 already exists)
+   - Auto-links `linkedTestId` when tests.subcategory matches
+
+2. **migrateExamCategoriesCatalogSeeds.js**
+   - Dry-run / --apply migration to app_settings.examCategories
+
+3. **Production ship gate**
+   - `npm run verify:state-exam-phase6`
+   - `npm run verify:state-exam-ship` (runs phases 0–6)
+
+PRODUCTION DEPLOY ORDER
+---------------------
+```bash
+cd server
+
+# 1. Ship gate (all phases)
+npm run verify:state-exam-ship
+
+# 2. Schema migration (existing rows → section/sort fields)
+node scripts/migrateExamCategoriesStateExam.js          # dry-run
+node scripts/migrateExamCategoriesStateExam.js --apply
+
+# 3. Catalog seeds (HP + All India design → admin rows)
+node scripts/migrateExamCategoriesCatalogSeeds.js       # dry-run
+node scripts/migrateExamCategoriesCatalogSeeds.js --apply
+
+# 4. Deploy server + admin-web + Android APK
+# 5. Restart API
+```
+
+POST-DEPLOY CHECKLIST
+---------------------
+- [ ] Admin → State Exam Manager → Himachal shows sectioned exams (admin rows)
+- [ ] Admin → Exam Categories → rows have sectionSlug, featured, linkedTestId
+- [ ] App → Tests → State → Himachal → sectioned circles (dynamic, not only fallback)
+- [ ] App → Tests → All India → sections still work
+- [ ] Home carousel → featured signup-state exams boosted
+- [ ] Create test in All Tests with sync checkbox → circle appears
+
+FALLBACK BEHAVIOUR (unchanged)
+------------------------------
+- If admin has zero rows for a state, app still shows Himachal hardcoded catalog
+- All India tab still merges catalog seeds in UI when admin empty
+- After migration, admin rows take precedence (preferred)
+
+ROLLBACK
+--------
+Restore app_settings.examCategories from DB backup before migration.
+App fallbacks still work without admin rows.
+
+FILES
+-----
+  server/src/lib/catalogExamCategorySeeds.js
+  server/scripts/migrateExamCategoriesCatalogSeeds.js
+  server/scripts/verifyStateExamPhase6.js
+  server/scripts/verifyStateExamProductionShip.js
+
+NPM SCRIPTS
+-----------
+  npm run migrate:state-exam-categories    # Phase 1 schema (existing)
+  npm run migrate:state-exam-catalog         # Phase 6 catalog seeds
+  npm run verify:state-exam-phase6
+  npm run verify:state-exam-ship
+
+END

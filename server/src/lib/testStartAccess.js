@@ -6,6 +6,7 @@ const {
   isAfterLateJoinWindow,
 } = require('./examSchedule');
 const { resolveSchedulerCycleEndMs } = require('./testCycleWindow');
+const { START_BLOCK_NO_QUESTIONS } = require('./testPublishGuard');
 /** Matches Android TestScheduleUtils.APPLIED_SERIES_NO_TIMER_TTL_MS */
 const DEFAULT_NO_SCHEDULE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -68,6 +69,7 @@ function evaluateTestStartAccess({
   nowMs = Date.now(),
   row,
   advancedConfig,
+  publishedQuestionCount = null,
 }) {
   const effectiveTimerEnabled = resolveEffectiveScheduleTimerEnabled(
     scheduleTimerEnabled,
@@ -151,6 +153,16 @@ function evaluateTestStartAccess({
       canStart: false,
       startBlockReason: attemptAccess.error || 'Attempt not allowed for this test',
       joinClosesAt,
+    };
+  }
+
+  const publishedCount =
+    publishedQuestionCount != null ? Math.max(0, Number(publishedQuestionCount)) : null;
+  if (publishedCount != null && publishedCount < 1) {
+    return {
+      canStart: false,
+      startBlockReason: START_BLOCK_NO_QUESTIONS,
+      joinClosesAt: null,
     };
   }
 

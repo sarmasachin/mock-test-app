@@ -18,6 +18,8 @@ export const ATTEMPT_DURATION_TITLE =
 export const DYNAMIC_DATE_LABEL = 'Dynamic date (repeat cycles)';
 export const DYNAMIC_FLUCTUATION_TITLE =
   'Shuffles questions/options on republish — separate from cycle timing.';
+export const STATE_EXAM_FLUCTUATION_HINT =
+  'State exam tests keep shuffle off so your fixed question paper is not replaced on publish.';
 
 export const NOTIFY_CYCLE_REPUBLISH_TITLE =
   'Push when the server auto-republishes after a cycle ends (exam finish or N-day rollover) plus the republish gap.';

@@ -60,6 +60,7 @@ object AppliedTestHomeUi {
         val lateJoinClosed: Boolean,
         val isSuggestApply: Boolean = false,
         val isSuggestApplyHighlight: Boolean = false,
+        val isFeaturedStateExamBoost: Boolean = false,
     )
 
     data class HomeAppliedTestsUiState(
@@ -139,6 +140,7 @@ object AppliedTestHomeUi {
         card: TestCardNew?,
         scheduleTimerEnabled: Boolean,
         nowMs: Long,
+        isFeaturedStateExamBoost: Boolean = false,
     ): AppliedTestCardUiState {
         val interest = interestLabel.trim().ifBlank { "Test" }
         val name = card?.title?.trim()?.takeIf { it.isNotBlank() } ?: interest
@@ -172,6 +174,8 @@ object AppliedTestHomeUi {
         }
         val scheduleBadge = if (isFutureScheduled) "SCHEDULED" else "OPEN"
         val statusMessage = when {
+            isFeaturedStateExamBoost && !catalogLoaded -> "Important exam for your state — loading…"
+            isFeaturedStateExamBoost -> "Important exam for your state — tap to apply"
             !catalogLoaded -> "Loading test details..."
             isFutureScheduled -> "Apply now — starts ${examStartLabel ?: "soon"}"
             else -> "Tap to apply for this test"
@@ -207,7 +211,8 @@ object AppliedTestHomeUi {
             actionButtonEnabled = true,
             lateJoinClosed = false,
             isSuggestApply = true,
-            isSuggestApplyHighlight = catalogLoaded,
+            isSuggestApplyHighlight = catalogLoaded && !isFeaturedStateExamBoost,
+            isFeaturedStateExamBoost = isFeaturedStateExamBoost,
         )
     }
 
@@ -217,6 +222,7 @@ object AppliedTestHomeUi {
         snapshots: Map<String, TestCardNew?>,
         scheduleTimerEnabled: Boolean,
         nowMs: Long,
+        featuredBoostLabels: Set<String> = emptySet(),
     ): List<HomeTestCarouselItem> {
         val appliedItems = appliedCardStates.map { card ->
             HomeTestCarouselItem(
@@ -227,6 +233,7 @@ object AppliedTestHomeUi {
         }
         val suggestItems = suggestInterests.map { interest ->
             val snapshot = resolveCarouselSnapshot(interest, snapshots)
+            val isFeaturedBoost = featuredBoostLabels.any { it.equals(interest, ignoreCase = true) }
             HomeTestCarouselItem(
                 kind = HomeTestCarouselKind.SUGGEST_APPLY,
                 testName = interest,
@@ -235,6 +242,7 @@ object AppliedTestHomeUi {
                     card = snapshot,
                     scheduleTimerEnabled = scheduleTimerEnabled,
                     nowMs = nowMs,
+                    isFeaturedStateExamBoost = isFeaturedBoost,
                 ),
             )
         }
@@ -469,6 +477,7 @@ object AppliedTestHomeUi {
             lateJoinClosed = lateJoinClosed,
             isSuggestApply = false,
             isSuggestApplyHighlight = false,
+            isFeaturedStateExamBoost = false,
         )
     }
 
@@ -479,6 +488,8 @@ object AppliedTestHomeUi {
         pendingResult: AppPreferencesRepository.PendingResultState?,
         nowMs: Long,
         interestSubcategories: List<String> = emptyList(),
+        examCategories: List<ContentRepository.ExamCategoryItemRemote> = emptyList(),
+        signupState: String = "",
     ): HomeAppliedTestsUiState {
         val activeEntries = appliedSeries
             .filter { it.isActive(nowMs) }
@@ -494,16 +505,20 @@ object AppliedTestHomeUi {
                 nowMs = nowMs,
             )
         }
-        val pendingInterests = resolvePendingInterestTests(
+        val pendingInterests = StateExamFeaturedHomeBoost.resolveCarouselSuggestTests(
             interests = interestSubcategories,
             activeEntries = activeEntries,
+            examCategories = examCategories,
+            signupState = signupState,
         )
+        val featuredBoostLabels = StateExamFeaturedHomeBoost.featuredLevel3Set(examCategories, signupState)
         val carouselItems = buildHomeTestCarouselItems(
             appliedCardStates = cardStates,
             suggestInterests = pendingInterests,
             snapshots = snapshots,
             scheduleTimerEnabled = scheduleTimerEnabled,
             nowMs = nowMs,
+            featuredBoostLabels = featuredBoostLabels,
         )
         val (visibleCarouselItems, carouselOverflowCount) = prioritizeCarouselForDisplay(carouselItems)
         val readyCount = cardStates.count { it.canStartNow }

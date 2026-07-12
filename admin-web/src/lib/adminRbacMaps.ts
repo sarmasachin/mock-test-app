@@ -9,6 +9,7 @@ export const SETTINGS_KEY_TO_PERMISSION: Record<string, string> = {
   submitApplicationContent: 'tab_submit_application',
   instructionContent: 'tab_instruction_content',
   examCategories: 'tab_exam_categories',
+  stateExamSectionTemplates: 'tab_exam_categories',
   signupRegions: 'tab_signup_regions',
   examCategoryIconOptions: 'tab_exam_categories',
   notificationScheduling: 'tab_notification_scheduling',

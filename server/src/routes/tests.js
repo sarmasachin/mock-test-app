@@ -53,6 +53,11 @@ const {
   resolveApplyResponseScheduleFields,
 } = require('../lib/testApplicationCycle');
 const { resolveApplyWindowState } = require('../lib/testCycleWindow');
+const {
+  START_BLOCK_NO_QUESTIONS,
+  catalogErrorIfNoPublishedQuestions,
+  countPublishedQuestionsForTest,
+} = require('../lib/testPublishGuard');
 
 const USER_TEST_APPLICATIONS_SQL = `
   SELECT t.id, t.title, t.subcategory, t.is_published, t.capacity_total, t.enrolled_count,
@@ -64,6 +69,8 @@ const USER_TEST_APPLICATIONS_SQL = `
 `;
 
 const PUBLISHED_QUESTION_COUNT_SQL = `(SELECT COUNT(*)::int FROM questions q WHERE q.test_id = tests.id AND q.is_published = true) AS published_question_count`;
+const CATALOG_REQUIRES_PUBLISHED_QUESTIONS_SQL =
+  'EXISTS (SELECT 1 FROM questions q WHERE q.test_id = tests.id AND q.is_published = true)';
 
 const router = express.Router();
 
@@ -412,7 +419,7 @@ router.get('/', async (req, res) => {
     if (sub && kind && ['mock', 'quiz'].includes(kind)) {
       q = `${catalogSelect}
            FROM tests
-           WHERE is_published = true AND test_kind = $1
+           WHERE is_published = true AND ${CATALOG_REQUIRES_PUBLISHED_QUESTIONS_SQL} AND test_kind = $1
              AND subcategory ILIKE $2
            ORDER BY title ASC
            LIMIT $3`;
@@ -420,7 +427,7 @@ router.get('/', async (req, res) => {
     } else if (sub) {
       q = `${catalogSelect}
            FROM tests
-           WHERE is_published = true AND subcategory ILIKE $1
+           WHERE is_published = true AND ${CATALOG_REQUIRES_PUBLISHED_QUESTIONS_SQL} AND subcategory ILIKE $1
            ORDER BY title ASC
            LIMIT $2`;
       params = [`%${sub}%`, limit];
@@ -430,14 +437,14 @@ router.get('/', async (req, res) => {
       if (hasKind) {
         q = `${catalogSelect}
              FROM tests
-             WHERE is_published = true AND test_kind = $1 AND ${subClause.sql}
+             WHERE is_published = true AND ${CATALOG_REQUIRES_PUBLISHED_QUESTIONS_SQL} AND test_kind = $1 AND ${subClause.sql}
              ORDER BY title ASC
              LIMIT $${subClause.nextIndex}`;
         params = [kind, ...subClause.params, limit];
       } else {
         q = `${catalogSelect}
              FROM tests
-             WHERE is_published = true AND ${subClause.sql}
+             WHERE is_published = true AND ${CATALOG_REQUIRES_PUBLISHED_QUESTIONS_SQL} AND ${subClause.sql}
              ORDER BY title ASC
              LIMIT $${subClause.nextIndex}`;
         params = [...subClause.params, limit];
@@ -445,14 +452,14 @@ router.get('/', async (req, res) => {
     } else if (kind && ['mock', 'quiz'].includes(kind)) {
       q = `${catalogSelect}
            FROM tests
-           WHERE is_published = true AND test_kind = $1
+           WHERE is_published = true AND ${CATALOG_REQUIRES_PUBLISHED_QUESTIONS_SQL} AND test_kind = $1
            ORDER BY title ASC
            LIMIT $2`;
       params = [kind, limit];
     } else {
       q = `${catalogSelect}
            FROM tests
-           WHERE is_published = true
+           WHERE is_published = true AND ${CATALOG_REQUIRES_PUBLISHED_QUESTIONS_SQL}
            ORDER BY title ASC
            LIMIT $1`;
       params = [limit];
@@ -534,6 +541,7 @@ router.get('/resolve', requireAuth, async (req, res) => {
       scheduleTimerEnabled,
       examDate: resolveExamDate(row),
       slotLabel: String(row.slot_label || ''),
+      publishedQuestionCount: row.published_question_count,
       attemptAccess: applyState.alreadyAppliedInCurrentCycle
         ? await assertUserCanStartAttempt(
             pool,
@@ -560,7 +568,8 @@ router.get('/my-applications', requireAuth, async (req, res) => {
         `SELECT t.id, t.title, t.is_published, ta.applied_at,
                 t.exam_date, t.dynamic_date_enabled, t.date_cycle_days, t.last_cycle_started_at,
                 t.capacity_total, t.enrolled_count, t.slot_label, t.duration_minutes,
-                t.valid_until, t.attempts_allowed
+                t.valid_until, t.attempts_allowed,
+                ${PUBLISHED_QUESTION_COUNT_SQL.replace(/tests\.id/g, 't.id')}
          FROM test_applications ta
          INNER JOIN tests t ON t.id = ta.test_id
          WHERE ta.user_id = $1::uuid
@@ -581,7 +590,11 @@ router.get('/my-applications', requireAuth, async (req, res) => {
       );
       const examDate = resolveExamDate(row);
       const cyclePhase = resolveTestCyclePhase(row, advancedConfig, nowMs, publishScheduleItems);
-      const catalogError = catalogVisibilityError(row, advancedConfig, nowMs);
+      const catalogError = catalogErrorIfNoPublishedQuestions(
+        row,
+        row.published_question_count,
+        catalogVisibilityError(row, advancedConfig, nowMs),
+      );
       const capacityTotal = Math.max(0, Number(row.capacity_total || 0));
       const enrolledCount = Math.max(0, Number(row.enrolled_count || 0));
 
@@ -643,6 +656,7 @@ router.get('/my-applications', requireAuth, async (req, res) => {
         nowMs,
         row,
         advancedConfig,
+        publishedQuestionCount: row.published_question_count,
       });
 
       items.push(
@@ -758,6 +772,9 @@ router.get('/:id/questions-attempt', requireAuth, async (req, res) => {
        ORDER BY position ASC, id ASC`,
       [id],
     );
+    if (!rowsRes.rows.length) {
+      return res.status(403).json({ error: START_BLOCK_NO_QUESTIONS });
+    }
     const cycleKey = String(test.last_cycle_started_at || '').trim() || 'no_cycle';
     // Seed ties shuffle to user + catalog + cycle — NOT to attempt number (see SHUFFLE_AND_ATTEMPT_RULES.txt §4–5).
     const seedText = `${req.userId}:${id}:${cycleKey}`;
@@ -825,6 +842,11 @@ router.post('/:id/apply', requireAuth, async (req, res) => {
     if (visibilityError) {
       await client.query('ROLLBACK');
       return res.status(403).json({ error: visibilityError });
+    }
+    const publishedQuestionCount = await countPublishedQuestionsForTest(client, id);
+    if (test.is_published === true && publishedQuestionCount < 1) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: START_BLOCK_NO_QUESTIONS });
     }
     const userAppsRes = await client.query(USER_TEST_APPLICATIONS_SQL, [req.userId]);
     const capacity = Math.max(0, Number(test.capacity_total || 0));

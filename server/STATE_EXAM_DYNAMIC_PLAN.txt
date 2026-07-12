@@ -1,0 +1,227 @@
+MockTestApp — Dynamic State Exam Catalog (Master Plan)
+========================================================
+Status: Phase 6 COMPLETE — Dynamic State Exam project shipped
+Last updated: 2026-07-12
+
+GOAL
+----
+Admin kisi bhi state ke liye tests easily add kare — bina Himachal/medical/TGT rules yaad kiye.
+Har state ka app UI Himachal jaisa ho: sections + circular exam cards.
+Important tests user ko pehle dikhen (featured + sort order).
+
+SCOPE (what this project changes)
+---------------------------------
+IN SCOPE:
+  - examCategories extended schema (section, sort, featured, linkedTestId)
+  - Admin "State Exam Manager" wizard (Phase 2)
+  - Android generic StateSectionedGrid for ALL states (Phase 3)
+  - Server normalize/validate on save (Phase 1)
+  - Test ↔ category auto-sync (Phase 5)
+
+OUT OF SCOPE (unchanged):
+  - Test cycle / apply / shuffle / scoring logic
+  - Interest filter rules (subcategory unit stays same)
+  - All India tab hardcoded catalog (migrated in Phase 6, not removed abruptly)
+
+======================================================================
+PHASE 1 — Server foundation (COMPLETE)
+======================================================================
+Status: COMPLETE — npm run verify:state-exam-phase1
+
+Deliverables:
+  - server/src/lib/examCategoriesAdmin.js
+  - admin.js + home.js wiring
+  - migrateExamCategoriesStateExam.js
+  - verifyStateExamPhase1.js
+
+======================================================================
+PHASE 0 — Spec lock + pure library (SAFE: no runtime change)
+======================================================================
+Status: COMPLETE — npm run verify:state-exam-phase0
+
+Deliverables:
+  - server/STATE_EXAM_DYNAMIC_PLAN.txt          (this file)
+  - server/PHASE0_STATE_EXAM_DYNAMIC_RUNBOOK.txt
+  - server/src/lib/stateExamDynamicSpec.js      (pure helpers)
+  - server/scripts/verifyStateExamPhase0.js
+  - npm run verify:state-exam-phase0
+
+NO database migration yet.
+NO admin.js PATCH behaviour change yet.
+NO admin-web UI change yet.
+NO Android APK change yet.
+→ Existing app behaviour 100% unchanged until Phase 1+.
+
+======================================================================
+LOCKED PRODUCT RULES
+======================================================================
+
+1. INTEREST UNIT (unchanged from interest filter plan)
+   test.subcategory === examCategories.level3 (same text, trim, case-insensitive match OK)
+
+2. STATE HIERARCHY
+   level1 = "State" (or label matching isStateExamLevel1: "State Exams", etc.)
+   level2 = Indian state name (English or Hindi from indianStateVisualCatalog)
+   level3 = exam name shown on circle + Apply route key
+
+3. SECTIONED UI (all states — Phase 3)
+   Rows grouped by sectionSlug → sectionTitle → circular cards
+   Himachal hardcoded catalog = OPTIONAL seed fallback when zero admin rows for HP
+   All India hardcoded catalog = OPTIONAL seed fallback when zero admin rows
+
+4. DISPLAY SORT (user app — locked)
+   Within each section:
+     a) featured = true first
+     b) itemSortOrder ascending (1 before 2 before 999)
+     c) level3 alphabetical (tie-break)
+
+   Section order:
+     a) sectionSortOrder ascending
+     b) sectionTitle alphabetical (tie-break)
+
+5. ICON KEY (new state tests — collision-safe)
+   Format: <stateSlug>:<testSlug>
+   Examples:
+     Bihar Police Constable  → br:police-constable
+     MP Patwari              → mp:patwari
+   Legacy preserved:
+     hp:*        (Himachal hardcoded catalog)
+     allindia:*  (All India hardcoded catalog)
+     state:<slug> (Level 2 state circle only)
+     https://... (custom uploaded image)
+
+6. COLLISION RULES (admin save — Phase 1)
+   - Same enabled iconKey → REJECT save with error
+   - Same state + same level3 (case-insensitive) → REJECT
+   - NEW iconKey format (stateSlug:testSlug) gives unique keys per title
+     e.g. HP TGT Math → hp:hp-tgt-math, HP TGT Hindi → hp:hp-tgt-hindi
+   - OLD Himachal hardcoded catalog alias collision (hp-tgt) → removed when Phase 3
+     uses admin rows + this spec instead of keyword alias matching
+
+7. IMPORTANT / FEATURED
+   featured = true → circle rendered at top of section (visual highlight Phase 4)
+   itemSortOrder = 1 → first non-featured slot; use 1,2,3... for full control
+
+8. APPLIED TESTS (unchanged)
+   User jo apply kar chuka hai woh hamesha dikhe — chahe show_to_users off ho.
+
+======================================================================
+DATA MODEL — examCategories row (extended)
+======================================================================
+
+Existing fields (unchanged):
+  id          string   max 60
+  level1      string   max 80   e.g. "State"
+  level2      string   max 80   e.g. "Bihar"
+  level3      string   max 80   e.g. "Bihar Police Constable"
+  iconKey     string   max 800  auto or custom URL
+  enabled     boolean  default true
+
+NEW fields (Phase 1 migration — optional on read, defaulted in normalize):
+  sectionSlug       string   max 48   e.g. "police"
+  sectionTitle      string   max 120  e.g. "पुलिस भर्ती"
+  sectionSortOrder  int      0-999    section position
+  itemSortOrder     int      0-9999   position inside section (default 999)
+  featured          boolean  default false
+  linkedTestId      string   max 60   optional UUID → tests.id
+
+NEW app_settings key (Phase 1):
+  stateExamSectionTemplates: { items: [ { slug, titleHi, titleEn, sortOrder } ] }
+  Default list in stateExamDynamicSpec.js (11 sections).
+
+======================================================================
+DEFAULT SECTION TEMPLATES (slug → title)
+======================================================================
+  gk         सामान्य ज्ञान
+  admin      प्रशासनिक सेवाएँ
+  police     पुलिस भर्ती
+  teaching   शिक्षक भर्ती
+  revenue    राजस्व / पटवारी
+  medical    स्वास्थ्य / मेडिकल
+  technical  तकनीकी / इंजीनियरिंग
+  judiciary  न्यायिक सेवा
+  forest     वन / पर्यावरण
+  transport  परिवहन
+  other      अन्य परीक्षाएँ
+
+Admin wizard (Phase 2) picks from this list; can add custom slug in Phase 1 settings.
+
+======================================================================
+ADMIN WORKFLOW (target — after Phase 5)
+======================================================================
+
+  State Exam Manager → State [dropdown] → Section [dropdown] → Test [pick/create]
+  → Featured ⭐ → Order [1] → Save
+
+  Auto on save:
+    - examCategories row created/updated
+    - level1/2/3 + section + iconKey filled
+    - test.subcategory synced to level3
+    - collision check
+
+======================================================================
+ANDROID UI (target — Phase 3)
+======================================================================
+
+  SeeAllCategoriesScreenNew:
+    ANY state tap → buildStateExamSectionsForState() → StateExamSectionedGrid
+    Fallback if no admin rows:
+      Himachal → HimachalExamVisualCatalog.catalogTestSeeds()
+      All India tab → AllIndiaExamVisualCatalog (unchanged tab)
+      Other states → flat list until admin adds categories (temporary)
+
+======================================================================
+MIGRATION — legacy examCategories rows (Phase 1 script)
+======================================================================
+
+  For each existing row:
+    sectionSlug       ← suggestSectionSlugFromLevel3(level3) or "other"
+    sectionTitle      ← template title for slug
+    sectionSortOrder  ← template sortOrder
+    itemSortOrder     ← 999
+    featured          ← false
+    linkedTestId      ← null
+    iconKey           ← buildStateExamIconKey() unless hp:/allindia:/https
+
+  Himachal rows with hp: icons → KEEP iconKey unchanged.
+
+======================================================================
+PHASE ROADMAP
+======================================================================
+
+Phase 0 (½ day)   Spec + stateExamDynamicSpec.js + verify  ✅ COMPLETE
+Phase 1 (1-2 days) Server normalize/validate + settings key + migration script  ✅ COMPLETE
+Phase 2 (2-3 days) Admin State Exam Manager wizard + warnings  ✅ COMPLETE
+Phase 3 (3-4 days) Android StateSectionedGrid all states  ✅ COMPLETE
+Phase 4 (2 days)   Featured UI + drag reorder + home boost  ✅ COMPLETE
+Phase 5 (2 days)   Test create auto-sync category  ✅ COMPLETE
+Phase 6 (2-3 days) HP/AllIndia catalog migration + production ship  ✅ COMPLETE
+
+Verify commands (added as phases complete):
+  npm run verify:state-exam-phase0
+  npm run verify:state-exam-phase1   (Phase 1)
+  npm run verify:state-exam-phase2   (Phase 2)
+  npm run verify:state-exam-phase3   (Phase 3)
+  npm run verify:state-exam-phase4   (Phase 4)
+  npm run verify:state-exam-phase5   (Phase 5)
+  npm run verify:state-exam-phase6   (Phase 6)
+  npm run verify:state-exam-ship     (full gate phases 0–6)
+
+Production migrate:
+  npm run migrate:state-exam-categories   # schema fields
+  npm run migrate:state-exam-catalog      # HP + All India seeds
+
+======================================================================
+RELATED FILES (existing)
+======================================================================
+
+  server/src/lib/indianStateVisualCatalog.js   — 36 states slug map
+  server/src/lib/himachalExamVisualCatalog.js   — HP hardcoded (legacy seed)
+  server/src/lib/allIndiaExamVisualCatalog.js   — All India hardcoded
+  server/src/lib/userInterests.js               — subcategory interest rules
+  admin-web/src/tabs/AdvancedAdminTabs.tsx      — current exam categories UI
+  app/.../SeeAllCategoriesScreenNew.kt          — Tests tab State / All India
+
+======================================================================
+END OF MASTER PLAN
+======================================================================

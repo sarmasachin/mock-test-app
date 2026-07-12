@@ -462,6 +462,12 @@ data class ExamCategoryItemDto(
     @SerializedName("level3") val level3: String,
     @SerializedName("iconKey") val iconKey: String? = null,
     val enabled: Boolean = true,
+    @SerializedName("sectionSlug") val sectionSlug: String? = null,
+    @SerializedName("sectionTitle") val sectionTitle: String? = null,
+    @SerializedName("sectionSortOrder") val sectionSortOrder: Int? = null,
+    @SerializedName("itemSortOrder") val itemSortOrder: Int? = null,
+    val featured: Boolean = false,
+    @SerializedName("linkedTestId") val linkedTestId: String? = null,
 )
 
 data class ExamCategoriesDto(

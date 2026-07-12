@@ -3,6 +3,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { sanitizeHomeContentForPublicApi } = require('../lib/homeContentPublicSanitize');
+const { buildExamCategoriesSettingsForApi, parseJsonObject } = require('../lib/examCategoriesAdmin');
 
 const router = express.Router();
 
@@ -54,7 +55,7 @@ router.get('/content', async (_req, res) => {
     const { rows } = await pool.query(
       `SELECT setting_key, setting_value
        FROM app_settings
-       WHERE setting_key IN ('homeContent', 'submitApplicationContent', 'instructionContent', 'profileMenuItems', 'examCategories', 'signupRegions', 'pollSettings', 'pushNotificationSettings', 'achievementContent', 'shareContent', 'dailyDigestShareContent', 'dailyQuizShareContent')`,
+       WHERE setting_key IN ('homeContent', 'submitApplicationContent', 'instructionContent', 'profileMenuItems', 'examCategories', 'stateExamSectionTemplates', 'signupRegions', 'pollSettings', 'pushNotificationSettings', 'achievementContent', 'shareContent', 'dailyDigestShareContent', 'dailyQuizShareContent')`,
     );
     if (!rows.length) {
       return res.json({
@@ -104,8 +105,12 @@ router.get('/content', async (_req, res) => {
       parsedProfileMenuItems = [];
     }
     try {
-      const parsed = JSON.parse(String(map.examCategories || '{}'));
-      parsedExamCategories = parsed && typeof parsed === 'object' ? parsed : { items: [] };
+      const rawTemplates = map.stateExamSectionTemplates
+        ? parseJsonObject(map.stateExamSectionTemplates, null)
+        : null;
+      const rawExam = parseJsonObject(map.examCategories, { items: [] });
+      const built = buildExamCategoriesSettingsForApi(rawExam, rawTemplates);
+      parsedExamCategories = built.examCategories;
     } catch (_e) {
       parsedExamCategories = { items: [] };
     }

@@ -10,6 +10,7 @@ import {
   PublishSchedulingTabImpl,
   UserManagementAdvancedTabImpl,
 } from './tabs/AdvancedAdminTabs';
+import { StateExamManagerTabImpl } from './tabs/StateExamManagerTab';
 import { ExamSnapCardTab } from './tabs/ExamSnapCardTab';
 import { isProtectedSuperAdminEmail } from './protectedSuperAdmin';
 import {
@@ -40,6 +41,40 @@ import {
 } from './components/dailyQuiz/dailyQuizScopeUi';
 import { AdminPermissionsModal } from './components/AdminPermissionsModal';
 import { TabReadOnlyNotice } from './components/TabReadOnlyNotice';
+import {
+  StateExamTestSyncFields,
+  DEFAULT_STATE_EXAM_TEST_SYNC,
+  buildStateExamSyncApiPayload,
+} from './components/StateExamTestSyncFields';
+import {
+  DEFAULT_SECTION_TEMPLATES,
+  mapSectionTemplatesFromApi,
+  type SectionTemplate,
+} from './lib/stateExamWizard';
+import {
+  applySmartFieldsFromTitle,
+  applySmartFieldsOnSyncEnable,
+  applyStateExamScheduleDefaultsToForm,
+  applyStateExamFluctuationDefaultToForm,
+  createSmartTestCreateFlags,
+  resolveDynamicFluctuationOnPublishForSave,
+  resolveStateExamSubmitDefaults,
+} from './lib/stateExamTestCreateHelpers';
+import {
+  formatQuestionCountSyncHint,
+  parseQuestionCountSyncPayload,
+  type QuestionCountSyncPayload,
+} from './lib/questionCountSync';
+import {
+  buildImportSuccessToast,
+  buildQuestionDeleteSuccessToast,
+  buildQuestionSaveSuccessToast,
+} from './lib/questionImportFeedback';
+import {
+  downloadQuestionImportTemplate,
+  type QuestionImportTemplateFormat,
+} from './lib/questionImportTemplates';
+import { AddQuestionsNowBanner, type QuestionBuilderShortcutTarget } from './components/AddQuestionsNowBanner';
 import { AdminRbacProvider, useAdminRbac } from './adminRbacContext';
 import { INBOX_SETTINGS_KEY_TO_PERMISSION } from './lib/adminRbacMaps';
 import { usePermissionGuard } from './hooks/usePermissionGuard';
@@ -61,6 +96,7 @@ import {
   dateCycleDaysTitle,
   DYNAMIC_DATE_LABEL,
   DYNAMIC_FLUCTUATION_TITLE,
+  STATE_EXAM_FLUCTUATION_HINT,
   dynamicDateTitle,
   formatListAttemptLine,
   formatListCycleLine,
@@ -940,6 +976,7 @@ function parseQuestionImportText(format: 'csv' | 'excel' | 'json', rawText: stri
       choiceD: row.choiced,
       correctIndex: row.correctindex,
       explanation: row.explanation || '',
+      subjectKey: row.subjectkey || row.subject_key || '',
       isPublished: row.ispublished === undefined ? true : !['false', '0', 'no'].includes(String(row.ispublished).trim().toLowerCase()),
     };
   });
@@ -1579,6 +1616,15 @@ function App() {
           {tab === 'publishScheduling' && <PublishSchedulingTab apiClient={authedApi} />}
           {tab === 'submitApplicationContent' && <SubmitApplicationContentTab apiClient={authedApi} />}
           {tab === 'instructionContent' && <InstructionContentTab apiClient={authedApi} />}
+          {tab === 'stateExamManager' && (
+            <StateExamManagerTab
+              apiClient={authedApi}
+              onOpenQuestionBuilder={(testId) => {
+                setSelectedQuestionTestId(testId);
+                setTab('questionBuilder');
+              }}
+            />
+          )}
           {tab === 'examCategories' && <ExamCategoriesTab apiClient={authedApi} />}
           {tab === 'settings' && <SettingsTab apiClient={authedApi} />}
           {tab === 'auditLogs' && <AuditLogsTab apiClient={authedApi} />}
@@ -1736,6 +1782,8 @@ function TestsTab({
   const [subcategory, setSubcategory] = useState('');
   const [durationMinutes, setDurationMinutes] = useState('');
   const [questionCount, setQuestionCount] = useState('');
+  const [questionCountSyncHint, setQuestionCountSyncHint] = useState('');
+  const [addQuestionsShortcut, setAddQuestionsShortcut] = useState<QuestionBuilderShortcutTarget | null>(null);
   const [totalMarks, setTotalMarks] = useState('');
   const [examDate, setExamDate] = useState('');
   const [slotTime, setSlotTime] = useState('');
@@ -1781,9 +1829,12 @@ function TestsTab({
   const [cycleDiagnostics, setCycleDiagnostics] = useState<TestCycleDiagnostics | null>(null);
   const [cycleDiagnosticsLoading, setCycleDiagnosticsLoading] = useState(false);
   const testFormRef = useRef<HTMLFormElement | null>(null);
+  const smartCreateFlagsRef = useRef(createSmartTestCreateFlags());
   const [kind, setKind] = useState<TestKind>('mock');
   const [isPublished, setIsPublished] = useState(true);
   const [dynamicFluctuationOnPublish, setDynamicFluctuationOnPublish] = useState(true);
+  const [stateExamTestSync, setStateExamTestSync] = useState(DEFAULT_STATE_EXAM_TEST_SYNC);
+  const [stateExamSections, setStateExamSections] = useState<SectionTemplate[]>(DEFAULT_SECTION_TEMPLATES);
   const [isRefreshingTests, setIsRefreshingTests] = useState(false);
   const [republishingTestId, setRepublishingTestId] = useState('');
   const [selectedTest, setSelectedTest] = useState<TestItem | null>(null);
@@ -2096,8 +2147,27 @@ function TestsTab({
 
   useEffect(() => {
     load();
+    void loadStateExamSections();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!stateExamSections.some((s) => s.slug === stateExamTestSync.sectionSlug)) {
+      setStateExamTestSync((prev) => ({
+        ...prev,
+        sectionSlug: stateExamSections[0]?.slug || 'other',
+      }));
+    }
+  }, [stateExamSections, stateExamTestSync.sectionSlug]);
+
+  async function loadStateExamSections() {
+    try {
+      const res = await apiClient.get('/admin/settings');
+      setStateExamSections(mapSectionTemplatesFromApi(res.data?.settings?.stateExamSectionTemplates));
+    } catch {
+      // keep defaults
+    }
+  }
 
   useEffect(() => {
     if (!selectedQuestionTestId || !items.length) return;
@@ -2107,6 +2177,12 @@ function TestsTab({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedQuestionTestId, items.length]);
+
+  function openQuestionBuilderForSavedTest(testId: string) {
+    onSelectQuestionTest(testId);
+    onNavigateTab?.('questionBuilder');
+    setAddQuestionsShortcut(null);
+  }
 
   async function load(): Promise<TestItem[]> {
     try {
@@ -2163,6 +2239,7 @@ function TestsTab({
     setSubcategory('');
     setDurationMinutes('');
     setQuestionCount('');
+    setQuestionCountSyncHint('');
     setTotalMarks('');
     setExamDate('');
     setSlotTime('');
@@ -2198,6 +2275,85 @@ function TestsTab({
     setKind('mock');
     setIsPublished(true);
     setDynamicFluctuationOnPublish(true);
+    setStateExamTestSync(DEFAULT_STATE_EXAM_TEST_SYNC);
+    smartCreateFlagsRef.current = createSmartTestCreateFlags();
+  }
+
+  function markScheduleManual() {
+    smartCreateFlagsRef.current.scheduleManual = true;
+  }
+
+  function applyQuickStateExamDefaults(sync: typeof stateExamTestSync) {
+    applyStateExamScheduleDefaultsToForm(
+      {
+        sync,
+        flags: smartCreateFlagsRef.current,
+        isEditing: Boolean(editingTestId),
+        current: {
+          durationMinutes,
+          questionCount,
+          totalMarks,
+          capacityTotal,
+          attemptsAllowed,
+          languageMode,
+          examMode,
+          negativeMarkingText,
+          testTypeLabel,
+          isPublished,
+        },
+      },
+      {
+        setDurationMinutes,
+        setQuestionCount,
+        setTotalMarks,
+        setCapacityTotal,
+        setAttemptsAllowed,
+        setLanguageMode,
+        setExamMode,
+        setNegativeMarkingText,
+        setTestTypeLabel,
+        setIsPublished,
+      },
+    );
+    const fluctuationDefault = applyStateExamFluctuationDefaultToForm(sync, Boolean(editingTestId));
+    if (fluctuationDefault === false) {
+      setDynamicFluctuationOnPublish(false);
+    }
+  }
+
+  function onTestTitleChange(value: string) {
+    setTitle(value);
+    const smart = applySmartFieldsFromTitle({
+      title: value,
+      sync: stateExamTestSync,
+      sections: stateExamSections,
+      flags: smartCreateFlagsRef.current,
+      isEditing: Boolean(editingTestId),
+    });
+    if (smart.slug != null) setSlug(smart.slug);
+    if (smart.subcategory != null) setSubcategory(smart.subcategory);
+    const nextSync = smart.sync || stateExamTestSync;
+    if (smart.sync) setStateExamTestSync(smart.sync);
+    if (nextSync.enabled) applyQuickStateExamDefaults(nextSync);
+  }
+
+  function onStateExamTestSyncChange(next: typeof stateExamTestSync) {
+    if (next.enabled && !stateExamTestSync.enabled) {
+      const applied = applySmartFieldsOnSyncEnable({
+        title,
+        subcategory,
+        sync: next,
+        sections: stateExamSections,
+        flags: smartCreateFlagsRef.current,
+      });
+      smartCreateFlagsRef.current = applied.flags;
+      if (applied.subcategory != null) setSubcategory(applied.subcategory);
+      setStateExamTestSync(applied.sync);
+      applyQuickStateExamDefaults(applied.sync);
+      return;
+    }
+    setStateExamTestSync(next);
+    if (next.enabled) applyQuickStateExamDefaults(next);
   }
 
   function formatCycleDiagnosticTime(iso: string | null | undefined): string {
@@ -2257,12 +2413,23 @@ function TestsTab({
   }
 
   function applyTestToForm(t: TestItem) {
+    smartCreateFlagsRef.current = {
+      slugManual: true,
+      subcategoryManual: true,
+      scheduleManual: true,
+      sectionManual: true,
+    };
     setTitle(t.title || '');
     setSlug(t.slug || '');
     setSubcategory(t.subcategory || '');
     setKind(t.test_kind || 'mock');
     setDurationMinutes(String(t.duration_minutes ?? ''));
     setQuestionCount(String(t.question_count ?? ''));
+    setQuestionCountSyncHint(
+      t.question_count > 0
+        ? `${t.question_count} in test — auto-syncs when you add/import/delete in Question Builder`
+        : '',
+    );
     setTotalMarks(String(t.total_marks ?? ''));
     setExamDate(t.exam_date || '');
     setValidUntil(t.valid_until || '');
@@ -2321,22 +2488,41 @@ function TestsTab({
   async function handleTestFormSubmit(e: FormEvent) {
     e.preventDefault();
     if (!guard('tab_all_tests')) return;
+    const resolved = resolveStateExamSubmitDefaults({
+      sync: stateExamTestSync,
+      isEditing: Boolean(editingTestId),
+      scheduleManual: smartCreateFlagsRef.current.scheduleManual,
+      values: {
+        durationMinutes,
+        questionCount,
+        totalMarks,
+        capacityTotal,
+        attemptsAllowed,
+        languageMode,
+        examMode,
+        negativeMarkingText,
+        testTypeLabel,
+        isPublished,
+        metaLine: '',
+      },
+    });
     const parsed = normalizeAndValidateTestPayload({
       title,
       slug,
       subcategory,
-      durationMinutes,
-      questionCount,
-      totalMarks,
+      metaLine: resolved.metaLine,
+      durationMinutes: resolved.durationMinutes ?? durationMinutes,
+      questionCount: resolved.questionCount ?? questionCount,
+      totalMarks: resolved.totalMarks ?? totalMarks,
       examDate,
       slotTime,
-      capacityTotal,
+      capacityTotal: resolved.capacityTotal ?? capacityTotal,
       enrolledCount,
-      attemptsAllowed,
-      languageMode,
-      examMode,
-      negativeMarkingText,
-      testTypeLabel,
+      attemptsAllowed: resolved.attemptsAllowed ?? attemptsAllowed,
+      languageMode: resolved.languageMode ?? languageMode,
+      examMode: resolved.examMode ?? examMode,
+      negativeMarkingText: resolved.negativeMarkingText ?? negativeMarkingText,
+      testTypeLabel: resolved.testTypeLabel ?? testTypeLabel,
       badgeEnabled,
       badgeText,
       validUntil,
@@ -2360,8 +2546,11 @@ function TestsTab({
       cycleRepublishGapMinutes,
       sendEmailOnPublish,
       testKind: kind,
-      isPublished,
-      dynamicFluctuationOnPublish,
+      isPublished: resolved.isPublished ?? isPublished,
+      dynamicFluctuationOnPublish: resolveDynamicFluctuationOnPublishForSave({
+        sync: stateExamTestSync,
+        currentValue: dynamicFluctuationOnPublish,
+      }),
       subjectSectionRows,
       isEditing: Boolean(editingTestId),
     });
@@ -2396,14 +2585,19 @@ function TestsTab({
       }
     }
     try {
+      const stateExamSync = buildStateExamSyncApiPayload(stateExamTestSync);
+      const payload = stateExamSync ? { ...data, stateExamSync } : data;
       if (editingId) {
-        const res = await apiClient.patch(`/admin/tests/${editingId}`, data);
+        const res = await apiClient.patch(`/admin/tests/${editingId}`, payload);
         const cycleRenewed = res.data?.cycleRenewed === true;
+        const catSync = res.data?.examCategorySync;
         if (cycleRenewed) {
           pushToast(
             'success',
             `Test "${data.title}" updated. Enrollment period restarted — students must apply again for this round.`,
           );
+        } else if (catSync?.synced) {
+          pushToast('success', `Test "${data.title}" updated and state exam circle synced.`);
         } else {
           pushToast('success', `Test "${data.title}" updated successfully.`);
         }
@@ -2416,8 +2610,25 @@ function TestsTab({
         setAdvancedOpen(true);
         void loadCycleDiagnostics(editingId);
       } else {
-        await apiClient.post('/admin/tests', data);
-        pushToast('success', `Test "${data.title}" created successfully.`);
+        const res = await apiClient.post('/admin/tests', payload);
+        const catSync = res.data?.examCategorySync;
+        const stubInserted = res.data?.draftStubQuestion?.inserted === true;
+        const stubHint = stubInserted
+          ? ' Sample draft question added — edit in Question Builder before publish.'
+          : '';
+        if (catSync?.synced) {
+          pushToast('success', `Test "${data.title}" created and state exam circle synced.${stubHint}`);
+        } else {
+          pushToast('success', `Test "${data.title}" created successfully.${stubHint}`);
+        }
+        const createdId = String(res.data?.item?.id || '').trim();
+        if (
+          createdId &&
+          canEditQuestions &&
+          (stateExamTestSync.enabled || catSync?.synced)
+        ) {
+          setAddQuestionsShortcut({ testId: createdId, testTitle: data.title });
+        }
         resetTestFormToCreate();
         await load();
       }
@@ -2497,6 +2708,24 @@ function TestsTab({
     }
   }
 
+  function applyQuestionCountSync(
+    testId: string,
+    data: Record<string, unknown> | null | undefined,
+  ): QuestionCountSyncPayload | null {
+    const sync = parseQuestionCountSyncPayload(data);
+    if (!sync || !testId) return null;
+    const nextCount = sync.questionCount;
+    setItems((prev) =>
+      prev.map((row) => (row.id === testId ? { ...row, question_count: nextCount } : row)),
+    );
+    setSelectedTest((prev) => (prev?.id === testId ? { ...prev, question_count: nextCount } : prev));
+    if (editingTestId === testId) {
+      setQuestionCount(String(nextCount));
+      setQuestionCountSyncHint(formatQuestionCountSyncHint(sync));
+    }
+    return sync;
+  }
+
   async function loadQuestions(test: TestItem) {
     try {
       setSelectedTest(test);
@@ -2506,6 +2735,7 @@ function TestsTab({
       const res = await apiClient.get(`/admin/tests/${test.id}/questions`);
       const nextItems = Array.isArray(res.data?.items) ? res.data.items : [];
       setQuestions(nextItems);
+      applyQuestionCountSync(test.id, res.data);
       setQuestionsPage(1);
       setEditingQuestionId(null);
       setQuestionForm({
@@ -2590,15 +2820,24 @@ function TestsTab({
       subjectKey: subjectKeyOut,
     };
     try {
+      let syncRes: Record<string, unknown> | null = null;
       if (editingQuestionId) {
-        await apiClient.patch(`/admin/tests/${selectedTest.id}/questions/${editingQuestionId}`, payload);
+        const res = await apiClient.patch(`/admin/tests/${selectedTest.id}/questions/${editingQuestionId}`, payload);
+        syncRes = res.data;
       } else {
-        await apiClient.post(`/admin/tests/${selectedTest.id}/questions`, payload);
+        const res = await apiClient.post(`/admin/tests/${selectedTest.id}/questions`, payload);
+        syncRes = res.data;
       }
       await loadQuestions(selectedTest);
+      if (syncRes) applyQuestionCountSync(selectedTest.id, syncRes);
+      const sync = parseQuestionCountSyncPayload(syncRes);
       pushToast(
         'success',
-        editingQuestionId ? 'Question updated successfully.' : 'Question added to bank successfully.',
+        buildQuestionSaveSuccessToast({
+          isEdit: Boolean(editingQuestionId),
+          sync,
+          questionPublished: questionForm.isPublished,
+        }),
       );
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to save question');
@@ -2620,6 +2859,15 @@ function TestsTab({
       isPublished: normalizeBoolean(item.is_published, true),
       subjectKey: String(item.subject_key || '').trim(),
     });
+  }
+
+  function downloadQuestionImportTemplateFile(format: QuestionImportTemplateFormat = bulkImportFormat) {
+    if (!rbac.canEditQuestions) {
+      pushToast('error', 'You do not have permission to import questions.');
+      return;
+    }
+    const { filename } = downloadQuestionImportTemplate(format, selectedTest?.title || 'questions');
+    pushToast('success', `Downloaded ${filename}. Fill it and paste or import in Question Builder.`);
   }
 
   async function importQuestionsBulk() {
@@ -2648,9 +2896,17 @@ function TestsTab({
         items: parsed.value,
       });
       const inserted = Number(res.data?.inserted || 0);
+      const sync = applyQuestionCountSync(selectedTest.id, res.data);
       setBulkImportText('');
       setBulkImportOpen(false);
-      pushToast('success', `Imported ${inserted} question(s) successfully.`);
+      pushToast(
+        'success',
+        buildImportSuccessToast({
+          inserted,
+          mode: bulkImportMode,
+          sync,
+        }),
+      );
       await loadQuestions(selectedTest);
     } catch (err: any) {
       const msg = err?.response?.data?.error || 'Failed to import questions';
@@ -2676,9 +2932,10 @@ function TestsTab({
     });
     if (!ok) return;
     try {
-      await apiClient.delete(`/admin/tests/${selectedTest.id}/questions/${questionId}`);
+      const res = await apiClient.delete(`/admin/tests/${selectedTest.id}/questions/${questionId}`);
+      const sync = applyQuestionCountSync(selectedTest.id, res.data);
       await loadQuestions(selectedTest);
-      pushToast('success', 'Question deleted successfully.');
+      pushToast('success', buildQuestionDeleteSuccessToast(sync));
     } catch (err: any) {
       pushToast('error', err?.response?.data?.error || 'Failed to delete question');
     }
@@ -2752,9 +3009,24 @@ function TestsTab({
       {mode === 'allTests' && (
         <>
           <p className="muted" style={{ marginTop: 0 }}>
-            Home category mapping tip: keep the same <b>Subcategory</b> for related exams (e.g. Patwari), and keep each
-            <b> Test title</b> unique (e.g. Patwari - HP, Patwari - Punjab) so users can choose the correct exam.
+            <strong>State exam (easy):</strong> use <b>State Exam Manager</b> tab — state → section → name → save
+            (test + app circle in one step). Or here: tick <b>Add / sync State exam circle</b> — only <b>title</b> required;
+            slug, subcategory, section, duration (60m), 1 question, capacity, and draft publish auto-fill.
           </p>
+          {stateExamTestSync.enabled && !editingTestId ? (
+            <p className="state-exam-quick-draft-banner" role="status">
+              Quick draft mode: schedule &amp; capacity auto-filled. Shuffle on publish is off for fixed state
+              exam papers. A sample draft question is added — edit it in Question Builder, then publish when ready.
+            </p>
+          ) : null}
+          {mode === 'allTests' && addQuestionsShortcut ? (
+            <AddQuestionsNowBanner
+              target={addQuestionsShortcut}
+              onAddQuestions={openQuestionBuilderForSavedTest}
+              onDismiss={() => setAddQuestionsShortcut(null)}
+              disabled={!canEditQuestions}
+            />
+          ) : null}
           <fieldset disabled={!canEditTests} className="rbac-fieldset">
           <form
             ref={testFormRef}
@@ -2777,14 +3049,27 @@ function TestsTab({
                     Test title
                     <RequiredStar />
                   </span>
-                  <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Test title" required />
+                  <input
+                    value={title}
+                    onChange={(e) => onTestTitleChange(e.target.value)}
+                    placeholder="e.g. Bihar Police Constable Mock"
+                    required
+                  />
                 </label>
                 <label className="all-tests-field">
                   <span>
                     Slug
                     <RequiredStar />
                   </span>
-                  <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="test-slug" required />
+                  <input
+                    value={slug}
+                    onChange={(e) => {
+                      smartCreateFlagsRef.current.slugManual = true;
+                      setSlug(e.target.value);
+                    }}
+                    placeholder="auto from title"
+                    required
+                  />
                 </label>
                 <label className="all-tests-field">
                   <span>
@@ -2793,7 +3078,10 @@ function TestsTab({
                   </span>
                   <input
                     value={subcategory}
-                    onChange={(e) => setSubcategory(e.target.value)}
+                    onChange={(e) => {
+                      smartCreateFlagsRef.current.subcategoryManual = true;
+                      setSubcategory(e.target.value);
+                    }}
                     placeholder="e.g. Patwari, Math"
                     list={subcategoryListId}
                     title="Must match app exam category so users see this test"
@@ -2804,6 +3092,12 @@ function TestsTab({
                     <option key={name} value={name} />
                   ))}
                 </datalist>
+                <StateExamTestSyncFields
+                  value={stateExamTestSync}
+                  onChange={onStateExamTestSyncChange}
+                  sections={stateExamSections}
+                  disabled={!canEditTests}
+                />
                 <label className="all-tests-field">
                   <span>Test kind</span>
                   <select value={kind} onChange={(e) => setKind(e.target.value as TestKind)}>
@@ -2923,7 +3217,10 @@ function TestsTab({
                   <input
                     type="number"
                     value={durationMinutes}
-                    onChange={(e) => setDurationMinutes(e.target.value)}
+                    onChange={(e) => {
+                      markScheduleManual();
+                      setDurationMinutes(e.target.value);
+                    }}
                     placeholder="60"
                     min={1}
                     max={1440}
@@ -2940,12 +3237,29 @@ function TestsTab({
                   <input
                     type="number"
                     value={questionCount}
-                    onChange={(e) => setQuestionCount(e.target.value)}
+                    onChange={(e) => {
+                      markScheduleManual();
+                      setQuestionCount(e.target.value);
+                      setQuestionCountSyncHint('');
+                    }}
                     placeholder="50"
                     min={1}
                     max={500}
                     required
+                    readOnly={Boolean(editingTestId)}
+                    title={
+                      editingTestId
+                        ? 'Auto-synced from Question Builder — add, import, or delete questions to update'
+                        : undefined
+                    }
                   />
+                  {questionCountSyncHint ? (
+                    <span className="all-tests-field-hint">{questionCountSyncHint}</span>
+                  ) : editingTestId ? (
+                    <span className="all-tests-field-hint">
+                      Auto-syncs from Question Builder when you add, import, or delete questions.
+                    </span>
+                  ) : null}
                 </label>
                 <label className="all-tests-field">
                   <span>Total marks</span>
@@ -2965,7 +3279,10 @@ function TestsTab({
                   <input
                     type="number"
                     value={capacityTotal}
-                    onChange={(e) => setCapacityTotal(e.target.value)}
+                    onChange={(e) => {
+                      markScheduleManual();
+                      setCapacityTotal(e.target.value);
+                    }}
                     placeholder="500"
                     min={1}
                     title="Use 1 or more — 0 shows 0 seats in the app"
@@ -2990,7 +3307,10 @@ function TestsTab({
                   <input
                     type="number"
                     value={attemptsAllowed}
-                    onChange={(e) => setAttemptsAllowed(e.target.value)}
+                    onChange={(e) => {
+                      markScheduleManual();
+                      setAttemptsAllowed(e.target.value);
+                    }}
                     placeholder="1"
                     min={1}
                     max={20}
@@ -3192,17 +3512,31 @@ function TestsTab({
 
             <div className="all-tests-actions">
               <label className="check-wrap">
-                <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
+                <input
+                  type="checkbox"
+                  checked={isPublished}
+                  onChange={(e) => {
+                    markScheduleManual();
+                    setIsPublished(e.target.checked);
+                  }}
+                />
                 published
               </label>
-              <label className="check-wrap" title={DYNAMIC_FLUCTUATION_TITLE}>
+              <label
+                className="check-wrap"
+                title={stateExamTestSync.enabled ? STATE_EXAM_FLUCTUATION_HINT : DYNAMIC_FLUCTUATION_TITLE}
+              >
                 <input
                   type="checkbox"
                   checked={dynamicFluctuationOnPublish}
+                  disabled={stateExamTestSync.enabled}
                   onChange={(e) => setDynamicFluctuationOnPublish(e.target.checked)}
                 />
                 dynamic fluctuation (shuffle)
               </label>
+              {stateExamTestSync.enabled ? (
+                <span className="all-tests-field-hint">{STATE_EXAM_FLUCTUATION_HINT}</span>
+              ) : null}
               <label className="check-wrap">
                 <input type="checkbox" checked={badgeEnabled} onChange={(e) => setBadgeEnabled(e.target.checked)} />
                 show badge
@@ -3443,7 +3777,11 @@ function TestsTab({
           <div className="panel-head">
             <div>
               <h3>Question Builder</h3>
-              <span>{selectedTest ? `Selected: ${selectedTest.title}` : ''}</span>
+              <span>
+                {selectedTest
+                  ? `Selected: ${selectedTest.title} · ${selectedTest.question_count} Q`
+                  : ''}
+              </span>
             </div>
           </div>
           <div className="qb-create-card">
@@ -3629,7 +3967,7 @@ function TestsTab({
             </button>
             {bulkImportOpen && (
               <div className="question-form">
-                <div className="inline-form">
+                <div className="inline-form qb-import-toolbar">
                   <select value={bulkImportFormat} onChange={(e) => setBulkImportFormat(e.target.value as 'csv' | 'excel' | 'json')}>
                     <option value="csv">CSV</option>
                     <option value="excel">Excel (tab separated paste)</option>
@@ -3639,7 +3977,19 @@ function TestsTab({
                     <option value="append">Append</option>
                     <option value="replace">Replace Existing</option>
                   </select>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={!canEditQuestions}
+                    onClick={() => downloadQuestionImportTemplateFile(bulkImportFormat)}
+                  >
+                    Download sample {bulkImportFormat === 'json' ? 'JSON' : bulkImportFormat === 'excel' ? 'TSV' : 'CSV'}
+                  </button>
                 </div>
+                <p className="muted qb-import-hint">
+                  Download the sample file for the correct columns. <code>correctIndex</code> is 0–3 (A=0, B=1, C=2,
+                  D=3). Leave <code>subjectKey</code> blank unless this test uses subject sections.
+                </p>
                 <textarea
                   value={bulkImportText}
                   onChange={(e) => {
@@ -7937,6 +8287,16 @@ function InstructionContentTab({ apiClient }: { apiClient: typeof api }) {
 
 function ExamCategoriesTab({ apiClient }: { apiClient: typeof api }) {
   return <ExamCategoriesTabImpl apiClient={apiClient} />;
+}
+
+function StateExamManagerTab({
+  apiClient,
+  onOpenQuestionBuilder,
+}: {
+  apiClient: typeof api;
+  onOpenQuestionBuilder?: (testId: string) => void;
+}) {
+  return <StateExamManagerTabImpl apiClient={apiClient} onOpenQuestionBuilder={onOpenQuestionBuilder} />;
 }
 
 function SettingsTab({ apiClient }: { apiClient: typeof api }) {
