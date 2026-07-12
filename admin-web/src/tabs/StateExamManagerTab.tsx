@@ -20,6 +20,7 @@ import {
   type WizardInput,
 } from '../lib/stateExamWizard';
 import { StateExamSectionTemplatesEditor } from '../components/StateExamSectionTemplatesEditor';
+import { StateExamReorderPanel } from '../components/StateExamReorderPanel';
 import {
   AddQuestionsNowBanner,
   type QuestionBuilderShortcutTarget,
@@ -58,6 +59,7 @@ export function StateExamManagerTabImpl({
   const [testMode, setTestMode] = useState<'existing' | 'new'>('existing');
   const [selectedTestId, setSelectedTestId] = useState('');
   const [createTest, setCreateTest] = useState(true);
+  const [managerMode, setManagerMode] = useState<'add' | 'manage'>('add');
   const [dragRowId, setDragRowId] = useState<string | null>(null);
   const [questionBuilderShortcut, setQuestionBuilderShortcut] =
     useState<QuestionBuilderShortcutTarget | null>(null);
@@ -96,19 +98,20 @@ export function StateExamManagerTabImpl({
     }
   }, [wizardInput, sections, examName]);
 
-  const stateCategories = useMemo(
+  const stateExamCount = useMemo(
     () =>
       categories.filter(
         (c) =>
           c.enabled &&
+          c.level1 === 'State' &&
           c.level2.trim().toLowerCase() === selectedState.english.toLowerCase(),
-      ),
+      ).length,
     [categories, selectedState.english],
   );
 
-  const sectionGroups = useMemo(
-    () => groupStateRowsBySection(categories, selectedState.english, sections),
-    [categories, selectedState.english, sections],
+  const totalStateExamCount = useMemo(
+    () => categories.filter((c) => c.enabled && c.level1 === 'State').length,
+    [categories],
   );
 
   useEffect(() => {
@@ -181,7 +184,9 @@ export function StateExamManagerTabImpl({
   }
 
   function moveRowInSection(sectionKey: string, rowId: string, direction: -1 | 1) {
-    const group = sectionGroups.find((g) => g.sectionSlug === sectionKey);
+    const group = groupStateRowsBySection(categories, selectedState.english, sections).find(
+      (g) => g.sectionSlug === sectionKey,
+    );
     if (!group) return;
     const ids = group.items.map((r) => r.id);
     const idx = ids.indexOf(rowId);
@@ -352,6 +357,45 @@ export function StateExamManagerTabImpl({
               disabled={saving || !rbac.canEditQuestions}
             />
           ) : null}
+
+          <div className="state-exam-manager-tabs" role="tablist" aria-label="State exam manager mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={managerMode === 'add'}
+              className={`state-exam-manager-tab${managerMode === 'add' ? ' is-active' : ''}`}
+              onClick={() => setManagerMode('add')}
+            >
+              Add exam
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={managerMode === 'manage'}
+              className={`state-exam-manager-tab${managerMode === 'manage' ? ' is-active' : ''}`}
+              onClick={() => setManagerMode('manage')}
+            >
+              Manage order
+              {totalStateExamCount > 0 ? (
+                <span className="state-exam-manager-tab-badge">{totalStateExamCount}</span>
+              ) : null}
+            </button>
+          </div>
+
+          {managerMode === 'manage' ? (
+            <StateExamReorderPanel
+              categories={categories}
+              sections={sections}
+              stateSlug={stateSlug}
+              onStateSlugChange={setStateSlug}
+              saving={saving}
+              dragRowId={dragRowId}
+              onDragRowIdChange={setDragRowId}
+              onReorderSection={onReorderSection}
+              onToggleFeaturedRow={(rowId) => void onToggleFeaturedRow(rowId)}
+              onMoveRow={moveRowInSection}
+            />
+          ) : (
           <div className="state-exam-manager-grid">
           <form className="state-exam-wizard-form" onSubmit={onSubmit}>
             <label className="all-tests-field">
@@ -493,94 +537,26 @@ export function StateExamManagerTabImpl({
               </ul>
             )}
 
-            <h4>
-              {selectedState.english} — drag reorder ({stateCategories.length})
-            </h4>
-            {sectionGroups.length === 0 ? (
-              <p className="muted">No exams for this state yet.</p>
+            {stateExamCount > 0 ? (
+              <p className="muted state-exam-footnote">
+                {selectedState.english} has {stateExamCount} exam{stateExamCount === 1 ? '' : 's'}. Open{' '}
+                <button
+                  type="button"
+                  className="state-exam-inline-link"
+                  onClick={() => setManagerMode('manage')}
+                >
+                  Manage order
+                </button>{' '}
+                to drag-reorder or toggle featured.
+              </p>
             ) : (
-              <div className="state-exam-reorder-groups">
-                {sectionGroups.map((group) => (
-                  <div key={group.sectionSlug} className="state-exam-reorder-section">
-                    <h5>
-                      {group.sectionTitle}
-                      <span className="muted"> ({group.items.length})</span>
-                    </h5>
-                    <ul className="state-exam-reorder-list">
-                      {group.items.map((row, idx) => (
-                        <li
-                          key={row.id}
-                          className={`state-exam-reorder-item${dragRowId === row.id ? ' is-dragging' : ''}`}
-                          draggable={!saving}
-                          onDragStart={() => setDragRowId(row.id)}
-                          onDragEnd={() => setDragRowId(null)}
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            if (!dragRowId || dragRowId === row.id) return;
-                            const ids = group.items.map((r) => r.id);
-                            const from = ids.indexOf(dragRowId);
-                            const to = idx;
-                            if (from < 0) return;
-                            const nextIds = [...ids];
-                            nextIds.splice(from, 1);
-                            nextIds.splice(to, 0, dragRowId);
-                            setDragRowId(null);
-                            void onReorderSection(group.sectionSlug, nextIds);
-                          }}
-                        >
-                          <span className="state-exam-drag-handle" title="Drag to reorder">
-                            ⋮⋮
-                          </span>
-                          <span className="state-exam-reorder-label">
-                            {row.featured ? '⭐ ' : ''}
-                            {row.level3}
-                          </span>
-                          <span className="state-exam-reorder-actions">
-                            <button
-                              type="button"
-                              className="state-exam-mini-btn"
-                              disabled={saving || idx === 0}
-                              onClick={() => moveRowInSection(group.sectionSlug, row.id, -1)}
-                              title="Move up"
-                            >
-                              ↑
-                            </button>
-                            <button
-                              type="button"
-                              className="state-exam-mini-btn"
-                              disabled={saving || idx === group.items.length - 1}
-                              onClick={() => moveRowInSection(group.sectionSlug, row.id, 1)}
-                              title="Move down"
-                            >
-                              ↓
-                            </button>
-                            <button
-                              type="button"
-                              className={`state-exam-mini-btn${row.featured ? ' is-featured' : ''}`}
-                              disabled={saving}
-                              onClick={() => void onToggleFeaturedRow(row.id)}
-                              title="Toggle featured"
-                            >
-                              ★
-                            </button>
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
+              <p className="muted state-exam-footnote">
+                After save, use <strong>Manage order</strong> tab to reorder circles in the app.
+              </p>
             )}
-
-            <p className="muted state-exam-footnote">
-              Drag or ↑↓ to reorder within each section. ★ toggles featured (Home boost + app highlight).
-            </p>
-            <p className="muted state-exam-footnote">
-              Advanced edit: use <strong>Exam Categories</strong> tab.
-            </p>
           </aside>
         </div>
+          )}
         </>
       )}
 
