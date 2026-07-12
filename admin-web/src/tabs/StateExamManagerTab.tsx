@@ -6,6 +6,7 @@ import {
   applySectionRowOrder,
   buildWizardCategoryDraft,
   collectWizardWarnings,
+  DEFAULT_SECTION_TEMPLATES,
   groupStateRowsBySection,
   mapExamCategoriesFromApi,
   mapSectionTemplatesFromApi,
@@ -27,6 +28,9 @@ import {
 } from '../components/AddQuestionsNowBanner';
 import { suggestSectionSlugForWizard } from '../lib/stateExamTestCreateHelpers';
 import { useAdminRbac } from '../adminRbacContext';
+import { AdminPanelErrorBoundary } from '../components/AdminPanelErrorBoundary';
+
+const TEST_PICKER_LIMIT = 250;
 
 type ApiClient = {
   get: (url: string, config?: any) => Promise<any>;
@@ -46,10 +50,13 @@ export function StateExamManagerTabImpl({
   const rbac = useAdminRbac();
 
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState(false);
   const [categories, setCategories] = useState<ExamCategoryRow[]>([]);
   const [tests, setTests] = useState<AdminTestPick[]>([]);
-  const [sections, setSections] = useState<SectionTemplate[]>([]);
+  const [sections, setSections] = useState<SectionTemplate[]>(DEFAULT_SECTION_TEMPLATES);
+  const [testPickerFilter, setTestPickerFilter] = useState('');
+  const [showReorderPanel, setShowReorderPanel] = useState(false);
 
   const [stateSlug, setStateSlug] = useState('hp');
   const [sectionSlug, setSectionSlug] = useState('teaching');
@@ -83,10 +90,24 @@ export function StateExamManagerTabImpl({
     [selectedState, sectionSlug, examName, featured, itemSortOrder, testMode, selectedTestId, createTest],
   );
 
-  const warnings = useMemo(
-    () => collectWizardWarnings(wizardInput, categories, tests),
-    [wizardInput, categories, tests],
-  );
+  const warnings = useMemo(() => {
+    try {
+      return collectWizardWarnings(wizardInput, categories, tests);
+    } catch {
+      return [{ level: 'error' as const, message: 'Could not validate form. Refresh and try again.' }];
+    }
+  }, [wizardInput, categories, tests]);
+
+  const visibleTests = useMemo(() => {
+    const q = testPickerFilter.trim().toLowerCase();
+    const filtered = q
+      ? tests.filter((t) => {
+          const hay = `${t.title} ${t.subcategory}`.toLowerCase();
+          return hay.includes(q);
+        })
+      : tests;
+    return filtered.slice(0, TEST_PICKER_LIMIT);
+  }, [tests, testPickerFilter]);
 
   const previewDraft = useMemo(() => {
     if (!examName.trim()) return null;
@@ -184,6 +205,7 @@ export function StateExamManagerTabImpl({
 
   async function load() {
     setLoading(true);
+    setLoadError('');
     try {
       const [settingsRes, testsRes] = await Promise.all([
         apiClient.get('/admin/settings'),
@@ -197,12 +219,23 @@ export function StateExamManagerTabImpl({
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ||
+        (err as Error)?.message ||
         'Failed to load wizard data';
+      setLoadError(msg);
       pushToast('error', msg);
     } finally {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (loading || loadError) {
+      setShowReorderPanel(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setShowReorderPanel(true), 0);
+    return () => window.clearTimeout(timer);
+  }, [loading, loadError]);
 
   useEffect(() => {
     void load();
@@ -320,6 +353,7 @@ export function StateExamManagerTabImpl({
   }
 
   return (
+    <AdminPanelErrorBoundary title="State Exam Manager failed to load" onRetry={() => void load()}>
     <section className="panel-card state-exam-manager-panel">
       <div className="panel-head">
         <h3>State Exam Manager</h3>
@@ -330,6 +364,14 @@ export function StateExamManagerTabImpl({
 
       {loading ? (
         <p className="muted">Loading states, sections, and tests…</p>
+      ) : loadError ? (
+        <div className="admin-panel-error-boundary">
+          <h4>Could not load State Exam Manager</h4>
+          <p className="muted">{loadError}</p>
+          <button type="button" onClick={() => void load()}>
+            Retry
+          </button>
+        </div>
       ) : (
         <>
           {questionBuilderShortcut ? (
@@ -383,13 +425,22 @@ export function StateExamManagerTabImpl({
             {testMode === 'existing' ? (
               <label className="all-tests-field">
                 <span>Existing test</span>
+                {tests.length > TEST_PICKER_LIMIT ? (
+                  <input
+                    type="search"
+                    value={testPickerFilter}
+                    onChange={(e) => setTestPickerFilter(e.target.value)}
+                    placeholder={`Search ${tests.length} tests…`}
+                    className="state-exam-test-picker-search"
+                  />
+                ) : null}
                 <select
                   value={selectedTestId}
                   onChange={(e) => onPickTest(e.target.value)}
                   required={testMode === 'existing'}
                 >
                   <option value="">— Select test —</option>
-                  {tests.map((t) => (
+                  {visibleTests.map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.title}
                       {t.subcategory && t.subcategory !== t.title ? ` [${t.subcategory}]` : ''}
@@ -397,6 +448,11 @@ export function StateExamManagerTabImpl({
                     </option>
                   ))}
                 </select>
+                {tests.length > visibleTests.length ? (
+                  <span className="muted state-exam-test-picker-hint">
+                    Showing {visibleTests.length} of {tests.length} — type in search to narrow.
+                  </span>
+                ) : null}
               </label>
             ) : (
               <label className="check-wrap state-exam-check">
@@ -482,18 +538,22 @@ export function StateExamManagerTabImpl({
               </ul>
             )}
 
-            <StateExamReorderPanel
-              categories={categories}
-              sections={sections}
-              stateSlug={stateSlug}
-              onStateSlugChange={setStateSlug}
-              saving={saving}
-              dragRowId={dragRowId}
-              onDragRowIdChange={setDragRowId}
-              onReorderSection={onReorderSection}
-              onToggleFeaturedRow={(rowId) => void onToggleFeaturedRow(rowId)}
-              onMoveRow={moveRowInSection}
-            />
+            {showReorderPanel ? (
+              <StateExamReorderPanel
+                categories={categories}
+                sections={sections}
+                stateSlug={stateSlug}
+                onStateSlugChange={setStateSlug}
+                saving={saving}
+                dragRowId={dragRowId}
+                onDragRowIdChange={setDragRowId}
+                onReorderSection={onReorderSection}
+                onToggleFeaturedRow={(rowId) => void onToggleFeaturedRow(rowId)}
+                onMoveRow={moveRowInSection}
+              />
+            ) : (
+              <p className="muted">Preparing reorder list…</p>
+            )}
           </aside>
         </div>
         </>
@@ -515,5 +575,6 @@ export function StateExamManagerTabImpl({
         />
       ) : null}
     </section>
+    </AdminPanelErrorBoundary>
   );
 }

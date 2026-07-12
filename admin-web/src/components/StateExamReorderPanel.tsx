@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ExamCategoryRow, SectionTemplate } from '../lib/stateExamWizard';
 import { groupStateRowsBySection } from '../lib/stateExamWizard';
-import { INDIA_STATE_OPTIONS } from '../lib/indianStateVisualCatalog';
+import { INDIA_STATE_OPTIONS, resolveIndianStateSlug } from '../lib/indianStateVisualCatalog';
 
 type StateExamReorderPanelProps = {
   categories: ExamCategoryRow[];
@@ -16,9 +16,15 @@ type StateExamReorderPanelProps = {
   onMoveRow: (sectionKey: string, rowId: string, direction: -1 | 1) => void;
 };
 
-function countRowsForState(categories: ExamCategoryRow[], stateEnglish: string): number {
-  const groups = groupStateRowsBySection(categories, stateEnglish, []);
-  return groups.reduce((sum, g) => sum + g.items.length, 0);
+function countStateRowsBySlug(categories: ExamCategoryRow[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const row of categories) {
+    if (!row.enabled) continue;
+    const slug = resolveIndianStateSlug(row.level2);
+    if (!slug) continue;
+    counts.set(slug, (counts.get(slug) || 0) + 1);
+  }
+  return counts;
 }
 
 export function StateExamReorderPanel({
@@ -39,11 +45,7 @@ export function StateExamReorderPanel({
     INDIA_STATE_OPTIONS.find((s) => s.slug === stateSlug) || INDIA_STATE_OPTIONS[0];
 
   const stateStats = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const state of INDIA_STATE_OPTIONS) {
-      const n = countRowsForState(categories, state.english);
-      if (n > 0) counts.set(state.slug, n);
-    }
+    const counts = countStateRowsBySlug(categories);
     return INDIA_STATE_OPTIONS.filter((s) => (counts.get(s.slug) || 0) > 0).map((s) => ({
       ...s,
       count: counts.get(s.slug) || 0,
