@@ -384,8 +384,10 @@ export function StateExamManagerTabImpl({
           ) : null}
 
           <div className="state-exam-manager-stack">
+          <section className="state-exam-wizard-aside state-exam-wizard-form-card">
+            <h4>Add state exam circle</h4>
           <form className="state-exam-wizard-form" onSubmit={onSubmit}>
-            <label className="all-tests-field">
+            <label className="all-tests-field state-exam-form-field">
               <span>State</span>
               <select value={stateSlug} onChange={(e) => setStateSlug(e.target.value)} required>
                 {INDIA_STATE_OPTIONS.map((s) => (
@@ -396,7 +398,7 @@ export function StateExamManagerTabImpl({
               </select>
             </label>
 
-            <label className="all-tests-field">
+            <label className="all-tests-field state-exam-form-field">
               <span>Section</span>
               <select
                 value={sectionSlug}
@@ -414,7 +416,7 @@ export function StateExamManagerTabImpl({
               </select>
             </label>
 
-            <label className="all-tests-field">
+            <label className="all-tests-field state-exam-form-field">
               <span>Test link</span>
               <select value={testMode} onChange={(e) => setTestMode(e.target.value as 'existing' | 'new')}>
                 <option value="existing">Use existing test</option>
@@ -423,7 +425,7 @@ export function StateExamManagerTabImpl({
             </label>
 
             {testMode === 'existing' ? (
-              <label className="all-tests-field">
+              <label className="all-tests-field state-exam-form-field">
                 <span>Existing test</span>
                 {tests.length > TEST_PICKER_LIMIT ? (
                   <input
@@ -455,7 +457,7 @@ export function StateExamManagerTabImpl({
                 ) : null}
               </label>
             ) : (
-              <label className="check-wrap state-exam-check">
+              <label className="check-wrap state-exam-check state-exam-form-field state-exam-form-span-2">
                 <input
                   type="checkbox"
                   checked={createTest}
@@ -465,7 +467,7 @@ export function StateExamManagerTabImpl({
               </label>
             )}
 
-            <label className="all-tests-field">
+            <label className="all-tests-field state-exam-form-field state-exam-form-span-2">
               <span>Exam name (Level 3 / circle label)</span>
               <input
                 value={examName}
@@ -476,7 +478,7 @@ export function StateExamManagerTabImpl({
               />
             </label>
 
-            <div className="state-exam-wizard-row">
+            <div className="state-exam-wizard-row state-exam-form-span-2">
               <label className="check-wrap">
                 <input type="checkbox" checked={featured} onChange={(e) => setFeatured(e.target.checked)} />
                 Featured (show first in section)
@@ -493,10 +495,15 @@ export function StateExamManagerTabImpl({
               </label>
             </div>
 
-            <button type="submit" disabled={saving || wizardHasBlockingErrors(warnings)}>
+            <button
+              type="submit"
+              className="state-exam-form-submit"
+              disabled={saving || wizardHasBlockingErrors(warnings)}
+            >
               {saving ? 'Saving…' : 'Save state exam circle'}
             </button>
           </form>
+          </section>
 
           <div className="state-exam-manager-below">
             <div className="state-exam-preview-checks-grid">

@@ -982,10 +982,43 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  width: 100%;
+}
+
+.state-exam-wizard-form-card {
+  width: 100%;
 }
 
 .state-exam-wizard-form {
-  max-width: 640px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+  width: 100%;
+}
+
+.state-exam-form-span-2 {
+  grid-column: 1 / -1;
+}
+
+.state-exam-form-submit {
+  grid-column: 1 / -1;
+  justify-self: start;
+  min-width: min(100%, 280px);
+}
+
+@media (max-width: 720px) {
+  .state-exam-wizard-form {
+    grid-template-columns: 1fr;
+  }
+
+  .state-exam-form-span-2,
+  .state-exam-form-submit {
+    grid-column: auto;
+  }
+
+  .state-exam-form-submit {
+    width: 100%;
+  }
 }
 
 .state-exam-manager-below {
@@ -1022,12 +1055,6 @@ textarea {
   .state-exam-manager-grid {
     grid-template-columns: 1fr;
   }
-}
-
-.state-exam-wizard-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
 }
 
 .state-exam-wizard-form .all-tests-field {
