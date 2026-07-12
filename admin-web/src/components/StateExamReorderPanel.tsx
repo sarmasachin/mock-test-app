@@ -1,13 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ExamCategoryRow, SectionTemplate } from '../lib/stateExamWizard';
 import { groupStateRowsBySection } from '../lib/stateExamWizard';
 import { INDIA_STATE_OPTIONS } from '../lib/indianStateVisualCatalog';
-
-export type StateExamSectionGroup = {
-  sectionSlug: string;
-  sectionTitle: string;
-  items: ExamCategoryRow[];
-};
 
 type StateExamReorderPanelProps = {
   categories: ExamCategoryRow[];
@@ -22,11 +16,9 @@ type StateExamReorderPanelProps = {
   onMoveRow: (sectionKey: string, rowId: string, direction: -1 | 1) => void;
 };
 
-function countStateRows(categories: ExamCategoryRow[], stateEnglish: string): number {
-  const key = stateEnglish.trim().toLowerCase();
-  return categories.filter(
-    (c) => c.enabled && c.level2.trim().toLowerCase() === key,
-  ).length;
+function countRowsForState(categories: ExamCategoryRow[], stateEnglish: string): number {
+  const groups = groupStateRowsBySection(categories, stateEnglish, []);
+  return groups.reduce((sum, g) => sum + g.items.length, 0);
 }
 
 export function StateExamReorderPanel({
@@ -42,25 +34,20 @@ export function StateExamReorderPanel({
   onMoveRow,
 }: StateExamReorderPanelProps) {
   const [search, setSearch] = useState('');
-  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
 
   const selectedState =
     INDIA_STATE_OPTIONS.find((s) => s.slug === stateSlug) || INDIA_STATE_OPTIONS[0];
 
   const stateStats = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const row of categories) {
-      if (!row.enabled || row.level1 !== 'State') continue;
-      const name = row.level2.trim();
-      if (!name) continue;
-      counts.set(name, (counts.get(name) || 0) + 1);
+    for (const state of INDIA_STATE_OPTIONS) {
+      const n = countRowsForState(categories, state.english);
+      if (n > 0) counts.set(state.slug, n);
     }
-    return INDIA_STATE_OPTIONS.map((state) => ({
-      slug: state.slug,
-      english: state.english,
-      hindi: state.hindi,
-      count: counts.get(state.english) || 0,
-    })).filter((s) => s.count > 0);
+    return INDIA_STATE_OPTIONS.filter((s) => (counts.get(s.slug) || 0) > 0).map((s) => ({
+      ...s,
+      count: counts.get(s.slug) || 0,
+    }));
   }, [categories]);
 
   const sectionGroups = useMemo(
@@ -68,7 +55,10 @@ export function StateExamReorderPanel({
     [categories, selectedState.english, sections],
   );
 
+  const totalInState = sectionGroups.reduce((sum, g) => sum + g.items.length, 0);
   const searchQ = search.trim().toLowerCase();
+  const showSearch = totalInState > 8;
+
   const filteredGroups = useMemo(() => {
     if (!searchQ) return sectionGroups;
     return sectionGroups
@@ -79,60 +69,25 @@ export function StateExamReorderPanel({
       .filter((group) => group.items.length > 0);
   }, [sectionGroups, searchQ]);
 
-  const totalInState = countStateRows(categories, selectedState.english);
-
-  useEffect(() => {
-    setSearch('');
-    const groups = groupStateRowsBySection(categories, selectedState.english, sections);
-    const next: Record<string, boolean> = {};
-    for (const group of groups) {
-      next[group.sectionSlug] = group.items.length > 5;
-    }
-    setCollapsedSections(next);
-    // Reset accordion only when switching state — not after each reorder save.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stateSlug]);
-
-  function isSectionCollapsed(sectionSlug: string): boolean {
-    if (searchQ) return false;
-    return collapsedSections[sectionSlug] === true;
-  }
-
-  function toggleSectionCollapsed(sectionSlug: string) {
-    setCollapsedSections((prev) => ({
-      ...prev,
-      [sectionSlug]: !prev[sectionSlug],
-    }));
-  }
-
   return (
-    <div className="state-exam-reorder-panel">
-      <div className="state-exam-reorder-head">
-        <div>
-          <h4>Manage exam order</h4>
-          <p className="muted state-exam-reorder-subtitle">
-            One state at a time — switch state below. Drag within a section or use ↑↓. Changes save
-            instantly.
-          </p>
-        </div>
-        <input
-          type="search"
-          className="state-exam-reorder-search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={`Search in ${selectedState.english}…`}
-          aria-label="Search exams in selected state"
-        />
-      </div>
+    <div className="state-exam-reorder-inline">
+      <label className="all-tests-field state-exam-reorder-state-field">
+        <span>State (reorder list)</span>
+        <select value={stateSlug} onChange={(e) => onStateSlugChange(e.target.value)}>
+          {INDIA_STATE_OPTIONS.map((s) => (
+            <option key={s.slug} value={s.slug}>
+              {s.english} ({s.hindi})
+            </option>
+          ))}
+        </select>
+      </label>
 
-      {stateStats.length > 0 ? (
-        <div className="state-exam-state-chips" role="tablist" aria-label="States with exams">
+      {stateStats.length > 1 ? (
+        <div className="state-exam-state-chips" aria-label="States with exams">
           {stateStats.map((state) => (
             <button
               key={state.slug}
               type="button"
-              role="tab"
-              aria-selected={state.slug === stateSlug}
               className={`state-exam-state-chip${state.slug === stateSlug ? ' is-active' : ''}`}
               onClick={() => onStateSlugChange(state.slug)}
             >
@@ -141,116 +96,107 @@ export function StateExamReorderPanel({
             </button>
           ))}
         </div>
-      ) : (
-        <p className="muted">No state exams yet. Use Add exam to create the first circle.</p>
-      )}
+      ) : null}
 
-      <div className="state-exam-reorder-summary">
-        <strong>{selectedState.english}</strong>
-        <span className="muted">
-          {totalInState} exam{totalInState === 1 ? '' : 's'} · {filteredGroups.length} section
-          {filteredGroups.length === 1 ? '' : 's'}
-          {searchQ ? ` · filtered` : ''}
-        </span>
+      <div className="state-exam-reorder-title-row">
+        <h4>
+          {selectedState.english} — drag reorder ({totalInState})
+        </h4>
+        {showSearch ? (
+          <input
+            type="search"
+            className="state-exam-reorder-search state-exam-reorder-search--inline"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search exam…"
+            aria-label={`Search exams in ${selectedState.english}`}
+          />
+        ) : null}
       </div>
 
       {filteredGroups.length === 0 ? (
         <p className="muted">
           {searchQ
-            ? `No exams match "${search.trim()}" in ${selectedState.english}.`
-            : `No exams for ${selectedState.english} yet.`}
+            ? `No match for "${search.trim()}".`
+            : `No exams for ${selectedState.english} yet — add one from the form.`}
         </p>
       ) : (
-        <div className="state-exam-reorder-groups state-exam-reorder-groups--manage">
-          {filteredGroups.map((group) => {
-            const collapsed = isSectionCollapsed(group.sectionSlug);
-            return (
-              <div key={group.sectionSlug} className="state-exam-reorder-section">
-                <button
-                  type="button"
-                  className="state-exam-reorder-section-toggle"
-                  onClick={() => toggleSectionCollapsed(group.sectionSlug)}
-                  aria-expanded={!collapsed}
-                >
-                  <span>
-                    {group.sectionTitle}
-                    <span className="muted"> ({group.items.length})</span>
-                  </span>
-                  <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
-                </button>
-                {!collapsed ? (
-                  <ul className="state-exam-reorder-list">
-                    {group.items.map((row, idx) => (
-                      <li
-                        key={row.id}
-                        className={`state-exam-reorder-item${dragRowId === row.id ? ' is-dragging' : ''}`}
-                        draggable={!saving}
-                        onDragStart={() => onDragRowIdChange(row.id)}
-                        onDragEnd={() => onDragRowIdChange(null)}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          if (!dragRowId || dragRowId === row.id) return;
-                          const ids = group.items.map((r) => r.id);
-                          const from = ids.indexOf(dragRowId);
-                          const to = idx;
-                          if (from < 0) return;
-                          const nextIds = [...ids];
-                          nextIds.splice(from, 1);
-                          nextIds.splice(to, 0, dragRowId);
-                          onDragRowIdChange(null);
-                          onReorderSection(group.sectionSlug, nextIds);
-                        }}
+        <div className="state-exam-reorder-groups">
+          {filteredGroups.map((group) => (
+            <div key={group.sectionSlug} className="state-exam-reorder-section">
+              <h5>
+                {group.sectionTitle}
+                <span className="muted"> ({group.items.length})</span>
+              </h5>
+              <ul className="state-exam-reorder-list">
+                {group.items.map((row, idx) => (
+                  <li
+                    key={row.id}
+                    className={`state-exam-reorder-item${dragRowId === row.id ? ' is-dragging' : ''}`}
+                    draggable={!saving}
+                    onDragStart={() => onDragRowIdChange(row.id)}
+                    onDragEnd={() => onDragRowIdChange(null)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (!dragRowId || dragRowId === row.id) return;
+                      const ids = group.items.map((r) => r.id);
+                      const from = ids.indexOf(dragRowId);
+                      const to = idx;
+                      if (from < 0) return;
+                      const nextIds = [...ids];
+                      nextIds.splice(from, 1);
+                      nextIds.splice(to, 0, dragRowId);
+                      onDragRowIdChange(null);
+                      onReorderSection(group.sectionSlug, nextIds);
+                    }}
+                  >
+                    <span className="state-exam-drag-handle" title="Drag to reorder">
+                      ⋮⋮
+                    </span>
+                    <span className="state-exam-reorder-label">
+                      {row.featured ? '⭐ ' : ''}
+                      {row.level3}
+                    </span>
+                    <span className="state-exam-reorder-actions">
+                      <button
+                        type="button"
+                        className="state-exam-mini-btn"
+                        disabled={saving || idx === 0}
+                        onClick={() => onMoveRow(group.sectionSlug, row.id, -1)}
+                        title="Move up"
                       >
-                        <span className="state-exam-drag-handle" title="Drag to reorder">
-                          ⋮⋮
-                        </span>
-                        <span className="state-exam-reorder-label">
-                          {row.featured ? '⭐ ' : ''}
-                          {row.level3}
-                        </span>
-                        <span className="state-exam-reorder-actions">
-                          <button
-                            type="button"
-                            className="state-exam-mini-btn"
-                            disabled={saving || idx === 0}
-                            onClick={() => onMoveRow(group.sectionSlug, row.id, -1)}
-                            title="Move up"
-                          >
-                            ↑
-                          </button>
-                          <button
-                            type="button"
-                            className="state-exam-mini-btn"
-                            disabled={saving || idx === group.items.length - 1}
-                            onClick={() => onMoveRow(group.sectionSlug, row.id, 1)}
-                            title="Move down"
-                          >
-                            ↓
-                          </button>
-                          <button
-                            type="button"
-                            className={`state-exam-mini-btn${row.featured ? ' is-featured' : ''}`}
-                            disabled={saving}
-                            onClick={() => onToggleFeaturedRow(row.id)}
-                            title="Toggle featured"
-                          >
-                            ★
-                          </button>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            );
-          })}
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="state-exam-mini-btn"
+                        disabled={saving || idx === group.items.length - 1}
+                        onClick={() => onMoveRow(group.sectionSlug, row.id, 1)}
+                        title="Move down"
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        className={`state-exam-mini-btn${row.featured ? ' is-featured' : ''}`}
+                        disabled={saving}
+                        onClick={() => onToggleFeaturedRow(row.id)}
+                        title="Toggle featured"
+                      >
+                        ★
+                      </button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </div>
       )}
 
       <p className="muted state-exam-footnote">
-        Tip: Bihar, Punjab, etc. each have their own list — switch state chip above. For bulk edits
-        use <strong>Exam Categories</strong> tab.
+        Drag or ↑↓ within each section. ★ = featured. Bihar / Punjab = same screen, change state above.
       </p>
     </div>
   );

@@ -59,7 +59,6 @@ export function StateExamManagerTabImpl({
   const [testMode, setTestMode] = useState<'existing' | 'new'>('existing');
   const [selectedTestId, setSelectedTestId] = useState('');
   const [createTest, setCreateTest] = useState(true);
-  const [managerMode, setManagerMode] = useState<'add' | 'manage'>('add');
   const [dragRowId, setDragRowId] = useState<string | null>(null);
   const [questionBuilderShortcut, setQuestionBuilderShortcut] =
     useState<QuestionBuilderShortcutTarget | null>(null);
@@ -97,22 +96,6 @@ export function StateExamManagerTabImpl({
       return null;
     }
   }, [wizardInput, sections, examName]);
-
-  const stateExamCount = useMemo(
-    () =>
-      categories.filter(
-        (c) =>
-          c.enabled &&
-          c.level1 === 'State' &&
-          c.level2.trim().toLowerCase() === selectedState.english.toLowerCase(),
-      ).length,
-    [categories, selectedState.english],
-  );
-
-  const totalStateExamCount = useMemo(
-    () => categories.filter((c) => c.enabled && c.level1 === 'State').length,
-    [categories],
-  );
 
   useEffect(() => {
     if (!sections.some((s) => s.slug === sectionSlug)) {
@@ -358,44 +341,6 @@ export function StateExamManagerTabImpl({
             />
           ) : null}
 
-          <div className="state-exam-manager-tabs" role="tablist" aria-label="State exam manager mode">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={managerMode === 'add'}
-              className={`state-exam-manager-tab${managerMode === 'add' ? ' is-active' : ''}`}
-              onClick={() => setManagerMode('add')}
-            >
-              Add exam
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={managerMode === 'manage'}
-              className={`state-exam-manager-tab${managerMode === 'manage' ? ' is-active' : ''}`}
-              onClick={() => setManagerMode('manage')}
-            >
-              Manage order
-              {totalStateExamCount > 0 ? (
-                <span className="state-exam-manager-tab-badge">{totalStateExamCount}</span>
-              ) : null}
-            </button>
-          </div>
-
-          {managerMode === 'manage' ? (
-            <StateExamReorderPanel
-              categories={categories}
-              sections={sections}
-              stateSlug={stateSlug}
-              onStateSlugChange={setStateSlug}
-              saving={saving}
-              dragRowId={dragRowId}
-              onDragRowIdChange={setDragRowId}
-              onReorderSection={onReorderSection}
-              onToggleFeaturedRow={(rowId) => void onToggleFeaturedRow(rowId)}
-              onMoveRow={moveRowInSection}
-            />
-          ) : (
           <div className="state-exam-manager-grid">
           <form className="state-exam-wizard-form" onSubmit={onSubmit}>
             <label className="all-tests-field">
@@ -537,26 +482,20 @@ export function StateExamManagerTabImpl({
               </ul>
             )}
 
-            {stateExamCount > 0 ? (
-              <p className="muted state-exam-footnote">
-                {selectedState.english} has {stateExamCount} exam{stateExamCount === 1 ? '' : 's'}. Open{' '}
-                <button
-                  type="button"
-                  className="state-exam-inline-link"
-                  onClick={() => setManagerMode('manage')}
-                >
-                  Manage order
-                </button>{' '}
-                to drag-reorder or toggle featured.
-              </p>
-            ) : (
-              <p className="muted state-exam-footnote">
-                After save, use <strong>Manage order</strong> tab to reorder circles in the app.
-              </p>
-            )}
+            <StateExamReorderPanel
+              categories={categories}
+              sections={sections}
+              stateSlug={stateSlug}
+              onStateSlugChange={setStateSlug}
+              saving={saving}
+              dragRowId={dragRowId}
+              onDragRowIdChange={setDragRowId}
+              onReorderSection={onReorderSection}
+              onToggleFeaturedRow={(rowId) => void onToggleFeaturedRow(rowId)}
+              onMoveRow={moveRowInSection}
+            />
           </aside>
         </div>
-          )}
         </>
       )}
 

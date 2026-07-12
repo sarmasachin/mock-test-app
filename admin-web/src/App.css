@@ -917,6 +917,40 @@ textarea {
   max-height: min(62vh, 640px);
 }
 
+.state-exam-reorder-inline {
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, #e2e8f0);
+}
+
+.state-exam-reorder-state-field {
+  margin-bottom: 10px;
+}
+
+.state-exam-reorder-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.state-exam-reorder-title-row h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.state-exam-reorder-search--inline {
+  min-width: 140px;
+  flex: 1 1 140px;
+  max-width: 220px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  font-size: 0.88rem;
+}
+
 .state-exam-manager-grid {
   display: grid;
   grid-template-columns: minmax(280px, 1fr) minmax(260px, 380px);
